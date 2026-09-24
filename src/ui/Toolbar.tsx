@@ -3,26 +3,22 @@ import type { Editor, ExportScope, PlaceKind } from '../editor/Editor';
 import { KIND_LABEL } from '../editor/Editor';
 import { INPUT_WARN, MAX_INPUTS } from '../model/geometry';
 import { THEMES, toHex6, wireColors } from '../model/themes';
-import { isGate } from '../model/types';
-import { downloadText, pickFile } from '../io/download';
+import { canRotate, isGate, type Component } from '../model/types';
+import { pickFile } from '../io/download';
 import { FILE_EXTENSION } from '../io/format';
-import halfAdder from '../../examples/half-adder.cmk.json?raw';
-import fullAdder from '../../examples/full-adder.cmk.json?raw';
 import formatGuide from '../../docs/CIRCUIT_FORMAT.md?raw';
+import { Examples } from './Examples';
 import { ComponentIcon, Icons } from './icons';
+import { SideList } from './SideLists';
 import { useEditor } from './useEditor';
 
 type Panel = 'save' | 'open' | 'theme' | 'help' | null;
 
 const PLACE_GROUPS: PlaceKind[][] = [
-  ['and', 'or', 'xor', 'buffer'],
+  ['and', 'or', 'xor', 'buffer', 'not'],
   ['switch', 'button', 'bulb'],
   ['marker', 'box'],
 ];
-
-const HINTS: Partial<Record<PlaceKind, string>> = {
-  box: 'Box - click to place, or select items first to wrap them',
-};
 
 function Btn(props: {
   title: string;
@@ -69,7 +65,7 @@ function Stepper({ value, mixed, onChange }: { value: number; mixed: boolean; on
   };
   return (
     <div className="stepper">
-      <button type="button" title="Fewer inputs (-)" onClick={() => onChange(value - 1)} disabled={value <= 1}>
+      <button type="button" title="Fewer inputs" onClick={() => onChange(value - 1)} disabled={value <= 1}>
         -
       </button>
       <input
@@ -84,11 +80,19 @@ function Stepper({ value, mixed, onChange }: { value: number; mixed: boolean; on
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
         }}
       />
-      <button type="button" title="More inputs (+)" onClick={() => onChange(value + 1)} disabled={value >= MAX_INPUTS}>
+      <button type="button" title="More inputs" onClick={() => onChange(value + 1)} disabled={value >= MAX_INPUTS}>
         +
       </button>
     </div>
   );
+}
+
+function partTitle(c: Component): string {
+  if (isGate(c.kind)) {
+    if (c.kind === 'buffer') return c.negate ? 'NOT' : 'Buffer';
+    return (c.negate ? 'N' : '') + c.kind.toUpperCase();
+  }
+  return c.kind === 'port' ? 'Connector' : KIND_LABEL[c.kind];
 }
 
 function PropsBar({ editor }: { editor: Editor }) {
@@ -99,21 +103,13 @@ function PropsBar({ editor }: { editor: Editor }) {
   const total = comps.length + boxes.length + wires.length;
   if (!total) return null;
   const gates = comps.filter((c) => isGate(c.kind));
-  const colourable = comps.filter((c) => c.kind !== 'marker');
+  const colourable = comps.filter((c) => c.kind !== 'marker' && c.kind !== 'port');
+  const rotatable = comps.filter((c) => canRotate(c.kind));
   const markers = comps.filter((c) => c.kind === 'marker');
   const bulbs = comps.filter((c) => c.kind === 'bulb');
-  const named = total === 1 ? (markers[0] ?? boxes[0] ?? null) : null;
+  const named = total === 1 ? ((comps[0] && !isGate(comps[0].kind) ? comps[0] : null) ?? boxes[0] ?? null) : null;
   const tinted = [...markers, ...boxes];
-  const title =
-    total === 1
-      ? comps[0]
-        ? gates[0]
-          ? `${gates[0].kind === 'buffer' ? (gates[0].negate ? 'NOT' : 'Buffer') : (gates[0].negate ? 'N' : '') + gates[0].kind.toUpperCase()}`
-          : KIND_LABEL[comps[0].kind]
-        : boxes[0]
-          ? 'Box'
-          : 'Wire'
-      : `${total} selected`;
+  const title = total === 1 ? (comps[0] ? partTitle(comps[0]) : boxes[0] ? 'Box' : 'Wire') : `${total} selected`;
 
   return (
     <div className="props" onPointerDown={(e) => e.stopPropagation()}>
@@ -134,10 +130,20 @@ function PropsBar({ editor }: { editor: Editor }) {
           <button
             type="button"
             className={`chip ${gates.every((g) => g.negate) ? 'active' : ''}`}
-            title="Toggle the NOT bubble on the output (N)"
+            title="NOT bubble"
             onClick={() => editor.setNegate(!gates.every((g) => g.negate))}
           >
             NOT
+          </button>
+        </div>
+      )}
+      {rotatable.length > 0 && (
+        <div className="props-group">
+          <button type="button" className="chip icon-chip" title="Rotate" onClick={() => editor.rotateSelection(1)}>
+            {Icons.rotate}
+          </button>
+          <button type="button" className="chip icon-chip" title="Flip" onClick={() => editor.flipSelection()}>
+            {Icons.flip}
           </button>
         </div>
       )}
@@ -152,7 +158,7 @@ function PropsBar({ editor }: { editor: Editor }) {
             <button
               type="button"
               className="chip"
-              title="Use the theme colours again"
+              title="Theme colours"
               onClick={() => {
                 editor.setStroke(null);
                 editor.setFill(null);
@@ -170,8 +176,8 @@ function PropsBar({ editor }: { editor: Editor }) {
             <input
               className="name-input"
               value={named.name}
-              placeholder="Name"
-              aria-label="Name"
+              placeholder="Label"
+              aria-label="Label"
               onChange={(e) => editor.setName(e.target.value)}
             />
           )}
@@ -186,16 +192,16 @@ function PropsBar({ editor }: { editor: Editor }) {
       )}
       <div className="props-group">
         {(comps.length > 0 || boxes.length > 0) && (
-          <button type="button" className="chip" title="Duplicate into the nearest free space (Ctrl+D)" onClick={() => editor.duplicateSelection()}>
+          <button type="button" className="chip" title="Duplicate" onClick={() => editor.duplicateSelection()}>
             Duplicate
           </button>
         )}
         {boxes.length > 0 && (
-          <button type="button" className="chip" title="Remove the box but keep its contents" onClick={() => editor.unboxSelection()}>
+          <button type="button" className="chip" title="Unbox" onClick={() => editor.unboxSelection()}>
             Unbox
           </button>
         )}
-        <button type="button" className="chip danger" title="Delete (Del)" onClick={() => editor.deleteSelection()}>
+        <button type="button" className="chip danger" title="Delete" onClick={() => editor.deleteSelection()}>
           {Icons.trash}
         </button>
       </div>
@@ -207,6 +213,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
   useEditor(editor);
   const [panel, setPanel] = useState<Panel>(null);
   const [scope, setScope] = useState<ExportScope>('all');
+  const [lists, setLists] = useState({ inputs: false, outputs: false });
   const dockRef = useRef<HTMLDivElement>(null);
   const theme = editor.theme;
   const hasSelection = editor.selection.size > 0;
@@ -231,10 +238,13 @@ export function Toolbar({ editor }: { editor: Editor }) {
 
   const toggle = (p: Panel) => setPanel((cur) => (cur === p ? null : p));
 
-  const openFile = async (mode: 'replace' | 'merge') => {
+  const openFile = async (mode: 'tab' | 'merge') => {
     const file = await pickFile(`${FILE_EXTENSION},.json,application/json`);
     if (!file) return;
-    if (editor.loadText(await file.text(), mode)) setPanel(null);
+    const text = await file.text();
+    setPanel(null);
+    if (mode === 'tab') editor.openInNewTab(text);
+    else editor.loadText(text, 'merge');
   };
 
   const placeButton = (kind: PlaceKind) => (
@@ -242,7 +252,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
       key={kind}
       type="button"
       className={`tb-btn place ${editor.placing === kind ? 'active' : ''}`}
-      title={`${HINTS[kind] ?? KIND_LABEL[kind]} - click then click the canvas, or drag it in`}
+      title={KIND_LABEL[kind]}
       aria-label={KIND_LABEL[kind]}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
@@ -260,6 +270,18 @@ export function Toolbar({ editor }: { editor: Editor }) {
       {editor.toastMessage && (
         <div className="toast" role="status">
           {editor.toastMessage}
+          {editor.toastAction && (
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                editor.toastAction?.run();
+                editor.toast('');
+              }}
+            >
+              {editor.toastAction.label}
+            </button>
+          )}
         </div>
       )}
 
@@ -283,8 +305,8 @@ export function Toolbar({ editor }: { editor: Editor }) {
               Selection only
             </button>
           </div>
-          <div className="panel-actions">
-            <button type="button" className="primary" onClick={() => editor.exportAs('project', scope)}>
+          <div className="panel-actions column">
+            <button type="button" onClick={() => editor.exportAs('project', scope)}>
               Project file ({FILE_EXTENSION})
             </button>
             <button type="button" onClick={() => editor.exportAs('svg', scope)}>
@@ -294,45 +316,36 @@ export function Toolbar({ editor }: { editor: Editor }) {
               PNG image
             </button>
           </div>
-          <p className="hint">
-            Project files are plain text: reopen them later, add them into other projects, or edit them in any text editor.
-          </p>
         </div>
       )}
 
       {panel === 'open' && (
-        <div className="panel">
+        <div className="panel open-panel">
           <div className="panel-title">Open</div>
-          <div className="panel-actions column">
-            <button type="button" className="primary" onClick={() => openFile('replace')}>
-              Open project...
+          <div className="open-big">
+            <button type="button" onClick={() => openFile('tab')}>
+              {Icons.newTab}
+              <b>Open project</b>
+              <span>in a new tab</span>
             </button>
             <button type="button" onClick={() => openFile('merge')}>
-              Add a project into this one...
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                editor.newDocument();
-                setPanel(null);
-              }}
-            >
-              New empty project
+              {Icons.add}
+              <b>Add to project</b>
+              <span>into this one</span>
             </button>
           </div>
+          <button
+            type="button"
+            className="open-wide"
+            onClick={() => {
+              setPanel(null);
+              editor.openInNewTab(null);
+            }}
+          >
+            {Icons.blank} New blank project
+          </button>
           <div className="panel-sub">Examples</div>
-          <div className="panel-actions">
-            <button type="button" onClick={() => (editor.loadExample(halfAdder), setPanel(null))}>
-              Half adder
-            </button>
-            <button type="button" onClick={() => (editor.loadExample(fullAdder), setPanel(null))}>
-              Full adder (nested boxes)
-            </button>
-          </div>
-          <p className="hint">
-            You can also drop a {FILE_EXTENSION} file onto the canvas, or paste circuit text with Ctrl+V. Opening replaces the
-            current project (Ctrl+Z to undo).
-          </p>
+          <Examples editor={editor} onPicked={() => setPanel(null)} />
         </div>
       )}
 
@@ -361,7 +374,6 @@ export function Toolbar({ editor }: { editor: Editor }) {
               );
             })}
           </div>
-          <p className="hint">Themes change the default colours. Colours you set yourself are kept.</p>
         </div>
       )}
 
@@ -373,22 +385,16 @@ export function Toolbar({ editor }: { editor: Editor }) {
             <li><b>Drag from a pin</b> to wire it; drop on empty space to add a connected part</li>
             <li><b>Drag from a wired input</b> to move or remove that wire</li>
             <li><b>Click</b> switches to toggle; hold buttons to press</li>
-            <li><b>Right-drag</b>, middle-drag or <b>Space</b>+drag to pan; <b>wheel</b> to zoom</li>
+            <li><b>Drag the NOT bubble</b> onto a gate to invert it</li>
+            <li><b>Two fingers</b> to pan, <b>pinch</b> to zoom; with a mouse, <b>wheel</b> zooms and <b>right-drag</b> pans</li>
             <li><b>Right-click</b> empty space for the add menu</li>
+            <li><b>Click inside a box</b> to select it; <b>drag its edges or corners</b> to resize</li>
+            <li><b>Box</b> with items selected wraps them in a box; wires through its walls get connectors you can label and slide</li>
             <li><b>Shift</b>+click / drag to add to the selection</li>
-            <li><b>Box</b> with items selected wraps them in a box</li>
-            <li><kbd>+</kbd>/<kbd>-</kbd> inputs, <kbd>N</kbd> NOT, <kbd>F</kbd> fit view</li>
+            <li><kbd>R</kbd> rotate, <kbd>M</kbd> flip, <kbd>+</kbd>/<kbd>-</kbd> inputs, <kbd>N</kbd> NOT, <kbd>F</kbd> fit view</li>
             <li><kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Y</kbd> undo/redo, <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>V</kbd>/<kbd>D</kbd> copy/paste/duplicate</li>
           </ul>
-          <div className="panel-sub">Build circuits with an AI</div>
-          <p className="hint">
-            Give this guide to an LLM as its system prompt, then paste the circuit it writes straight into the canvas
-            (Ctrl+V). Copying a selection puts its text on the clipboard too.
-          </p>
           <div className="panel-actions">
-            <button type="button" onClick={() => downloadText(formatGuide, 'CIRCUIT_FORMAT.md', 'text/markdown')}>
-              Download format guide
-            </button>
             <button
               type="button"
               onClick={async () => {
@@ -404,42 +410,56 @@ export function Toolbar({ editor }: { editor: Editor }) {
 
       <PropsBar editor={editor} />
 
-      <div className="toolbar" role="toolbar" aria-label="Circuit Maker tools">
-        <Btn title="Select (V)" active={editor.tool === 'select'} onClick={() => editor.setTool('select')}>
-          {Icons.select}
-        </Btn>
-        <Btn title="Pan (H)" active={editor.tool === 'pan'} onClick={() => editor.setTool('pan')}>
-          {Icons.pan}
-        </Btn>
-        {PLACE_GROUPS.map((group, i) => (
-          <div className="tb-group" key={i}>
-            <Sep />
-            {group.map(placeButton)}
-          </div>
-        ))}
-        <Sep />
-        <Btn title="Undo (Ctrl+Z)" disabled={!editor.canUndo} onClick={() => editor.undo()}>
-          {Icons.undo}
-        </Btn>
-        <Btn title="Redo (Ctrl+Y)" disabled={!editor.canRedo} onClick={() => editor.redo()}>
-          {Icons.redo}
-        </Btn>
-        <Btn title="Fit to view (F)" onClick={() => editor.fitView()}>
-          {Icons.fit}
-        </Btn>
-        <Sep />
-        <Btn title="Open" active={panel === 'open'} onClick={() => toggle('open')}>
-          {Icons.open}
-        </Btn>
-        <Btn title="Save / export" active={panel === 'save'} onClick={() => toggle('save')}>
-          {Icons.save}
-        </Btn>
-        <Btn title="Theme" active={panel === 'theme'} onClick={() => toggle('theme')}>
-          {Icons.theme}
-        </Btn>
-        <Btn title="Help" active={panel === 'help'} onClick={() => toggle('help')}>
-          {Icons.help}
-        </Btn>
+      <div className="tb-row">
+        <SideList
+          editor={editor}
+          which="inputs"
+          open={lists.inputs}
+          onToggle={() => setLists((l) => ({ ...l, inputs: !l.inputs }))}
+        />
+        <div className="toolbar" role="toolbar" aria-label="Circuit Maker tools">
+          <Btn title="Select" active={editor.tool === 'select'} onClick={() => editor.setTool('select')}>
+            {Icons.select}
+          </Btn>
+          <Btn title="Pan" active={editor.tool === 'pan'} onClick={() => editor.setTool('pan')}>
+            {Icons.pan}
+          </Btn>
+          {PLACE_GROUPS.map((group, i) => (
+            <div className="tb-group" key={i}>
+              <Sep />
+              {group.map(placeButton)}
+            </div>
+          ))}
+          <Sep />
+          <Btn title="Undo" disabled={!editor.canUndo} onClick={() => editor.undo()}>
+            {Icons.undo}
+          </Btn>
+          <Btn title="Redo" disabled={!editor.canRedo} onClick={() => editor.redo()}>
+            {Icons.redo}
+          </Btn>
+          <Btn title="Fit to view" onClick={() => editor.fitView()}>
+            {Icons.fit}
+          </Btn>
+          <Sep />
+          <Btn title="Open" active={panel === 'open'} onClick={() => toggle('open')}>
+            {Icons.open}
+          </Btn>
+          <Btn title="Save" active={panel === 'save'} onClick={() => toggle('save')}>
+            {Icons.save}
+          </Btn>
+          <Btn title="Theme" active={panel === 'theme'} onClick={() => toggle('theme')}>
+            {Icons.theme}
+          </Btn>
+          <Btn title="Help" active={panel === 'help'} onClick={() => toggle('help')}>
+            {Icons.help}
+          </Btn>
+        </div>
+        <SideList
+          editor={editor}
+          which="outputs"
+          open={lists.outputs}
+          onToggle={() => setLists((l) => ({ ...l, outputs: !l.outputs }))}
+        />
       </div>
     </div>
   );

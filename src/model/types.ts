@@ -2,8 +2,9 @@ export const GATE_KINDS = ['and', 'or', 'xor', 'buffer'] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
 export const IO_KINDS = ['switch', 'button', 'bulb'] as const;
 export type IOKind = (typeof IO_KINDS)[number];
-export type ComponentKind = GateKind | IOKind | 'marker';
-export const COMPONENT_KINDS: readonly ComponentKind[] = [...GATE_KINDS, ...IO_KINDS, 'marker'];
+/** `port` is the connector where a wire passes through the wall of a box. */
+export type ComponentKind = GateKind | IOKind | 'marker' | 'port';
+export const COMPONENT_KINDS: readonly ComponentKind[] = [...GATE_KINDS, ...IO_KINDS, 'marker', 'port'];
 
 export interface Point {
   x: number;
@@ -17,10 +18,13 @@ export interface Rect {
   h: number;
 }
 
+/** Quarter turns clockwise. */
+export type Rotation = 0 | 1 | 2 | 3;
+
 export interface Component {
   id: string;
   kind: ComponentKind;
-  /** Top-left corner of the body (pin stubs stick out beyond this). */
+  /** Top-left corner of the (rotated) body; pin stubs stick out beyond this. */
   x: number;
   y: number;
   /** Gates only: number of input pins. */
@@ -33,10 +37,19 @@ export interface Component {
   fill: string | null;
   /** Switch state. */
   on: boolean;
-  /** Marker label. */
+  /** Label of a marker, switch, button, bulb or port. */
   name: string;
   /** Marker colour or bulb lit colour, or null for the theme default. */
   color: string | null;
+  /** Rotation, applied after `flip`. Markers and ports ignore user rotation. */
+  rot: Rotation;
+  /** Mirror left-right before rotating. */
+  flip: boolean;
+  /** Switch, button and bulb body size before rotation. */
+  w: number;
+  h: number;
+  /** Ports only: the box whose wall this port sits in. */
+  box: string | null;
 }
 
 export interface Wire {
@@ -69,7 +82,15 @@ export interface Doc {
 export const isGate = (k: ComponentKind): k is GateKind =>
   k === 'and' || k === 'or' || k === 'xor' || k === 'buffer';
 
-export const hasOutput = (k: ComponentKind): boolean => isGate(k) || k === 'switch' || k === 'button';
+export const isIO = (k: ComponentKind): k is IOKind => k === 'switch' || k === 'button' || k === 'bulb';
+
+export const isInput = (k: ComponentKind): boolean => k === 'switch' || k === 'button';
+
+/** Parts the user can rotate, flip and (for IO) resize. */
+export const canRotate = (k: ComponentKind): boolean => isGate(k) || isIO(k);
+
+export const hasOutput = (k: ComponentKind): boolean =>
+  isGate(k) || k === 'switch' || k === 'button' || k === 'port';
 
 export const inputCount = (c: Component): number =>
-  isGate(c.kind) ? c.inputs : c.kind === 'bulb' ? 1 : 0;
+  isGate(c.kind) ? c.inputs : c.kind === 'bulb' || c.kind === 'port' ? 1 : 0;

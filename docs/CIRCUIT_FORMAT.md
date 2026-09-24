@@ -39,8 +39,9 @@ Put **one object per line** inside each array. It keeps files short and easy to 
 ## 2. Coordinates
 
 - Units are pixels at 100% zoom. **x grows to the right, y grows downward.**
-- A component's `x`, `y` is the **top-left corner of its body**. Pin stubs stick out
-  20 units beyond the body (inputs on the left, output on the right).
+- A component's `x`, `y` is the **top-left corner of its body** as drawn (after any
+  rotation). Pin stubs stick out 20 units beyond the body (inputs on the left, output on
+  the right, unless the part is rotated or flipped).
 - Signals flow **left to right**: inputs on the left, outputs on the right.
 - Use multiples of **10** for every coordinate so pins line up with the grid.
 
@@ -62,10 +63,15 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `inputs` | gates                    | Number of input pins, 1 or more (default 2, maximum 256).               |
 | `not`    | gates                    | `true` adds a NOT bubble to the output (inverts it).                    |
 | `on`     | switch                   | `true` if the switch starts switched on.                                |
-| `name`   | marker                   | Label shown next to the marker.                                         |
+| `name`   | switch, button, bulb, marker, port | Label shown beside it. Name inputs `A`, `B`, `C`... and outputs `1`, `2`, `3`... or with what they mean (`Sum`, `Carry`). |
 | `color`  | marker, bulb             | Marker colour, or the colour a bulb glows. CSS colour, e.g. `"#e5484d"`. |
 | `stroke` | gates, switch, button, bulb | Outline colour. Omit to use the theme colour (recommended).          |
 | `fill`   | gates, switch, button, bulb | Interior colour. Omit to use the theme colour (recommended).         |
+| `rotate` | gates, switch, button, bulb | Clockwise rotation in degrees: `0`, `90`, `180` or `270`. Default `0` (output pointing right). |
+| `flip`   | gates, switch, button, bulb | `true` mirrors the part left to right (before rotating).             |
+| `w`, `h` | switch, button, bulb     | Body size, 20 to 400 (default 40 x 40). Use long thin bulbs for display segments. |
+| `box`    | port                     | Id of the box whose wall the port sits in.                             |
+| `dir`    | port                     | `"in"` if the signal enters the box, `"out"` if it leaves.              |
 
 ### Types
 
@@ -79,6 +85,7 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `button` | 0 in, 1 out               | Momentary input: on only while the user holds it down.                    |
 | `bulb`   | 1 in (input `0`), 0 out   | Output indicator; lights up when its input is on.                        |
 | `marker` | none                      | Non-functional navigation flag with a `name` and `color`.                 |
+| `port`   | 1 in (input `0`), 1 out   | Connector in a box wall that passes its input straight through. The app creates these itself (see section 5); you never need to write them. |
 
 Inverted gates are written with `"not": true`. These shorthand types are also accepted
 and are converted automatically: `nand`, `nor`, `xnor`, `not` (buffer with a bubble),
@@ -90,9 +97,12 @@ and are converted automatically: `nand`, `nor`, `xnor`, `not` (buffer with a bub
 You never need pin positions to write wires (wires reference ids), but you need sizes
 to lay circuits out neatly without overlaps.
 
-**Switch, button:** body 40 x 40. Output pin at `(x + 60, y + 20)`.
+**Switch, button:** body `w` x `h` (default 40 x 40). Output pin at `(x + w + 20, y + h / 2)`.
 
-**Bulb:** body 40 x 40. Input pin at `(x - 20, y + 20)`.
+**Bulb:** body `w` x `h` (default 40 x 40). Input pin at `(x - 20, y + h / 2)`.
+
+These positions are for unrotated parts. Rotating turns the whole part, pins included,
+about the centre of its body; for `90` and `270` the body's drawn size swaps to `h` x `w`.
 
 **Marker:** body 30 x 40, plus its label to the right (about 10 units per character).
 
@@ -128,8 +138,8 @@ General rule: `and` w = 50 if h = 40, else 60. `or` w = min(90, 60 + 10 * floor(
 
 | Field   | Meaning                                                                  |
 |---------|--------------------------------------------------------------------------|
-| `from`  | Id of the component whose **output** drives the wire (a gate, switch or button). |
-| `to`    | Id of the component receiving the signal (a gate or bulb).                |
+| `from`  | Id of the component whose **output** drives the wire (a gate, switch, button or port). |
+| `to`    | Id of the component receiving the signal (a gate, bulb or port).          |
 | `input` | Which input pin of `to`, counting from 0 at the top. Bulbs only have input `0`. |
 
 Rules:
@@ -140,7 +150,9 @@ Rules:
   inversions oscillates.
 - Wires are drawn automatically as curves; there is nothing to route.
 - Wire colour comes from the driving component, so every wire from the same output
-  shares a colour. Powered wires glow.
+  shares a colour, including after it passes through ports. Powered wires glow.
+- Wires may go straight from a part outside a box to a part inside it. The app splits
+  them at the box wall with a port (section 5).
 
 ---
 
@@ -175,6 +187,22 @@ Guidelines:
 - Nested boxes must be fully inside their parent box.
 - Sibling boxes must not overlap.
 
+### Ports (connectors in box walls)
+
+Every wire that crosses a box wall passes through a **port**: a small connector in the
+wall, pointing in or out, that can be labelled and slid along the wall. They make a
+box behave like a chip with named pins.
+
+- **You don't need to write ports.** Wire parts directly across walls and the app adds
+  them when the file is opened, one per signal per wall (a signal used by several
+  parts inside a box enters through a single port).
+- If the source of a wire is a named switch or button, the port takes its name.
+- Saved files include the ports. A port is written as
+  `{"id":"p1","type":"port","x":90,"y":10,"box":"ha1","dir":"in","name":"A"}`
+  and is snapped onto the nearest point of its box's wall. Wires then run to and from
+  the port (`input` `0`), not directly across the wall.
+- A port whose outside is unconnected (for example in a copied box) outputs off.
+
 ---
 
 ## 6. Layout guidelines
@@ -187,6 +215,8 @@ Guidelines:
   8-bit adder), give each copy its own box, offset by a constant amount, and prefix
   ids per copy: `fa0_x1`, `fa1_x1`, ...
 - Add a `marker` near the main inputs (e.g. "Inputs") so users can find their way back.
+- Give every switch, button and bulb a `name`. They are listed by name in the app's
+  inputs and outputs panels.
 
 ---
 
@@ -271,7 +301,7 @@ belongs only to "Full adder".
 
 1. `format` is `"circuit-maker"` and `version` is `1`.
 2. Every id is unique across components **and** boxes.
-3. Every wire's `from` is a gate, switch or button; every `to` is a gate or bulb.
+3. Every wire's `from` is a gate, switch, button or port; every `to` is a gate, bulb or port.
 4. No input pin has two wires; every gate's `inputs` covers its highest wired index.
 5. Coordinates are multiples of 10; no two component bodies overlap.
 6. Each box fully contains its members (with margin) and its nested boxes; sibling

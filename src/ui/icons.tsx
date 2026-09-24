@@ -103,4 +103,58 @@ export const Icons = {
       <path d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2" />
     </Svg>
   ),
+  rotate: (
+    <Svg>
+      <path d="M20 12a8 8 0 11-2.3-5.6" />
+      <path d="M20 4v5h-5" />
+    </Svg>
+  ),
+  flip: (
+    <Svg>
+      <path d="M12 3v18" strokeDasharray="2 3" />
+      <path d="M9 7L4 17h5zM15 7l5 10h-5z" />
+    </Svg>
+  ),
+  inputs: (
+    <Svg>
+      <rect x="3" y="8" width="12" height="8" rx="4" />
+      <circle cx="11" cy="12" r="2" />
+      <path d="M15 12h6" />
+    </Svg>
+  ),
+  outputs: (
+    <Svg>
+      <circle cx="15" cy="12" r="6" />
+      <path d="M3 12h6M13 13.5l1-3 1 2.5 1-2.5 1 3" />
+    </Svg>
+  ),
+  locate: (
+    <Svg>
+      <circle cx="12" cy="12" r="6" />
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+    </Svg>
+  ),
+  newTab: (
+    <Svg>
+      <path d="M14 4h6v6M20 4l-8 8" />
+      <path d="M18 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h4" />
+    </Svg>
+  ),
+  add: (
+    <Svg>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="M12 8v8M8 12h8" />
+    </Svg>
+  ),
+  blank: (
+    <Svg>
+      <path d="M6 3h8l4 4v14H6z" />
+      <path d="M14 3v4h4" />
+    </Svg>
+  ),
+  chevron: (
+    <Svg>
+      <path d="M6 15l6-6 6 6" />
+    </Svg>
+  ),
 };

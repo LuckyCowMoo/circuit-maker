@@ -1,19 +1,25 @@
-import { boxesOuterFirst, componentInBox, componentSize } from '../model/doc';
+import { boxesOuterFirst, boxInBox, componentInBox, makeComponent } from '../model/doc';
 import {
+  attachPos,
   bodyRect,
   componentBounds,
   curveBounds,
   inflate,
-  inputPos,
-  outputPos,
+  pinDir,
   pointInRect,
+  rectInside,
   rectsOverlap,
+  rotatedSize,
   snap,
   STROKE_W,
+  wireBetween,
   wireCurve,
+  xformOf,
   type WireCurve,
+  type Xf,
 } from '../model/geometry';
-import { componentOps, type DrawOp } from '../model/shapes';
+import { floatsAboveBoxes, partInfo, partLabel } from '../model/parts';
+import { componentOps, textRect, type DrawInfo, type DrawOp, type TextOp } from '../model/shapes';
 import { contrastText, wireColors, type Theme, type WireColors } from '../model/themes';
 import type { Box, Component, Point, Rect } from '../model/types';
 import { FONT_STACK } from '../io/export';
@@ -22,6 +28,7 @@ import type { Arrow, Camera, Editor } from './Editor';
 /** Screen space kept clear at the bottom for the floating toolbar. */
 export const TOOLBAR_SPACE = 110;
 const FAR_ZOOM = 0.3;
+const IDENTITY: Xf = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
 const pathCache = new Map<string, Path2D>();
 function path2d(d: string): Path2D {
@@ -35,7 +42,7 @@ function path2d(d: string): Path2D {
 
 let colorTheme: Theme | null = null;
 const colorCache = new Map<string, WireColors>();
-function colorsFor(net: string, theme: Theme): WireColors {
+export function colorsFor(net: string, theme: Theme): WireColors {
   if (colorTheme !== theme) {
     colorCache.clear();
     colorTheme = theme;
@@ -75,8 +82,17 @@ export function boxOpenness(b: Box, cam: Camera, vw: number, vh: number): number
   return smoothstep(0.3, 0.7, size * centre * zoomed);
 }
 
-function drawOps(ctx: CanvasRenderingContext2D, ops: DrawOp[], x: number, y: number, px: number): void {
-  ctx.translate(x, y);
+function drawText(ctx: CanvasRenderingContext2D, op: TextOp): void {
+  ctx.fillStyle = op.fill;
+  ctx.font = `${op.bold ? 700 : 400} ${op.size}px ${FONT_STACK}`;
+  ctx.textAlign = op.anchor === 'middle' ? 'center' : op.anchor === 'end' ? 'right' : 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(op.text, op.x, op.y);
+}
+
+function drawOps(ctx: CanvasRenderingContext2D, ops: DrawOp[], m: Xf, px: number): void {
+  ctx.save();
+  ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f);
   for (const op of ops) {
     if (op.t === 'path') {
       const p = path2d(op.d);
@@ -91,15 +107,9 @@ function drawOps(ctx: CanvasRenderingContext2D, ops: DrawOp[], x: number, y: num
         ctx.stroke(p);
       }
       if (op.alpha !== undefined) ctx.globalAlpha /= op.alpha;
-    } else {
-      ctx.fillStyle = op.fill;
-      ctx.font = `${op.bold ? 700 : 400} ${op.size}px ${FONT_STACK}`;
-      ctx.textAlign = op.anchor === 'middle' ? 'center' : op.anchor === 'end' ? 'right' : 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(op.text, op.x, op.y);
-    }
+    } else drawText(ctx, op);
   }
-  ctx.translate(-x, -y);
+  ctx.restore();
 }
 
 interface Batch {
@@ -116,13 +126,13 @@ interface Batch {
  */
 class OpBatcher {
   private layers: Map<string, Batch>[] = [];
-  private texts: { op: Extract<DrawOp, { t: 'text' }>; x: number; y: number }[] = [];
+  private texts: { op: TextOp; m: Xf }[] = [];
 
-  add(ops: DrawOp[], x: number, y: number): void {
+  add(ops: DrawOp[], m: Xf): void {
     for (let i = 0; i < ops.length; i++) {
       const op = ops[i];
       if (op.t === 'text') {
-        this.texts.push({ op, x, y });
+        this.texts.push({ op, m });
         continue;
       }
       const layer = (this.layers[i] ??= new Map());
@@ -132,7 +142,7 @@ class OpBatcher {
         b = { path: new Path2D(), fill: op.fill, stroke: op.stroke, width: op.width, alpha: op.alpha };
         layer.set(key, b);
       }
-      b.path.addPath(path2d(op.d), { a: 1, b: 0, c: 0, d: 1, e: x, f: y });
+      b.path.addPath(path2d(op.d), m);
     }
   }
 
@@ -153,7 +163,9 @@ class OpBatcher {
       }
     }
     ctx.globalAlpha = 1;
-    for (const t of this.texts) drawOps(ctx, [t.op], t.x, t.y, px);
+    for (const t of this.texts) drawOps(ctx, [t.op], t.m, px);
+    this.layers = [];
+    this.texts = [];
   }
 }
 
@@ -213,8 +225,10 @@ class SpriteAtlas {
     this.ctx?.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE);
   }
 
-  get(c: Component, bounds: Rect, theme: Theme, active: boolean): SpriteCell | null {
-    const key = `${c.kind}|${c.inputs}|${c.negate ? 1 : 0}|${c.stroke}|${c.fill}|${c.color}|${c.on ? 1 : 0}|${active ? 1 : 0}`;
+  get(c: Component, bounds: Rect, theme: Theme, info: DrawInfo): SpriteCell | null {
+    const key =
+      `${c.kind}|${c.inputs}|${c.negate ? 1 : 0}|${c.stroke}|${c.fill}|${c.color}|${c.w}|${c.h}|${c.rot}|${c.flip ? 1 : 0}|` +
+      `${info.mask}|${info.netOn}|${info.accent}|${info.active ? 1 : 0}`;
     const hit = this.cells.get(key);
     if (hit) return hit;
     const s = this.scale;
@@ -239,10 +253,11 @@ class SpriteAtlas {
     }
     const cell: SpriteCell = { sx: this.x, sy: this.y, w, h, ox: 1 - rx * s, oy: 1 - ry * s };
     const ctx = this.ctx;
-    ctx.setTransform(s, 0, 0, s, cell.sx + cell.ox, cell.sy + cell.oy);
+    const m = xformOf(c);
+    ctx.setTransform(s * m.a, s * m.b, s * m.c, s * m.d, cell.sx + cell.ox + s * (m.e - c.x), cell.sy + cell.oy + s * (m.f - c.y));
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    drawOps(ctx, componentOps(c, theme, active), 0, 0, 1 / s);
+    drawOps(ctx, componentOps(c, theme, info), IDENTITY, 1 / s);
     this.x += w;
     this.rowH = Math.max(this.rowH, h);
     this.cells.set(key, cell);
@@ -310,7 +325,51 @@ function roundRectPath(ctx: CanvasRenderingContext2D, r: Rect, radius: number): 
   ctx.roundRect(r.x, r.y, r.w, r.h, Math.min(radius, r.w / 2, r.h / 2));
 }
 
-function drawBoxOverlay(ctx: CanvasRenderingContext2D, ed: Editor, b: Box, px: number): void {
+/**
+ * Where to put a closed box's big name so it doesn't cover the switches, lights and ports
+ * that stay visible on top: the centre if that's clear, otherwise the clear spot nearest the
+ * centre, shrinking the text if nothing fits.
+ */
+function coverLabelLayout(
+  ctx: CanvasRenderingContext2D,
+  b: Box,
+  obstacles: Rect[],
+  px: number,
+): { x: number; y: number; size: number } {
+  const len = Math.max(1, b.name.length);
+  const size0 = Math.max(8 * px, Math.min(b.h * 0.3, (b.w * 0.85) / (len * 0.6)));
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  if (!obstacles.length) return { x: cx, y: cy, size: size0 };
+  const inner = inflate(b, -4 * px);
+  for (let size = size0; size >= 8 * px; size *= 0.75) {
+    ctx.font = `700 ${size}px ${FONT_STACK}`;
+    const tw = Math.min(ctx.measureText(b.name).width, b.w * 0.92);
+    const pad = size * 0.15;
+    const rw = tw + 2 * pad;
+    const rh = size + 2 * pad;
+    const cands: Point[] = [{ x: cx, y: cy }];
+    const n = 6;
+    for (let i = 0; i <= n; i++) {
+      for (let j = 0; j <= n; j++) {
+        cands.push({
+          x: inner.x + rw / 2 + ((inner.w - rw) * i) / n,
+          y: inner.y + rh / 2 + ((inner.h - rh) * j) / n,
+        });
+      }
+    }
+    cands.sort((p, q) => Math.hypot(p.x - cx, p.y - cy) - Math.hypot(q.x - cx, q.y - cy));
+    for (const p of cands) {
+      const r = { x: p.x - rw / 2, y: p.y - rh / 2, w: rw, h: rh };
+      if (!rectInside(r, inner)) continue;
+      if (obstacles.some((o) => rectsOverlap(o, r))) continue;
+      return { x: p.x, y: p.y, size };
+    }
+  }
+  return { x: cx, y: cy, size: size0 };
+}
+
+function drawBoxOverlay(ctx: CanvasRenderingContext2D, ed: Editor, b: Box, px: number, obstacles: Rect[]): void {
   const t = ed.boxT.get(b.id) ?? 1;
   const col = b.color ?? ed.theme.box;
   const cover = 1 - t;
@@ -333,13 +392,14 @@ function drawBoxOverlay(ctx: CanvasRenderingContext2D, ed: Editor, b: Box, px: n
     ctx.globalAlpha = 1;
   }
   if (cover > 0.01) {
-    const size = Math.max(8 * px, Math.min(b.h * 0.3, (b.w * 0.85) / (Math.max(1, b.name.length) * 0.6)));
+    const mine = obstacles.filter((o) => rectsOverlap(o, b));
+    const l = coverLabelLayout(ctx, b, mine, px);
     ctx.globalAlpha = cover;
     ctx.fillStyle = contrastText(col);
-    ctx.font = `700 ${size}px ${FONT_STACK}`;
+    ctx.font = `700 ${l.size}px ${FONT_STACK}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(b.name, b.x + b.w / 2, b.y + b.h / 2, b.w * 0.92);
+    ctx.fillText(b.name, l.x, l.y, b.w * 0.92);
     ctx.globalAlpha = 1;
   }
 }
@@ -430,16 +490,34 @@ function drawArrows(ctx: CanvasRenderingContext2D, arrows: Arrow[], theme: Theme
   }
 }
 
+function drawHandles(ctx: CanvasRenderingContext2D, r: Rect, theme: Theme, px: number): void {
+  const hs = 8 * px;
+  ctx.strokeStyle = theme.selection;
+  ctx.lineWidth = 1.5 * px;
+  for (const p of [
+    { x: r.x, y: r.y },
+    { x: r.x + r.w, y: r.y },
+    { x: r.x + r.w, y: r.y + r.h },
+    { x: r.x, y: r.y + r.h },
+  ]) {
+    ctx.fillStyle = theme.bg;
+    ctx.fillRect(p.x - hs / 2, p.y - hs / 2, hs, hs);
+    ctx.strokeRect(p.x - hs / 2, p.y - hs / 2, hs, hs);
+  }
+}
+
 export function renderScene(ed: Editor): void {
   const ctx = ed.ctx;
   if (!ctx) return;
   const { width: W, height: H, dpr, cam, theme, doc, sim } = ed;
+  const pc = ed.parts;
   const z = cam.zoom;
   const px = 1 / z;
   // Strokes of at most one device pixel take the canvas's hairline fast path, which is
   // roughly 10x cheaper than wider strokes; zoomed far out, wires use it and skip the glow.
   const dp = 1 / (z * dpr);
   const far = z < FAR_ZOOM;
+  const worldTransform = () => ctx.setTransform(dpr * z, 0, 0, dpr * z, -cam.x * z * dpr, -cam.y * z * dpr);
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.globalAlpha = 1;
@@ -447,7 +525,7 @@ export function renderScene(ed: Editor): void {
   ctx.fillRect(0, 0, W, H);
   drawGrid(ctx, cam, W, H, theme);
 
-  ctx.setTransform(dpr * z, 0, 0, dpr * z, -cam.x * z * dpr, -cam.y * z * dpr);
+  worldTransform();
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   const view = ed.viewRect;
@@ -474,7 +552,8 @@ export function renderScene(ed: Editor): void {
   }
   const covered = visible.filter((b) => (ed.boxT.get(b.id) ?? 1) < 0.02);
 
-  // Wires, batched by colour: unpowered first, then glowing powered wires on top.
+  // Wires, batched by colour: unpowered first, then glowing powered wires on top. A wire takes
+  // the colour of the part that really drives it, so it keeps its hue through box ports.
   const offPaths = new Map<string, Path2D>();
   const onPaths = new Map<string, { cols: WireColors; path: Path2D }>();
   const selectedCurves: WireCurve[] = [];
@@ -482,13 +561,11 @@ export function renderScene(ed: Editor): void {
     const a = doc.components.get(w.from);
     const b = doc.components.get(w.to);
     if (!a || !b) continue;
-    const pa = outputPos(a);
-    const pb = inputPos(b, w.input);
-    if (!pa || !pb) continue;
-    const curve = wireCurve(pa, pb);
+    const curve = wireBetween(a, b, w.input);
+    if (!curve) continue;
     if (!rectsOverlap(inflate(curveBounds(curve), 8), view)) continue;
-    if (covered.length && covered.some((bx) => pointInRect(pa, bx) && pointInRect(pb, bx))) continue;
-    const cols = colorsFor(w.from, theme);
+    if (covered.length && covered.some((bx) => pointInRect(curve.a, bx) && pointInRect(curve.b, bx))) continue;
+    const cols = colorsFor(pc.roots.get(w.from) ?? w.from, theme);
     if (ed.selection.has(w.id)) selectedCurves.push(curve);
     if (sim.value(w.from)) {
       let entry = onPaths.get(cols.on);
@@ -525,24 +602,47 @@ export function renderScene(ed: Editor): void {
     ctx.stroke(path);
   }
 
-  // Components. Zoomed far out, most are stamped from a sprite atlas.
+  // Components. Zoomed far out, most are stamped from a sprite atlas. Switches, buttons,
+  // bulbs and ports are drawn later, above the box covers, so they stay visible.
   const batch = new OpBatcher();
   const scale = z * dpr;
-  if (far) {
-    if (sprites.begin(theme, scale)) ed.requestRender();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }
+  if (far && sprites.begin(theme, scale)) ed.requestRender();
+  const drawParts = (list: Iterable<Component>) => {
+    if (far) ctx.setTransform(1, 0, 0, 1, 0, 0);
+    for (const c of list) {
+      const info = partInfo(pc, c, theme, ed.isActive(c));
+      const cell = far && c.kind !== 'marker' ? sprites.get(c, componentBounds(c), theme, info) : null;
+      if (cell) sprites.draw(ctx, cell, (c.x - cam.x) * scale, (c.y - cam.y) * scale);
+      else batch.add(componentOps(c, theme, info), xformOf(c));
+    }
+    if (far) worldTransform();
+    batch.flush(ctx, dp);
+  };
+  const lower: Component[] = [];
+  const floating: Component[] = [];
   for (const c of doc.components.values()) {
-    const bounds = componentBounds(c);
-    if (!rectsOverlap(bounds, view)) continue;
-    if (covered.length && componentCoveredBy(c, covered)) continue;
-    const active = ed.isActive(c);
-    const cell = far && c.kind !== 'marker' ? sprites.get(c, bounds, theme, active) : null;
-    if (cell) sprites.draw(ctx, cell, (c.x - cam.x) * scale, (c.y - cam.y) * scale);
-    else batch.add(componentOps(c, theme, active), c.x, c.y);
+    if (!rectsOverlap(componentBounds(c), view)) continue;
+    if (floatsAboveBoxes(c)) {
+      if (!(c.kind === 'port' && covered.length && portHidden(doc, c, covered))) floating.push(c);
+    } else if (!(covered.length && componentCoveredBy(ed, c, covered))) lower.push(c);
   }
-  if (far) ctx.setTransform(scale, 0, 0, scale, -cam.x * scale, -cam.y * scale);
-  batch.flush(ctx, dp);
+  drawParts(lower);
+
+  // Box overlays, innermost first so outer boxes cover inner ones.
+  const labels: TextOp[] = [];
+  const obstacles: Rect[] = [];
+  for (const c of floating) {
+    obstacles.push(inflate(bodyRect(c), 3));
+    const l = partLabel(doc, c, theme);
+    if (l && !(c.kind === 'port' && labels.some((o) => o.text === l.text && rectsOverlap(textRect(o), textRect(l))))) {
+      labels.push(l);
+      obstacles.push(textRect(l));
+    }
+  }
+  for (let i = visible.length - 1; i >= 0; i--) drawBoxOverlay(ctx, ed, visible[i], px, obstacles);
+
+  drawParts(floating);
+  for (const l of labels) if (l.size * z >= 5) drawText(ctx, l);
 
   // Selection outlines for components.
   ctx.strokeStyle = theme.selection;
@@ -555,9 +655,8 @@ export function renderScene(ed: Editor): void {
     ctx.roundRect(r.x, r.y, r.w, r.h, 4);
     ctx.stroke();
   }
-
-  // Box overlays, innermost first so outer boxes cover inner ones.
-  for (let i = visible.length - 1; i >= 0; i--) drawBoxOverlay(ctx, ed, visible[i], px);
+  const sized = ed.resizeTarget();
+  if (sized) drawHandles(ctx, bodyRect(sized), theme, px);
 
   // Selected boxes and their resize handles.
   for (const b of ed.selectedBoxes()) {
@@ -567,17 +666,22 @@ export function renderScene(ed: Editor): void {
     roundRectPath(ctx, inflate(b, 3 * px), 9);
     ctx.stroke();
     ctx.setLineDash([]);
-    const hs = 8 * px;
-    for (const p of [
-      { x: b.x, y: b.y },
-      { x: b.x + b.w, y: b.y },
-      { x: b.x + b.w, y: b.y + b.h },
-      { x: b.x, y: b.y + b.h },
-    ]) {
-      ctx.fillStyle = theme.bg;
-      ctx.fillRect(p.x - hs / 2, p.y - hs / 2, hs, hs);
-      ctx.lineWidth = 1.5 * px;
-      ctx.strokeRect(p.x - hs / 2, p.y - hs / 2, hs, hs);
+    drawHandles(ctx, b, theme, px);
+  }
+
+  // Box edge under the pointer, which can be dragged to resize.
+  const edge = ed.drag?.kind === 'resize' ? null : ed.hoverEdge;
+  if (edge) {
+    const b = doc.boxes.get(edge.box);
+    if (b) {
+      ctx.strokeStyle = theme.selection;
+      ctx.lineWidth = 3 * px;
+      ctx.beginPath();
+      if (edge.l) (ctx.moveTo(b.x, b.y), ctx.lineTo(b.x, b.y + b.h));
+      if (edge.r) (ctx.moveTo(b.x + b.w, b.y), ctx.lineTo(b.x + b.w, b.y + b.h));
+      if (edge.t) (ctx.moveTo(b.x, b.y), ctx.lineTo(b.x + b.w, b.y));
+      if (edge.b) (ctx.moveTo(b.x, b.y + b.h), ctx.lineTo(b.x + b.w, b.y + b.h));
+      ctx.stroke();
     }
   }
 
@@ -597,10 +701,14 @@ export function renderScene(ed: Editor): void {
 
   // Wire being dragged.
   if (drag?.kind === 'wire' && drag.moved) {
-    const from = ed.pinPosition(drag.from);
-    if (from) {
-      const to = (drag.target && ed.pinPosition(drag.target)) || drag.cur;
-      const curve = drag.from.pin < 0 ? wireCurve(from, to) : wireCurve(to, from);
+    const src = doc.components.get(drag.from.comp);
+    const from = src && attachPos(src, drag.from.pin);
+    if (src && from) {
+      const tc = drag.target && doc.components.get(drag.target.comp);
+      const to = (tc && attachPos(tc, drag.target!.pin)) || drag.cur;
+      const dFrom = pinDir(src, drag.from.pin);
+      const dTo = tc ? pinDir(tc, drag.target!.pin) : { x: -dFrom.x, y: -dFrom.y };
+      const curve = drag.from.pin < 0 ? wireCurve(from, to, dFrom, dTo) : wireCurve(to, from, dTo, dFrom);
       ctx.strokeStyle = theme.selection;
       ctx.lineWidth = Math.max(STROKE_W, 1.5 * px);
       ctx.setLineDash([8 * px, 6 * px]);
@@ -639,22 +747,21 @@ export function renderScene(ed: Editor): void {
       ctx.strokeStyle = theme.box;
       ctx.lineWidth = 2;
       ctx.stroke();
+    } else if (ed.placing === 'not') {
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.arc(ed.ghost.x, ed.ghost.y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = theme.fill;
+      ctx.fill();
+      ctx.strokeStyle = theme.selection;
+      ctx.lineWidth = STROKE_W;
+      ctx.stroke();
     } else {
-      const size = componentSize(ed.placing);
-      const ghost: Component = {
-        id: 'ghost',
-        kind: ed.placing,
-        x: snap(ed.ghost.x - size.w / 2),
-        y: snap(ed.ghost.y - size.h / 2),
-        inputs: 2,
-        negate: false,
-        stroke: null,
-        fill: null,
-        on: false,
-        name: ed.placing === 'marker' ? 'Marker' : '',
-        color: null,
-      };
-      drawOps(ctx, componentOps(ghost, theme, false), ghost.x, ghost.y, px);
+      const ghost = makeComponent(ed.placing, 0, 0, 'ghost');
+      const size = rotatedSize(ghost);
+      ghost.x = snap(ed.ghost.x - size.w / 2);
+      ghost.y = snap(ed.ghost.y - size.h / 2);
+      drawOps(ctx, componentOps(ghost, theme, { active: false }), xformOf(ghost), px);
     }
     ctx.globalAlpha = 1;
   }
@@ -665,7 +772,15 @@ export function renderScene(ed: Editor): void {
   drawArrows(ctx, ed.arrows, theme);
 }
 
-function componentCoveredBy(c: Component, covered: Box[]): boolean {
-  for (const b of covered) if (componentInBox(c, b)) return true;
+function componentCoveredBy(ed: Editor, c: Component, covered: Box[]): boolean {
+  for (const b of covered) if (componentInBox(ed.doc, c, b)) return true;
+  return false;
+}
+
+/** A port is hidden when a box around its own box is closed. */
+function portHidden(doc: Editor['doc'], port: Component, covered: Box[]): boolean {
+  const own = port.box ? doc.boxes.get(port.box) : undefined;
+  if (!own) return false;
+  for (const b of covered) if (b !== own && boxInBox(own, b)) return true;
   return false;
 }

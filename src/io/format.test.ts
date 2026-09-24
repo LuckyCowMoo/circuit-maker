@@ -38,11 +38,15 @@ describe('file format', () => {
 
   it('nests the full adder boxes geometrically', () => {
     const { doc } = parseCircuit(example('full-adder.cmk.json'));
+    const parts = (box: string) =>
+      boxContents(doc, doc.boxes.get(box)!)
+        .components.filter((c) => c.kind !== 'port')
+        .map((c) => c.id)
+        .sort();
     const outer = boxContents(doc, doc.boxes.get('full_adder')!);
     expect(outer.boxes.map((b) => b.id).sort()).toEqual(['ha1', 'ha2']);
-    expect(outer.components.map((c) => c.id).sort()).toEqual(['a1', 'a2', 'o1', 'x1', 'x2']);
-    const ha1 = boxContents(doc, doc.boxes.get('ha1')!);
-    expect(ha1.components.map((c) => c.id).sort()).toEqual(['a1', 'x1']);
+    expect(parts('full_adder')).toEqual(['a1', 'a2', 'o1', 'x1', 'x2']);
+    expect(parts('ha1')).toEqual(['a1', 'x1']);
   });
 
   it('accepts LLM-style input: code fences, aliases and shorthand pins', () => {

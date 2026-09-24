@@ -19,6 +19,7 @@ const KIND_CODE: Record<ComponentKind, number> = {
   button: K_BUTTON,
   bulb: K_BULB,
   marker: K_MARKER,
+  port: K_BUF,
 };
 
 /**
@@ -100,9 +101,11 @@ export class Simulator {
     }
 
     const out = new Uint8Array(n);
+    let fresh = 0;
     for (let i = 0; i < n; i++) {
       const prev = prevIndex.get(comps[i].id);
       if (prev !== undefined && prev < prevOut.length) out[i] = prevOut[prev];
+      else fresh++;
     }
 
     this.ids = comps.map((c) => c.id);
@@ -120,8 +123,30 @@ export class Simulator {
     this.tmp = new Uint8Array(n);
     this.inQ = new Uint8Array(n);
     this.qLen = 0;
+    if (fresh) this.presettle();
     for (let i = 0; i < n; i++) this.schedule(i);
     this.changed = true;
+  }
+
+  /**
+   * Settles new parts one at a time, each seeing the others' latest values. Unlike the lock-step
+   * waves this lets symmetric feedback (an SR latch made of two NOR gates) pick a stable state
+   * instead of oscillating forever from all-zero.
+   */
+  private presettle(): void {
+    const n = this.ids.length;
+    const passes = Math.min(64, Math.floor(4_000_000 / Math.max(1, n)));
+    for (let p = 0; p < passes; p++) {
+      let moved = false;
+      for (let i = 0; i < n; i++) {
+        const v = this.evaluate(i);
+        if (v !== this.out[i]) {
+          this.out[i] = v;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
   }
 
   private schedule(i: number): void {

@@ -1,4 +1,4 @@
-import type { Component, ComponentKind, Point, Rect } from './types';
+import type { Component, ComponentKind, Point, Rect, Rotation } from './types';
 import { isGate } from './types';
 
 export const GRID = 10;
@@ -8,6 +8,10 @@ export const STROKE_W = 2.5;
 export const BUBBLE_D = 10;
 export const MAX_INPUTS = 256;
 export const INPUT_WARN = 32;
+export const IO_SIZE = 40;
+export const IO_MIN = 20;
+export const IO_MAX = 400;
+export const PORT_SIZE = 20;
 
 export interface Geom {
   kind: ComponentKind;
@@ -22,7 +26,7 @@ export interface Geom {
   depth: number;
   /** x where the output stub starts (body width plus bubble). */
   tip: number;
-  /** Pin connection points, local to the body's top-left. */
+  /** Pin connection points, local to the unrotated body's top-left. */
   inputs: Point[];
   /** x where each input stub meets the body. */
   back: number[];
@@ -40,6 +44,7 @@ const KIND_INDEX: Record<ComponentKind, number> = {
   button: 5,
   bulb: 6,
   marker: 7,
+  port: 8,
 };
 
 const cache = new Map<number, Geom>();
@@ -89,7 +94,7 @@ function buildGate(kind: ComponentKind, n: number, negate: boolean): Geom {
   };
 }
 
-function build(kind: ComponentKind, n: number, negate: boolean): Geom {
+function build(kind: ComponentKind, n: number, negate: boolean, w: number, h: number): Geom {
   if (isGate(kind)) return buildGate(kind, n, negate);
   const base = { kind, n: 0, negate: false, offset: 0, depth: 0, back: [] as number[] };
   switch (kind) {
@@ -97,58 +102,152 @@ function build(kind: ComponentKind, n: number, negate: boolean): Geom {
     case 'button':
       return {
         ...base,
-        w: 40,
-        h: 40,
-        tip: 40,
+        w,
+        h,
+        tip: w,
         inputs: [],
-        output: { x: 40 + PIN_LEN, y: 20 },
-        bounds: { x: 0, y: 0, w: 40 + PIN_LEN, h: 40 },
+        output: { x: w + PIN_LEN, y: h / 2 },
+        bounds: { x: 0, y: 0, w: w + PIN_LEN, h },
       };
     case 'bulb':
       return {
         ...base,
-        w: 40,
-        h: 40,
-        tip: 40,
-        inputs: [{ x: -PIN_LEN, y: 20 }],
+        w,
+        h,
+        tip: w,
+        inputs: [{ x: -PIN_LEN, y: h / 2 }],
         back: [3],
         output: null,
-        bounds: { x: -PIN_LEN, y: 0, w: 40 + PIN_LEN, h: 40 },
+        bounds: { x: -PIN_LEN, y: 0, w: w + PIN_LEN, h },
+      };
+    case 'port':
+      return {
+        ...base,
+        w: PORT_SIZE,
+        h: PORT_SIZE,
+        tip: PORT_SIZE,
+        inputs: [{ x: 0, y: PORT_SIZE / 2 }],
+        back: [0],
+        output: { x: PORT_SIZE, y: PORT_SIZE / 2 },
+        bounds: { x: 0, y: 0, w: PORT_SIZE, h: PORT_SIZE },
       };
     default:
       return { ...base, w: 30, h: 40, tip: 30, inputs: [], output: null, bounds: { x: 0, y: 0, w: 30, h: 40 } };
   }
 }
 
-export function geomFor(kind: ComponentKind, n: number, negate: boolean): Geom {
+export function geomFor(kind: ComponentKind, n: number, negate: boolean, w = IO_SIZE, h = IO_SIZE): Geom {
   const gate = isGate(kind);
-  const key = KIND_INDEX[kind] * 1_000_000 + (gate ? n * 2 + (negate ? 1 : 0) : 0);
+  const io = kind === 'switch' || kind === 'button' || kind === 'bulb';
+  const key =
+    KIND_INDEX[kind] * 1_000_000 + (gate ? n * 2 + (negate ? 1 : 0) : io ? Math.round(w) * 1000 + Math.round(h) : 0);
   let g = cache.get(key);
   if (!g) {
-    g = build(kind, gate ? n : 0, gate && negate);
+    g = build(kind, gate ? n : 0, gate && negate, w, h);
     cache.set(key, g);
   }
   return g;
 }
 
-export const geomOf = (c: Component): Geom => geomFor(c.kind, c.inputs, c.negate);
+export const geomOf = (c: Component): Geom => geomFor(c.kind, c.inputs, c.negate, c.w, c.h);
 
 export const snap = (v: number): number => Math.round(v / GRID) * GRID;
 
+// ---------------------------------------------------------------- orientation
+
+/** Affine map from a component's local frame to the world, in canvas order (a b c d e f). */
+export interface Xf {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+}
+
+/** Unrotated body size: the box that rotation turns and `x`, `y` positions. */
+export function localSize(c: Component): { w: number; h: number } {
+  const g = geomOf(c);
+  return { w: g.tip, h: g.h };
+}
+
+const oriented = (c: Component) => c.kind !== 'marker';
+
+export function xformOf(c: Component): Xf {
+  const { w: W, h: H } = localSize(c);
+  const rot = oriented(c) ? c.rot : 0;
+  let m: Xf;
+  switch (rot) {
+    case 1:
+      m = { a: 0, b: 1, c: -1, d: 0, e: H, f: 0 };
+      break;
+    case 2:
+      m = { a: -1, b: 0, c: 0, d: -1, e: W, f: H };
+      break;
+    case 3:
+      m = { a: 0, b: -1, c: 1, d: 0, e: 0, f: W };
+      break;
+    default:
+      m = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  }
+  if (oriented(c) && c.flip) m = { a: -m.a, b: -m.b, c: m.c, d: m.d, e: m.e + m.a * W, f: m.f + m.b * W };
+  m.e += c.x;
+  m.f += c.y;
+  return m;
+}
+
+export const applyXf = (m: Xf, p: Point): Point => ({ x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f });
+
+const applyDir = (m: Xf, v: Point): Point => ({ x: m.a * v.x + m.c * v.y, y: m.b * v.x + m.d * v.y });
+
+/** Size of the body after rotation. */
+export function rotatedSize(c: Component): { w: number; h: number } {
+  const s = localSize(c);
+  return oriented(c) && c.rot % 2 === 1 ? { w: s.h, h: s.w } : s;
+}
+
+/** Changes rotation/flip while keeping the body centre in place (snapped to the grid). */
+export function reorient(c: Component, rot: Rotation, flip: boolean): void {
+  const before = componentCenter(c);
+  c.rot = rot;
+  c.flip = flip;
+  const s = rotatedSize(c);
+  c.x = snap(before.x - s.w / 2);
+  c.y = snap(before.y - s.h / 2);
+}
+
+// ---------------------------------------------------------------- pins
+
 export function inputPos(c: Component, i: number): Point | null {
   const p = geomOf(c).inputs[i];
-  return p ? { x: c.x + p.x, y: c.y + p.y } : null;
+  return p ? applyXf(xformOf(c), p) : null;
 }
 
 export function outputPos(c: Component): Point | null {
   const p = geomOf(c).output;
-  return p ? { x: c.x + p.x, y: c.y + p.y } : null;
+  return p ? applyXf(xformOf(c), p) : null;
 }
 
 /** pin < 0 means the output pin. */
 export function pinPos(c: Component, pin: number): Point | null {
   return pin < 0 ? outputPos(c) : inputPos(c, pin);
 }
+
+/** Unit vector pointing away from the component at a pin. */
+export function pinDir(c: Component, pin: number): Point {
+  return applyDir(xformOf(c), { x: pin < 0 ? 1 : -1, y: 0 });
+}
+
+/** Where a connected wire meets the body (the stub is hidden once a pin is wired). */
+export function attachPos(c: Component, pin: number): Point | null {
+  const g = geomOf(c);
+  const m = xformOf(c);
+  if (pin < 0) return g.output ? applyXf(m, { x: g.tip, y: g.output.y }) : null;
+  const p = g.inputs[pin];
+  return p ? applyXf(m, { x: g.back[pin] ?? 0, y: p.y }) : null;
+}
+
+// ---------------------------------------------------------------- rects
 
 export const MARKER_FONT = 16;
 
@@ -158,21 +257,26 @@ export function markerLabelWidth(name: string): number {
 
 /** The clickable body (plus marker label), without pin stubs. */
 export function bodyRect(c: Component): Rect {
-  const g = geomOf(c);
-  const w = c.kind === 'marker' ? g.tip + markerLabelWidth(c.name) : g.tip;
-  return { x: c.x, y: c.y, w, h: g.h };
+  const s = rotatedSize(c);
+  const w = c.kind === 'marker' ? s.w + markerLabelWidth(c.name) : s.w;
+  return { x: c.x, y: c.y, w, h: s.h };
 }
 
 /** Full world-space bounds, including pin stubs and marker label. */
 export function componentBounds(c: Component): Rect {
   const b = geomOf(c).bounds;
-  const extra = c.kind === 'marker' ? markerLabelWidth(c.name) : 0;
-  return { x: c.x + b.x, y: c.y + b.y, w: b.w + extra, h: b.h };
+  if (c.kind === 'marker') return { x: c.x + b.x, y: c.y + b.y, w: b.w + markerLabelWidth(c.name), h: b.h };
+  const m = xformOf(c);
+  const p = applyXf(m, { x: b.x, y: b.y });
+  const q = applyXf(m, { x: b.x + b.w, y: b.y + b.h });
+  const x = Math.min(p.x, q.x);
+  const y = Math.min(p.y, q.y);
+  return { x, y, w: Math.abs(q.x - p.x), h: Math.abs(q.y - p.y) };
 }
 
 export function componentCenter(c: Component): Point {
-  const g = geomOf(c);
-  return { x: c.x + g.tip / 2, y: c.y + g.h / 2 };
+  const s = rotatedSize(c);
+  return { x: c.x + s.w / 2, y: c.y + s.h / 2 };
 }
 
 export function rectsOverlap(a: Rect, b: Rect): boolean {
@@ -210,6 +314,8 @@ export function unionRects(rects: Iterable<Rect>): Rect | null {
   return x0 === Infinity ? null : { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
+// ---------------------------------------------------------------- wires
+
 export interface WireCurve {
   a: Point;
   c1: Point;
@@ -217,18 +323,35 @@ export interface WireCurve {
   b: Point;
 }
 
-export function wireCurve(a: Point, b: Point): WireCurve {
-  const dxAbs = Math.abs(b.x - a.x);
-  const backwards = b.x < a.x;
-  const dx = Math.max(30, dxAbs * 0.5 + (backwards ? Math.abs(b.y - a.y) * 0.25 + 30 : 0));
-  return { a, c1: { x: a.x + dx, y: a.y }, c2: { x: b.x - dx, y: b.y }, b };
+const RIGHT: Point = { x: 1, y: 0 };
+const LEFT: Point = { x: -1, y: 0 };
+
+/**
+ * Curve from an output at `a` (leaving in direction `da`) to an input at `b` (entered from
+ * direction `db`, which points away from the input's component).
+ */
+export function wireCurve(a: Point, b: Point, da: Point = RIGHT, db: Point = LEFT): WireCurve {
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const along = vx * da.x + vy * da.y;
+  const perp = Math.abs(vx * da.y - vy * da.x);
+  const k = Math.max(30, Math.abs(along) * 0.5 + (along < 0 ? perp * 0.25 + 30 : 0));
+  return { a, c1: { x: a.x + da.x * k, y: a.y + da.y * k }, c2: { x: b.x + db.x * k, y: b.y + db.y * k }, b };
+}
+
+/** The curve of a wire from `src`'s output to input `input` of `dst`. */
+export function wireBetween(src: Component, dst: Component, input: number): WireCurve | null {
+  const a = attachPos(src, -1);
+  const b = attachPos(dst, input);
+  if (!a || !b) return null;
+  return wireCurve(a, b, pinDir(src, -1), pinDir(dst, input));
 }
 
 export function curveBounds(c: WireCurve): Rect {
-  const x0 = Math.min(c.a.x, c.b.x, c.c2.x);
-  const x1 = Math.max(c.a.x, c.b.x, c.c1.x);
-  const y0 = Math.min(c.a.y, c.b.y);
-  const y1 = Math.max(c.a.y, c.b.y);
+  const x0 = Math.min(c.a.x, c.b.x, c.c1.x, c.c2.x);
+  const x1 = Math.max(c.a.x, c.b.x, c.c1.x, c.c2.x);
+  const y0 = Math.min(c.a.y, c.b.y, c.c1.y, c.c2.y);
+  const y1 = Math.max(c.a.y, c.b.y, c.c1.y, c.c2.y);
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 

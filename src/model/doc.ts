@@ -1,6 +1,6 @@
-import { bodyRect, componentBounds, geomFor, inflate, pointInRect, rectInside, rectsOverlap } from './geometry';
+import { bodyRect, componentBounds, geomFor, inflate, IO_SIZE, pointInRect, rectInside, rectsOverlap } from './geometry';
 import type { Box, Component, ComponentKind, Doc, Rect } from './types';
-import { isGate } from './types';
+import { inputCount, isGate, isInput } from './types';
 
 export function emptyDoc(name = 'Untitled circuit'): Doc {
   return { name, components: new Map(), wires: new Map(), boxes: new Map() };
@@ -31,6 +31,11 @@ export function makeComponent(kind: ComponentKind, x: number, y: number, id: str
     on: false,
     name: kind === 'marker' ? 'Marker' : '',
     color: null,
+    rot: 0,
+    flip: false,
+    w: IO_SIZE,
+    h: IO_SIZE,
+    box: null,
   };
 }
 
@@ -41,15 +46,26 @@ export function componentSize(kind: ComponentKind): { w: number; h: number } {
 
 export const boxRect = (b: Box): Rect => ({ x: b.x, y: b.y, w: b.w, h: b.h });
 
-/** A component belongs to a box when the centre of its body is inside the box. */
-export function componentInBox(c: Component, b: Rect): boolean {
+/**
+ * A component belongs to a box when the centre of its body is inside the box. A port belongs to
+ * the box whose wall it sits in, and to every box around that one.
+ */
+export function componentInBox(doc: Doc, c: Component, b: Box): boolean {
+  if (c.kind === 'port') {
+    if (c.box === b.id) return true;
+    const own = c.box ? doc.boxes.get(c.box) : undefined;
+    return !!own && boxInBox(own, b);
+  }
   const r = bodyRect(c);
   return pointInRect({ x: r.x + r.w / 2, y: r.y + r.h / 2 }, b);
 }
 
 /** A box is nested in another when it lies entirely inside it. */
 export function boxInBox(inner: Box, outer: Box): boolean {
-  return inner !== outer && rectInside(inner, outer);
+  if (inner === outer || !rectInside(inner, outer)) return false;
+  const a = inner.w * inner.h;
+  const b = outer.w * outer.h;
+  return a < b || (a === b && inner.id > outer.id);
 }
 
 export interface BoxContents {
@@ -61,14 +77,14 @@ export interface BoxContents {
 export function boxContents(doc: Doc, box: Box): BoxContents {
   const components: Component[] = [];
   const boxes: Box[] = [];
-  for (const c of doc.components.values()) if (componentInBox(c, box)) components.push(c);
+  for (const c of doc.components.values()) if (componentInBox(doc, c, box)) components.push(c);
   for (const b of doc.boxes.values()) if (boxInBox(b, box)) boxes.push(b);
   return { components, boxes };
 }
 
 /** Boxes sorted from largest (outermost) to smallest. */
 export function boxesOuterFirst(doc: Doc): Box[] {
-  return [...doc.boxes.values()].sort((a, b) => b.w * b.h - a.w * a.h);
+  return [...doc.boxes.values()].sort((a, b) => b.w * b.h - a.w * a.h || (a.id < b.id ? -1 : 1));
 }
 
 /** Expands a set of ids with the contents of any boxes in it. */
@@ -139,4 +155,71 @@ export function findFreeSpot(rect: Rect, obstacles: Rect[], margin = 20, contain
     }
   }
   return best ?? { ...rect, x: rect.x + rect.w + margin };
+}
+
+// ---------------------------------------------------------------- labels and nets
+
+/** 1 → A, 26 → Z, 27 → AA, 28 → AB ... */
+export function letterLabel(n: number): string {
+  let s = '';
+  while (n > 0) {
+    n--;
+    s = String.fromCharCode(65 + (n % 26)) + s;
+    n = Math.floor(n / 26);
+  }
+  return s;
+}
+
+/** The first unused default label: letters for switches and buttons, numbers for bulbs. */
+export function nextLabel(doc: Doc, kind: ComponentKind, taken: Set<string> = new Set()): string {
+  const used = new Set(taken);
+  const inputs = isInput(kind);
+  for (const c of doc.components.values()) {
+    if (inputs ? isInput(c.kind) : c.kind === 'bulb') used.add(c.name.toUpperCase());
+  }
+  for (let n = 1; ; n++) {
+    const label = inputs ? letterLabel(n) : String(n);
+    if (!used.has(label)) return label;
+  }
+}
+
+/** Which pins of each component are wired: character 0 is the output, then one per input. */
+export function pinMasks(doc: Doc): Map<string, string> {
+  const outs = new Set<string>();
+  const ins = new Map<string, Set<number>>();
+  for (const w of doc.wires.values()) {
+    outs.add(w.from);
+    let s = ins.get(w.to);
+    if (!s) ins.set(w.to, (s = new Set()));
+    s.add(w.input);
+  }
+  const masks = new Map<string, string>();
+  for (const c of doc.components.values()) {
+    const n = inputCount(c);
+    const s = ins.get(c.id);
+    let m = outs.has(c.id) ? '1' : '0';
+    for (let i = 0; i < n; i++) m += s?.has(i) ? '1' : '0';
+    masks.set(c.id, m);
+  }
+  return masks;
+}
+
+/** The component that really drives each component's output, looking back through ports. */
+export function netRoots(doc: Doc): Map<string, string> {
+  const driver = new Map<string, string>();
+  for (const w of doc.wires.values()) {
+    const t = doc.components.get(w.to);
+    if (t?.kind === 'port') driver.set(t.id, w.from);
+  }
+  const roots = new Map<string, string>();
+  for (const c of doc.components.values()) {
+    let id = c.id;
+    for (let i = 0; i < 64 && doc.components.get(id)?.kind === 'port'; i++) {
+      const d = driver.get(id);
+      if (!d) break;
+      id = d;
+    }
+    roots.set(c.id, id);
+  }
+  return roots;
 }

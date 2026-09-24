@@ -1,7 +1,8 @@
-import { MAX_INPUTS } from '../model/geometry';
+import { componentCenter, IO_MAX, IO_MIN, IO_SIZE, MAX_INPUTS, snap } from '../model/geometry';
 import { emptyDoc, idTaken, makeComponent, uid } from '../model/doc';
-import type { Box, Component, ComponentKind, Doc, Wire } from '../model/types';
-import { hasOutput, inputCount, isGate } from '../model/types';
+import { normalizePorts, placePort, portInward } from '../model/ports';
+import type { Box, Component, ComponentKind, Doc, Rotation, Wire } from '../model/types';
+import { canRotate, hasOutput, inputCount, isGate, isIO } from '../model/types';
 
 export const FORMAT_ID = 'circuit-maker';
 export const FORMAT_VERSION = 1;
@@ -26,6 +27,14 @@ export interface FileComponent {
   color?: string;
   stroke?: string;
   fill?: string;
+  /** Degrees clockwise: 0, 90, 180 or 270. */
+  rotate?: number;
+  flip?: boolean;
+  w?: number;
+  h?: number;
+  /** Ports: the box they sit in and which way the signal goes through its wall. */
+  box?: string;
+  dir?: 'in' | 'out';
 }
 
 export interface FileWire {
@@ -62,6 +71,8 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
   const included = new Set<string>();
   for (const c of doc.components.values()) {
     if (ids && !ids.has(c.id)) continue;
+    const portBox = c.kind === 'port' && c.box ? doc.boxes.get(c.box) : undefined;
+    if (c.kind === 'port' && (!portBox || (ids && !ids.has(portBox.id)))) continue;
     included.add(c.id);
     const fc: FileComponent = { id: c.id, type: c.kind, x: r2(c.x), y: r2(c.y) };
     if (isGate(c.kind)) {
@@ -69,10 +80,22 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
       if (c.negate) fc.not = true;
     }
     if (c.kind === 'switch' && c.on) fc.on = true;
-    if (c.kind === 'marker') fc.name = c.name;
+    if (c.kind === 'marker' || (c.name && !isGate(c.kind))) fc.name = c.name;
     if (c.color && (c.kind === 'marker' || c.kind === 'bulb')) fc.color = c.color;
-    if (c.stroke && c.kind !== 'marker') fc.stroke = c.stroke;
-    if (c.fill && c.kind !== 'marker') fc.fill = c.fill;
+    if (c.stroke && c.kind !== 'marker' && c.kind !== 'port') fc.stroke = c.stroke;
+    if (c.fill && c.kind !== 'marker' && c.kind !== 'port') fc.fill = c.fill;
+    if (canRotate(c.kind)) {
+      if (c.rot) fc.rotate = c.rot * 90;
+      if (c.flip) fc.flip = true;
+    }
+    if (isIO(c.kind)) {
+      if (c.w !== IO_SIZE) fc.w = c.w;
+      if (c.h !== IO_SIZE) fc.h = c.h;
+    }
+    if (portBox) {
+      fc.box = portBox.id;
+      fc.dir = portInward(c, portBox) ? 'in' : 'out';
+    }
     components.push(fc);
   }
   const wires: FileWire[] = [];
@@ -143,6 +166,8 @@ const TYPE_ALIASES: Record<string, { kind: ComponentKind; not?: boolean }> = {
   marker: { kind: 'marker' },
   label: { kind: 'marker' },
   flag: { kind: 'marker' },
+  port: { kind: 'port' },
+  connector: { kind: 'port' },
 };
 
 export interface ParseResult {
@@ -187,6 +212,24 @@ export function parseCircuit(text: string): ParseResult {
     return v;
   };
 
+  arr('boxes').forEach((item, i) => {
+    if (!item || typeof item !== 'object') return warnings.push(`boxes[${i}] is not an object.`);
+    const o = item as Record<string, unknown>;
+    let id = str(o.id);
+    if (!id || idTaken(doc, id)) id = uid(doc, 'b');
+    const b: Box = {
+      id,
+      x: num(o.x, 0),
+      y: num(o.y, 0),
+      w: Math.max(40, num(o.w, 200)),
+      h: Math.max(40, num(o.h, 150)),
+      name: str(o.name) ?? 'Box',
+      color: color(o.color),
+    };
+    doc.boxes.set(id, b);
+  });
+
+  const ports: { c: Component; box: Box; inward: boolean }[] = [];
   arr('components').forEach((item, i) => {
     if (!item || typeof item !== 'object') return warnings.push(`components[${i}] is not an object.`);
     const o = item as Record<string, unknown>;
@@ -205,11 +248,28 @@ export function parseCircuit(text: string): ParseResult {
     }
     if (c.kind === 'switch') c.on = o.on === true;
     if (c.kind === 'marker') c.name = str(o.name) ?? 'Marker';
+    else if (!isGate(c.kind)) c.name = str(o.name) ?? '';
     c.color = color(o.color);
     c.stroke = color(o.stroke);
     c.fill = color(o.fill);
+    if (isIO(c.kind)) {
+      const size = (v: unknown) => Math.max(IO_MIN, Math.min(IO_MAX, snap(num(v, IO_SIZE)) || IO_SIZE));
+      c.w = size(o.w);
+      c.h = size(o.h);
+    }
+    if (canRotate(c.kind)) {
+      c.rot = ((((Math.round(num(o.rotate, 0) / 90) % 4) + 4) % 4) as Rotation);
+      c.flip = o.flip === true;
+    }
+    if (c.kind === 'port') {
+      const box = doc.boxes.get(str(o.box) ?? '');
+      if (!box) return warnings.push(`components[${i}]: port needs "box" naming one of the boxes; skipped.`);
+      c.box = box.id;
+      ports.push({ c, box, inward: o.dir !== 'out' });
+    }
     doc.components.set(id, c);
   });
+  for (const p of ports) placePort(doc, p.c, p.box, componentCenter(p.c), p.inward);
 
   const splitRef = (ref: string): { id: string; pin: number | null } => {
     if (doc.components.has(ref)) return { id: ref, pin: null };
@@ -254,22 +314,7 @@ export function parseCircuit(text: string): ParseResult {
     taken.set(key, w.id);
   });
 
-  arr('boxes').forEach((item, i) => {
-    if (!item || typeof item !== 'object') return warnings.push(`boxes[${i}] is not an object.`);
-    const o = item as Record<string, unknown>;
-    let id = str(o.id);
-    if (!id || idTaken(doc, id)) id = uid(doc, 'b');
-    const b: Box = {
-      id,
-      x: num(o.x, 0),
-      y: num(o.y, 0),
-      w: Math.max(40, num(o.w, 200)),
-      h: Math.max(40, num(o.h, 150)),
-      name: str(o.name) ?? 'Box',
-      color: color(o.color),
-    };
-    doc.boxes.set(id, b);
-  });
+  normalizePorts(doc);
 
   let view: FileView | null = null;
   if (root.view && typeof root.view === 'object') {

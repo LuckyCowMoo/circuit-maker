@@ -8,16 +8,16 @@
     {"id":"ha2","name":"Half adder 2","x":320,"y":-30,"w":160,"h":230,"color":"#0f9d8a"}
   ],
   "components": [
-    {"id":"a","type":"switch","x":0,"y":0},
-    {"id":"b","type":"switch","x":0,"y":60},
-    {"id":"cin","type":"switch","x":0,"y":160},
+    {"id":"a","type":"switch","x":0,"y":0,"name":"A"},
+    {"id":"b","type":"switch","x":0,"y":60,"name":"B"},
+    {"id":"cin","type":"switch","x":0,"y":160,"name":"Cin"},
     {"id":"x1","type":"xor","x":180,"y":0,"inputs":2},
     {"id":"a1","type":"and","x":180,"y":60,"inputs":2},
     {"id":"x2","type":"xor","x":370,"y":0,"inputs":2},
     {"id":"a2","type":"and","x":370,"y":120,"inputs":2},
     {"id":"o1","type":"or","x":510,"y":70,"inputs":2},
-    {"id":"sum","type":"bulb","x":680,"y":0},
-    {"id":"cout","type":"bulb","x":680,"y":70}
+    {"id":"sum","type":"bulb","x":680,"y":0,"name":"Sum"},
+    {"id":"cout","type":"bulb","x":680,"y":70,"name":"Cout"}
   ],
   "wires": [
     {"from":"a","to":"x1","input":0},

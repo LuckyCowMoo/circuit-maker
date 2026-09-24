@@ -4,17 +4,25 @@ import { Toolbar } from './ui/Toolbar';
 import { ContextMenu } from './ui/ContextMenu';
 import { useEditor } from './ui/useEditor';
 
+let shared: Editor | null = null;
+
+/** One editor per page: loading consumes new-tab handoffs, so it must not run twice. */
+function sharedEditor(): Editor {
+  if (!shared) {
+    shared = new Editor();
+    shared.loadInitial();
+  }
+  return shared;
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [editor] = useState(() => {
-    const ed = new Editor();
-    ed.loadInitial();
-    return ed;
-  });
+  const [editor] = useState(sharedEditor);
   useEditor(editor);
 
   useEffect(() => {
     editor.attach(canvasRef.current!);
+    if (import.meta.env.DEV) (window as unknown as { editor: Editor }).editor = editor;
     return () => editor.detach();
   }, [editor]);
 

@@ -1,16 +1,16 @@
-import { boxesOuterFirst } from '../model/doc';
+import { boxesOuterFirst, netRoots, pinMasks } from '../model/doc';
 import {
   componentBounds,
   curveBounds,
   curveSvgPath,
   inflate,
-  inputPos,
-  outputPos,
   STROKE_W,
   unionRects,
-  wireCurve,
+  wireBetween,
+  xformOf,
 } from '../model/geometry';
-import { componentOps, type DrawOp } from '../model/shapes';
+import { partInfo, partLabel, type PartContext } from '../model/parts';
+import { componentOps, textRect, type DrawOp } from '../model/shapes';
 import { wireColors, type Theme } from '../model/themes';
 import type { Doc, Rect } from '../model/types';
 import type { Simulator } from '../sim/simulator';
@@ -42,16 +42,27 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
   const comps = [...doc.components.values()].filter((c) => !ids || ids.has(c.id));
   const compIds = new Set(comps.map((c) => c.id));
   const boxes = boxesOuterFirst(doc).filter((b) => !ids || ids.has(b.id));
-  const curves = [...doc.wires.values()]
-    .filter((w) => compIds.has(w.from) && compIds.has(w.to))
+  const wires = [...doc.wires.values()].filter((w) => compIds.has(w.from) && compIds.has(w.to));
+  const curves = wires
     .map((w) => {
-      const a = outputPos(doc.components.get(w.from)!);
-      const b = inputPos(doc.components.get(w.to)!, w.input);
-      return a && b ? { w, curve: wireCurve(a, b) } : null;
+      const curve = wireBetween(doc.components.get(w.from)!, doc.components.get(w.to)!, w.input);
+      return curve ? { w, curve } : null;
     })
     .filter((x) => x !== null);
+  const sub: Doc = {
+    ...doc,
+    components: new Map(comps.map((c) => [c.id, c])),
+    wires: new Map(wires.map((w) => [w.id, w])),
+  };
+  const pc: PartContext = { doc, masks: pinMasks(sub), roots: netRoots(doc), colors: wireColors };
 
-  const rects: Rect[] = [...comps.map(componentBounds), ...boxes, ...curves.map((c) => curveBounds(c.curve))];
+  const labels = comps.map((c) => partLabel(doc, c, theme)).filter((l) => l !== null);
+  const rects: Rect[] = [
+    ...comps.map(componentBounds),
+    ...boxes,
+    ...curves.map((c) => curveBounds(c.curve)),
+    ...labels.map(textRect),
+  ];
   const bounds = inflate(unionRects(rects) ?? { x: 0, y: 0, w: 200, h: 120 }, 30);
   const { x, y } = bounds;
   const width = Math.ceil(bounds.w);
@@ -69,7 +80,7 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
     );
   }
   for (const { w, curve } of curves) {
-    const cols = wireColors(w.from, theme);
+    const cols = wireColors(pc.roots.get(w.from) ?? w.from, theme);
     const d = curveSvgPath(curve);
     if (sim.value(w.from)) {
       out.push(`<path d="${d}" fill="none" stroke="${cols.glow}" stroke-width="9"/>`);
@@ -80,8 +91,11 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
   }
   for (const c of comps) {
     const active = c.kind === 'switch' ? c.on : c.kind === 'button' ? sim.isPressed(c.id) : sim.value(c.id);
-    out.push(`<g transform="translate(${c.x} ${c.y})">${componentOps(c, theme, active).map(opToSvg).join('')}</g>`);
+    const m = xformOf(c);
+    const t = `matrix(${[m.a, m.b, m.c, m.d, m.e, m.f].map((n) => Math.round(n * 100) / 100).join(' ')})`;
+    out.push(`<g transform="${t}">${componentOps(c, theme, partInfo(pc, c, theme, active)).map(opToSvg).join('')}</g>`);
   }
+  for (const l of labels) out.push(opToSvg(l));
   for (const b of boxes) {
     if (!b.name) continue;
     const col = b.color ?? theme.box;

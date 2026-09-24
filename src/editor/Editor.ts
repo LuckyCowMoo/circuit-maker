@@ -1,14 +1,17 @@
 import {
   boxContents,
   boxesOuterFirst,
+  boxInBox,
   componentInBox,
-  componentSize,
   emptyDoc,
   expandWithContents,
   findFreeSpot,
   idTaken,
   itemsBounds,
   makeComponent,
+  netRoots,
+  nextLabel,
+  pinMasks,
   uid,
 } from '../model/doc';
 import {
@@ -21,28 +24,42 @@ import {
   geomOf,
   GRID,
   inflate,
-  inputPos,
+  IO_MAX,
+  IO_MIN,
   MAX_INPUTS,
-  outputPos,
   pinPos,
   pointInRect,
   rectInside,
   rectsOverlap,
+  reorient,
+  rotatedSize,
   snap,
-  wireCurve,
+  wireBetween,
 } from '../model/geometry';
+import { floatsAboveBoxes, type PartContext } from '../model/parts';
+import {
+  buildBoxTree,
+  dissolvePort,
+  normalizePorts,
+  onSide,
+  placePort,
+  portInward,
+  portSide,
+  type Side,
+} from '../model/ports';
 import { getTheme, type Theme } from '../model/themes';
-import type { Box, Component, ComponentKind, Doc, Point, Rect, Wire } from '../model/types';
-import { hasOutput, inputCount, isGate } from '../model/types';
+import type { Box, Component, ComponentKind, Doc, Point, Rect, Rotation, Wire } from '../model/types';
+import { canRotate, hasOutput, inputCount, isGate, isIO } from '../model/types';
 import { Simulator } from '../sim/simulator';
 import { docToText, FILE_EXTENSION, parseCircuit, serialize, type FileView } from '../io/format';
 import { buildSvg, svgToPng } from '../io/export';
 import { downloadBlob, downloadText, safeFilename } from '../io/download';
-import { renderScene, TOOLBAR_SPACE } from './renderer';
+import { colorsFor, renderScene, TOOLBAR_SPACE } from './renderer';
 import halfAdderExample from '../../examples/half-adder.cmk.json?raw';
 
 export type Tool = 'select' | 'pan';
-export type PlaceKind = ComponentKind | 'box';
+/** Things the toolbar can place. `not` is the NOT bubble, dropped onto a gate. */
+export type PlaceKind = Exclude<ComponentKind, 'port'> | 'box' | 'not';
 export type ExportFormat = 'project' | 'svg' | 'png';
 export type ExportScope = 'all' | 'selection';
 
@@ -81,6 +98,15 @@ export interface Arrow {
   target: Point;
 }
 
+/** Which edges of a box a resize drag moves (two edges = a corner). */
+export interface BoxEdges {
+  box: string;
+  l: boolean;
+  t: boolean;
+  r: boolean;
+  b: boolean;
+}
+
 export type Drag =
   | { kind: 'pan'; sx: number; sy: number; camX: number; camY: number; moved: boolean; button: number }
   | {
@@ -96,7 +122,7 @@ export type Drag =
       press: string | null;
       toggle: string | null;
     }
-  | { kind: 'marquee'; start: Point; cur: Point; base: Set<string> }
+  | { kind: 'marquee'; start: Point; cur: Point; base: Set<string>; sx: number; sy: number; moved: boolean; click: string | null; shift: boolean }
   | {
       kind: 'wire';
       from: PinRef;
@@ -107,7 +133,21 @@ export type Drag =
       moved: boolean;
       picked: string | null;
     }
-  | { kind: 'resize'; box: string; handle: number; orig: Rect; start: Point; sx: number; sy: number; moved: boolean }
+  | {
+      kind: 'resize';
+      edges: BoxEdges;
+      orig: Rect;
+      start: Point;
+      sx: number;
+      sy: number;
+      moved: boolean;
+      /** Boxes that contain this one, innermost first; they grow to keep it inside. */
+      outer: { id: string; orig: Rect }[];
+      /** Ports on the box and its outer boxes and where they were, so they can follow the walls. */
+      ports: { id: string; box: string; side: Side; at: Point; inward: boolean }[];
+    }
+  | { kind: 'size'; comp: string; corner: number; orig: Rect; start: Point; sx: number; sy: number; moved: boolean }
+  | { kind: 'port'; comp: string; inward: boolean; sx: number; sy: number; moved: boolean }
   | { kind: 'pinch'; dist: number; world: Point; zoom: number };
 
 export const MIN_ZOOM = 0.12;
@@ -115,8 +155,14 @@ export const MAX_ZOOM = 3;
 const DRAG_PX = 4;
 const UNDO_LIMIT = 80;
 const AUTOSAVE_KEY = 'circuit-maker:autosave';
+const TABS_KEY = 'circuit-maker:tabs';
+const TAB_KEY = 'circuit-maker:tab';
+const HANDOFF_KEY = 'circuit-maker:handoff:';
+const KEEP_TABS = 6;
 const THEME_KEY = 'circuit-maker:theme';
 const DEFAULT_BOX = { w: 240, h: 160 };
+/** Space kept between a resized box and the walls of the boxes around it. */
+const BOX_GAP = 20;
 
 const GATE_MENU: MenuItem[] = [
   { label: 'AND', kind: 'and' },
@@ -139,6 +185,7 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   bulb: 'Light bulb',
   marker: 'Marker',
   box: 'Box',
+  not: 'NOT bubble',
 };
 
 const storage = {
@@ -149,14 +196,38 @@ const storage = {
       return null;
     }
   },
-  set(key: string, value: string): void {
+  set(key: string, value: string): boolean {
     try {
       localStorage.setItem(key, value);
+      return true;
     } catch {
       // Storage full or unavailable; autosave is best-effort.
+      return false;
+    }
+  },
+  remove(key: string): void {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore.
     }
   },
 };
+
+/** An id for this browser tab that survives reloads, so each tab autosaves its own project. */
+/** This tab's autosave id. Tabs opened with window.open inherit their opener's, so they ask for a `fresh` one. */
+function tabId(fresh = false): string {
+  try {
+    let id = fresh ? null : sessionStorage.getItem(TAB_KEY);
+    if (!id) {
+      id = Math.random().toString(36).slice(2, 10);
+      sessionStorage.setItem(TAB_KEY, id);
+    }
+    return id;
+  } catch {
+    return 'default';
+  }
+}
 
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
@@ -175,8 +246,15 @@ export class Editor {
   /** World position of the placement preview. */
   ghost: Point | null = null;
   hoverPin: PinRef | null = null;
+  /** Box edge under the pointer, which a drag would resize. */
+  hoverEdge: BoxEdges | null = null;
   toastMessage: string | null = null;
+  toastAction: { label: string; run: () => void } | null = null;
   arrows: Arrow[] = [];
+  /** Wiring-derived drawing data, refreshed whenever the topology changes. */
+  parts: PartContext = { doc: this.doc, masks: new Map(), roots: new Map(), colors: colorsFor };
+  /** Bumped when any signal changes, for UI that shows live values. */
+  simVersion = 0;
   /** Box openness from the last frame: 1 = contents visible, 0 = covered. */
   boxT = new Map<string, number>();
   drag: Drag | null = null;
@@ -192,6 +270,10 @@ export class Editor {
   private redoStack: string[] = [];
   private lastCheckpoint = { tag: '', time: 0 };
   private listeners = new Set<() => void>();
+  private simListeners = new Set<() => void>();
+  private tab = tabId();
+  /** Time of the last wheel event that looked like a touchpad, so the whole gesture pans. */
+  private touchpadAt = 0;
   private needsRender = true;
   private topologyDirty = true;
   private raf = 0;
@@ -218,7 +300,7 @@ export class Editor {
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointercancel', this.onPointerCancel);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
-    canvas.addEventListener('contextmenu', this.preventDefault);
+    window.addEventListener('contextmenu', this.onContextMenu);
     canvas.addEventListener('dragover', this.onDragOver);
     canvas.addEventListener('drop', this.onDrop);
     window.addEventListener('keydown', this.onKeyDown);
@@ -241,7 +323,7 @@ export class Editor {
     canvas.removeEventListener('pointerup', this.onPointerUp);
     canvas.removeEventListener('pointercancel', this.onPointerCancel);
     canvas.removeEventListener('wheel', this.onWheel);
-    canvas.removeEventListener('contextmenu', this.preventDefault);
+    window.removeEventListener('contextmenu', this.onContextMenu);
     canvas.removeEventListener('dragover', this.onDragOver);
     canvas.removeEventListener('drop', this.onDrop);
     window.removeEventListener('keydown', this.onKeyDown);
@@ -279,12 +361,15 @@ export class Editor {
     if (this.camAnim) this.tickCamAnim(now);
     if (this.topologyDirty) {
       this.sim.compile(this.doc);
+      this.parts = { doc: this.doc, masks: pinMasks(this.doc), roots: netRoots(this.doc), colors: colorsFor };
       this.topologyDirty = false;
     }
     if (this.sim.pending) this.sim.step();
     if (this.sim.changed) {
       this.sim.changed = false;
       this.needsRender = true;
+      this.simVersion++;
+      for (const fn of this.simListeners) fn();
     }
     if (this.needsRender) {
       this.needsRender = false;
@@ -303,34 +388,75 @@ export class Editor {
 
   getVersion = (): number => this.version;
 
+  subscribeSim = (fn: () => void): (() => void) => {
+    this.simListeners.add(fn);
+    return () => this.simListeners.delete(fn);
+  };
+
+  getSimVersion = (): number => this.simVersion;
+
   private emit(): void {
     this.version++;
     for (const fn of this.listeners) fn();
   }
 
-  /** Call after any document mutation. */
+  /** Call after any document mutation. Keeps box ports in step with the wiring. */
   private changed(topology: boolean): void {
+    if (normalizePorts(this.doc)) {
+      topology = true;
+      for (const id of [...this.selection]) if (!this.itemExists(id)) this.selection.delete(id);
+    }
     if (topology) this.topologyDirty = true;
     this.needsRender = true;
     this.scheduleAutosave();
     this.emit();
   }
 
-  toast(message: string): void {
+  toast(message: string, action: { label: string; run: () => void } | null = null): void {
     this.toastMessage = message;
+    this.toastAction = action;
     clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => {
-      this.toastMessage = null;
-      this.emit();
-    }, 4000);
+    this.toastTimer = setTimeout(
+      () => {
+        this.toastMessage = null;
+        this.toastAction = null;
+        this.emit();
+      },
+      action ? 10000 : 4000,
+    );
     this.emit();
   }
 
   // ---------------------------------------------------------------- persistence
 
+  /**
+   * Starts the tab: `?new` opens a blank project, `?open=<id>` a file handed over by another
+   * tab; otherwise the tab's own autosave, the most recently used project, or an example.
+   */
   loadInitial(): void {
-    const saved = storage.get(AUTOSAVE_KEY);
-    if (saved) {
+    const params = new URLSearchParams(location.search);
+    const handoff = params.get('open');
+    const blank = params.has('new');
+    if (handoff !== null || blank) {
+      history.replaceState(null, '', location.pathname + location.hash);
+      this.tab = tabId(true);
+    }
+    if (blank) {
+      this.doc = emptyDoc();
+      this.setView({ x: 0, y: 0, zoom: 1 });
+      this.changed(true);
+      return;
+    }
+    if (handoff !== null) {
+      const text = storage.get(HANDOFF_KEY + handoff);
+      storage.remove(HANDOFF_KEY + handoff);
+      if (text && this.loadText(text, 'replace', false)) return;
+    }
+    const tabs = this.tabList();
+    const candidates = [this.autosaveKey(), ...tabs.map((t) => `${AUTOSAVE_KEY}:${t}`), AUTOSAVE_KEY];
+    for (const key of candidates) {
+      const saved = storage.get(key);
+      if (!saved) continue;
       try {
         const parsed = parseCircuit(saved);
         this.doc = parsed.doc;
@@ -339,26 +465,61 @@ export class Editor {
         this.changed(true);
         return;
       } catch {
-        // Fall through to the example.
+        // Try the next one.
       }
     }
-    this.loadExample(halfAdderExample, false);
-  }
-
-  loadExample(text: string, undoable = true): void {
-    const parsed = parseCircuit(text);
-    if (undoable) this.checkpoint();
-    this.doc = parsed.doc;
-    this.selection.clear();
+    this.doc = parseCircuit(halfAdderExample).doc;
     this.changed(true);
     this.fitView(false);
+  }
+
+  /** Adds an example to the project beside what's there, and frames it. */
+  addExample(doc: Doc): void {
+    if (!this.insertDoc(doc, null)) return;
+    this.fitView(true, expandWithContents(this.doc, this.selection));
+  }
+
+  private autosaveKey(): string {
+    return `${AUTOSAVE_KEY}:${this.tab}`;
+  }
+
+  private tabList(): string[] {
+    try {
+      const list = JSON.parse(storage.get(TABS_KEY) ?? '[]');
+      return Array.isArray(list) ? list.filter((t): t is string => typeof t === 'string') : [];
+    } catch {
+      return [];
+    }
   }
 
   private scheduleAutosave(): void {
     clearTimeout(this.autosaveTimer);
     this.autosaveTimer = setTimeout(() => {
-      storage.set(AUTOSAVE_KEY, docToText(this.doc, { view: this.getView() }));
+      storage.set(this.autosaveKey(), docToText(this.doc, { view: this.getView() }));
+      const tabs = [this.tab, ...this.tabList().filter((t) => t !== this.tab)];
+      for (const old of tabs.slice(KEEP_TABS)) storage.remove(`${AUTOSAVE_KEY}:${old}`);
+      storage.set(TABS_KEY, JSON.stringify(tabs.slice(0, KEEP_TABS)));
     }, 500);
+  }
+
+  /** Opens a project (or a blank one) in a new browser tab, leaving this one as it is. */
+  openInNewTab(text: string | null): void {
+    let url = location.pathname + '?new';
+    if (text !== null) {
+      const id = Math.random().toString(36).slice(2, 10);
+      if (!storage.set(HANDOFF_KEY + id, text)) {
+        this.toast('That file is too large to hand to a new tab. Use "Add to project" instead.');
+        return;
+      }
+      url = location.pathname + '?open=' + id;
+    }
+    const win = window.open(url, '_blank');
+    if (!win) {
+      this.toast('The browser blocked the new tab.', {
+        label: 'Open in new tab',
+        run: () => window.open(url, '_blank'),
+      });
+    }
   }
 
   // ---------------------------------------------------------------- undo
@@ -574,6 +735,7 @@ export class Editor {
 
   private addComponent(kind: ComponentKind, x: number, y: number): Component {
     const c = makeComponent(kind, x, y, uid(this.doc, `${kind}_`));
+    if (isIO(kind)) c.name = nextLabel(this.doc, kind);
     this.doc.components.set(c.id, c);
     return c;
   }
@@ -609,6 +771,9 @@ export class Editor {
       if (dragged && this.placing === kind && document.elementFromPoint(ev.clientX, ev.clientY) === this.canvas) {
         this.placeAt(kind, this.toWorld(this.screenPoint(ev)));
         this.cancelPlacing();
+      } else if (!dragged && kind === 'not' && this.selectedComponents().some((c) => isGate(c.kind))) {
+        this.cancelPlacing();
+        this.toggleNegate();
       }
     };
     window.addEventListener('pointermove', move);
@@ -624,6 +789,18 @@ export class Editor {
   }
 
   placeAt(kind: PlaceKind, w: Point): void {
+    if (kind === 'not') {
+      const gate = this.hitComponent(w);
+      if (!gate || !isGate(gate.kind)) {
+        this.toast('Drop the NOT bubble onto a gate.');
+        return;
+      }
+      this.checkpoint();
+      gate.negate = !gate.negate;
+      this.selection = new Set([gate.id]);
+      this.changed(true);
+      return;
+    }
     this.checkpoint();
     if (kind === 'box') {
       const b = this.addBox({
@@ -633,8 +810,10 @@ export class Editor {
       });
       this.selection = new Set([b.id]);
     } else {
-      const size = componentSize(kind);
-      const c = this.addComponent(kind, snap(w.x - size.w / 2), snap(w.y - size.h / 2));
+      const c = this.addComponent(kind, 0, 0);
+      const size = rotatedSize(c);
+      c.x = snap(w.x - size.w / 2);
+      c.y = snap(w.y - size.h / 2);
       this.selection = new Set([c.id]);
     }
     this.changed(true);
@@ -693,9 +872,12 @@ export class Editor {
     const boxes = this.selectedBoxes();
     if (!boxes.length) return;
     this.checkpoint();
-    for (const b of boxes) this.doc.boxes.delete(b.id);
+    for (const b of boxes) {
+      for (const c of [...this.doc.components.values()]) if (c.kind === 'port' && c.box === b.id) dissolvePort(this.doc, c);
+      this.doc.boxes.delete(b.id);
+    }
     this.selection = new Set();
-    this.changed(false);
+    this.changed(true);
   }
 
   private pruneWires(): void {
@@ -773,8 +955,38 @@ export class Editor {
 
   setName(name: string): void {
     this.editSelection('name', (it) => {
-      if (!('kind' in it) || it.kind === 'marker') it.name = name;
+      if (!('kind' in it) || !isGate(it.kind)) it.name = name;
     });
+  }
+
+  /** Renames one component (used by the inputs and outputs lists). */
+  renameComponent(id: string, name: string): void {
+    const c = this.doc.components.get(id);
+    if (!c || c.name === name) return;
+    this.checkpoint('name:' + id);
+    c.name = name;
+    this.changed(false);
+  }
+
+  /** Rotates the selected gates, switches, buttons and bulbs a quarter turn about their centres. */
+  rotateSelection(dir: 1 | -1 = 1): void {
+    this.editSelection('rotate', (it) => {
+      if ('kind' in it && canRotate(it.kind)) reorient(it, (((it.rot + dir) % 4) + 4) % 4 as Rotation, it.flip);
+    });
+  }
+
+  /** Mirrors the selected parts so they face the other way. */
+  flipSelection(): void {
+    this.editSelection('flip', (it) => {
+      if ('kind' in it && canRotate(it.kind)) reorient(it, it.rot, !it.flip);
+    });
+  }
+
+  /** The single selected switch, button or bulb, which shows resize handles. */
+  resizeTarget(): Component | null {
+    if (this.selection.size !== 1) return null;
+    const c = this.doc.components.get([...this.selection][0]);
+    return c && isIO(c.kind) ? c : null;
   }
 
   toggleSwitch(id: string): void {
@@ -805,19 +1017,23 @@ export class Editor {
     const map = new Map<string, string>();
     const newId = (id: string, prefix: string) => (keepIds && !idTaken(this.doc, id) ? id : uid(this.doc, prefix));
     for (const id of ids) {
-      const c = src.components.get(id);
-      if (c) {
-        const copy: Component = { ...c, id: newId(c.id, `${c.kind}_`), x: c.x + dx, y: c.y + dy };
-        this.doc.components.set(copy.id, copy);
-        map.set(id, copy.id);
-        continue;
-      }
       const b = src.boxes.get(id);
-      if (b) {
-        const copy: Box = { ...b, id: newId(b.id, 'box_'), x: b.x + dx, y: b.y + dy };
-        this.doc.boxes.set(copy.id, copy);
-        map.set(id, copy.id);
+      if (!b) continue;
+      const copy: Box = { ...b, id: newId(b.id, 'box_'), x: b.x + dx, y: b.y + dy };
+      this.doc.boxes.set(copy.id, copy);
+      map.set(id, copy.id);
+    }
+    for (const id of ids) {
+      const c = src.components.get(id);
+      if (!c) continue;
+      let box: string | null = null;
+      if (c.kind === 'port') {
+        box = c.box ? (map.get(c.box) ?? null) : null;
+        if (!box) continue;
       }
+      const copy: Component = { ...c, id: newId(c.id, `${c.kind}_`), x: c.x + dx, y: c.y + dy, box };
+      this.doc.components.set(copy.id, copy);
+      map.set(id, copy.id);
     }
     for (const w of src.wires.values()) {
       const from = map.get(w.from);
@@ -862,14 +1078,14 @@ export class Editor {
     const spot = this.freeSpot(rect, new Set());
     this.checkpoint();
     const map = this.cloneItems(src, ids, snap(spot.x - bounds.x), snap(spot.y - bounds.y), true);
+    const boxes = [...src.boxes.values()];
     const top = [...ids].filter((id) => {
       const c = src.components.get(id);
-      const boxes = [...src.boxes.values()];
-      if (c) return !boxes.some((b) => componentInBox(c, b));
+      if (c) return c.kind !== 'port' && !boxes.some((b) => componentInBox(src, c, b));
       const b = src.boxes.get(id)!;
-      return !boxes.some((o) => o !== b && rectInside(b, o));
+      return !boxes.some((o) => boxInBox(b, o));
     });
-    this.selection = new Set(top.map((id) => map.get(id)!));
+    this.selection = new Set(top.map((id) => map.get(id)).filter((id): id is string => !!id));
     this.changed(true);
     if (!rectsOverlap(spot, this.viewRect)) this.animateTo({ x: spot.x + spot.w / 2, y: spot.y + spot.h / 2 });
     return map.size;
@@ -884,7 +1100,7 @@ export class Editor {
   }
 
   /** Opens a project file, replacing the current document or merging into it. */
-  loadText(text: string, mode: 'replace' | 'merge'): boolean {
+  loadText(text: string, mode: 'replace' | 'merge', undoable = true): boolean {
     let parsed;
     try {
       parsed = parseCircuit(text);
@@ -893,7 +1109,7 @@ export class Editor {
       return false;
     }
     if (mode === 'replace') {
-      this.checkpoint();
+      if (undoable) this.checkpoint();
       this.doc = parsed.doc;
       this.selection = new Set();
       this.changed(true);
@@ -980,8 +1196,8 @@ export class Editor {
     const m = this.menu;
     if (!m) return;
     this.menu = null;
-    if (item.kind === 'box') {
-      this.placeAt('box', m.world);
+    if (item.kind === 'box' || item.kind === 'not') {
+      this.placeAt(item.kind, m.world);
       return;
     }
     this.checkpoint();
@@ -1012,9 +1228,23 @@ export class Editor {
     return out;
   }
 
+  /**
+   * Whether a component is hidden under a closed box. Switches, buttons and bulbs stay on top
+   * of closed boxes; ports are hidden only when a box around their own box is closed.
+   */
   private hiddenIn(c: Component, closed: Box[]): boolean {
-    for (const b of closed) if (componentInBox(c, b)) return true;
+    if (c.kind === 'port') {
+      const own = c.box ? this.doc.boxes.get(c.box) : undefined;
+      return !!own && closed.some((b) => boxInBox(own, b));
+    }
+    if (floatsAboveBoxes(c)) return false;
+    for (const b of closed) if (componentInBox(this.doc, c, b)) return true;
     return false;
+  }
+
+  /** A box is hidden when any box around it is closed. */
+  private boxHidden(b: Box, closed: Box[]): boolean {
+    return closed.some((o) => boxInBox(b, o));
   }
 
   hitPin(w: Point, want: 'in' | 'out' | null, radius?: number): PinRef | null {
@@ -1028,21 +1258,15 @@ export class Editor {
       if (!pointInRect(w, componentBounds(c), r)) continue;
       if (closed.length && this.hiddenIn(c, closed)) continue;
       const g = geomOf(c);
-      if (want !== 'in' && g.output) {
-        const d = Math.hypot(w.x - c.x - g.output.x, w.y - c.y - g.output.y);
+      const pins: number[] = [];
+      if (want !== 'in' && g.output) pins.push(-1);
+      if (want !== 'out') for (let i = 0; i < g.inputs.length; i++) pins.push(i);
+      for (const pin of pins) {
+        const p = pinPos(c, pin)!;
+        const d = Math.hypot(w.x - p.x, w.y - p.y);
         if (d < bestD) {
           bestD = d;
-          best = { comp: c.id, pin: -1 };
-        }
-      }
-      if (want !== 'out') {
-        for (let i = 0; i < g.inputs.length; i++) {
-          const p = g.inputs[i];
-          const d = Math.hypot(w.x - c.x - p.x, w.y - c.y - p.y);
-          if (d < bestD) {
-            bestD = d;
-            best = { comp: c.id, pin: i };
-          }
+          best = { comp: c.id, pin };
         }
       }
     }
@@ -1054,7 +1278,9 @@ export class Editor {
     const closed = this.closedBoxes();
     let hit: Component | null = null;
     for (const c of this.doc.components.values()) {
-      if (pointInRect(w, bodyRect(c), pad) && !(closed.length && this.hiddenIn(c, closed))) hit = c;
+      if (!pointInRect(w, bodyRect(c), pad) || (closed.length && this.hiddenIn(c, closed))) continue;
+      // Parts drawn on top win over parts under them.
+      if (!hit || floatsAboveBoxes(c) || !floatsAboveBoxes(hit)) hit = c;
     }
     return hit;
   }
@@ -1062,6 +1288,39 @@ export class Editor {
   private hitClosedBox(w: Point): Box | null {
     for (const b of boxesOuterFirst(this.doc)) {
       if ((this.boxT.get(b.id) ?? 1) < 0.5 && pointInRect(w, b)) return b;
+    }
+    return null;
+  }
+
+  /** The edge or corner of a visible box under the pointer; inner boxes win. */
+  private hitBoxEdge(w: Point): BoxEdges | null {
+    const tol = 6 / this.cam.zoom;
+    const closed = this.closedBoxes();
+    const boxes = boxesOuterFirst(this.doc);
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i];
+      if (!pointInRect(w, b, tol) || this.boxHidden(b, closed)) continue;
+      const e: BoxEdges = {
+        box: b.id,
+        l: Math.abs(w.x - b.x) < tol,
+        r: Math.abs(w.x - b.x - b.w) < tol,
+        t: Math.abs(w.y - b.y) < tol,
+        b: Math.abs(w.y - b.y - b.h) < tol,
+      };
+      if (e.l && e.r) e.r = false;
+      if (e.t && e.b) e.b = false;
+      if (e.l || e.r || e.t || e.b) return e;
+    }
+    return null;
+  }
+
+  /** The innermost open box whose background is under the pointer. */
+  private hitBoxBackground(w: Point): Box | null {
+    const closed = this.closedBoxes();
+    const boxes = boxesOuterFirst(this.doc);
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i];
+      if (pointInRect(w, b) && !this.boxHidden(b, closed)) return b;
     }
     return null;
   }
@@ -1076,18 +1335,12 @@ export class Editor {
     return { x, y, size, rect: { x: x - textW - 4 / z, y: b.y + 2 / z, w: textW + 8 / z, h: size + 8 / z } };
   }
 
-  private hitBoxFrame(w: Point): Box | null {
-    const tol = 6 / this.cam.zoom;
+  private hitBoxLabel(w: Point): Box | null {
+    const closed = this.closedBoxes();
     const boxes = boxesOuterFirst(this.doc);
     for (let i = boxes.length - 1; i >= 0; i--) {
       const b = boxes[i];
-      if (!pointInRect(w, b, tol)) continue;
-      const nearEdge =
-        Math.abs(w.x - b.x) < tol ||
-        Math.abs(w.x - b.x - b.w) < tol ||
-        Math.abs(w.y - b.y) < tol ||
-        Math.abs(w.y - b.y - b.h) < tol;
-      if (nearEdge || (b.name && pointInRect(w, this.boxLabel(b).rect))) return b;
+      if (b.name && !this.boxHidden(b, closed) && pointInRect(w, this.boxLabel(b).rect)) return b;
     }
     return null;
   }
@@ -1099,12 +1352,10 @@ export class Editor {
       const a = this.doc.components.get(wire.from);
       const b = this.doc.components.get(wire.to);
       if (!a || !b) continue;
-      const pa = outputPos(a);
-      const pb = inputPos(b, wire.input);
-      if (!pa || !pb) continue;
-      const curve = wireCurve(pa, pb);
+      const curve = wireBetween(a, b, wire.input);
+      if (!curve) continue;
       if (!pointInRect(w, curveBounds(curve), tol)) continue;
-      let prev = pa;
+      let prev = curve.a;
       for (let i = 1; i <= 24; i++) {
         const p = curvePoint(curve, i / 24);
         if (distToSegment(w, prev, p) < tol) {
@@ -1117,19 +1368,21 @@ export class Editor {
     return hit;
   }
 
-  private hitHandle(s: Point): { box: string; handle: number } | null {
-    for (const b of this.selectedBoxes()) {
-      const p0 = this.toScreen(b);
-      const p1 = this.toScreen({ x: b.x + b.w, y: b.y + b.h });
-      const corners = [
-        { x: p0.x, y: p0.y },
-        { x: p1.x, y: p0.y },
-        { x: p1.x, y: p1.y },
-        { x: p0.x, y: p1.y },
-      ];
-      for (let i = 0; i < 4; i++) {
-        if (Math.abs(s.x - corners[i].x) <= 8 && Math.abs(s.y - corners[i].y) <= 8) return { box: b.id, handle: i };
-      }
+  /** A resize handle of the selected switch, button or bulb: 0-3 = corners clockwise from top-left. */
+  private hitSizeHandle(s: Point): number | null {
+    const c = this.resizeTarget();
+    if (!c) return null;
+    const r = bodyRect(c);
+    const p0 = this.toScreen(r);
+    const p1 = this.toScreen({ x: r.x + r.w, y: r.y + r.h });
+    const corners = [
+      { x: p0.x, y: p0.y },
+      { x: p1.x, y: p0.y },
+      { x: p1.x, y: p1.y },
+      { x: p0.x, y: p1.y },
+    ];
+    for (let i = 0; i < 4; i++) {
+      if (Math.abs(s.x - corners[i].x) <= 7 && Math.abs(s.y - corners[i].y) <= 7) return i;
     }
     return null;
   }
@@ -1150,8 +1403,8 @@ export class Editor {
     let best: PinRef | null = null;
     let bestScore = Infinity;
     for (let i = 0; i < g.inputs.length; i++) {
-      const dy = Math.abs(c.y + g.inputs[i].y - w.y);
-      const score = dy + (this.wireInto(c.id, i) ? 1000 : 0);
+      const p = pinPos(c, i)!;
+      const score = Math.hypot(p.x - w.x, p.y - w.y) + (this.wireInto(c.id, i) ? 1000 : 0);
       if (score < bestScore) {
         bestScore = score;
         best = { comp: c.id, pin: i };
@@ -1162,7 +1415,14 @@ export class Editor {
 
   // ---------------------------------------------------------------- pointer input
 
-  private preventDefault = (e: Event) => e.preventDefault();
+  /**
+   * The canvas has its own right-click menu, which opens on pointer-up; by the time the
+   * browser's contextmenu event fires the pointer may be over that menu, so block it everywhere
+   * except in text fields.
+   */
+  private onContextMenu = (e: Event) => {
+    if (!isTyping(e.target)) e.preventDefault();
+  };
 
   private onPointerDown = (e: PointerEvent): void => {
     const s = this.screenPoint(e);
@@ -1204,23 +1464,12 @@ export class Editor {
       this.animateTo(arrow.target, Math.max(this.cam.zoom, 0.6));
       return;
     }
-    const handle = this.hitHandle(s);
-    if (handle) {
-      const b = this.doc.boxes.get(handle.box)!;
-      this.drag = {
-        kind: 'resize',
-        box: b.id,
-        handle: handle.handle,
-        orig: { x: b.x, y: b.y, w: b.w, h: b.h },
-        start: w,
-        sx: s.x,
-        sy: s.y,
-        moved: false,
-      };
+    const corner = this.hitSizeHandle(s);
+    const sized = this.resizeTarget();
+    if (corner !== null && sized) {
+      this.drag = { kind: 'size', comp: sized.id, corner, orig: bodyRect(sized), start: w, sx: s.x, sy: s.y, moved: false };
       return;
     }
-    const closed = this.hitClosedBox(w);
-    if (closed) return this.startMove(closed.id, w, s, e.shiftKey, null);
     const pin = this.hitPin(w, null);
     if (pin) {
       this.drag = { kind: 'wire', from: pin, cur: w, target: null, sx: s.x, sy: s.y, moved: false, picked: null };
@@ -1228,8 +1477,12 @@ export class Editor {
     }
     const comp = this.hitComponent(w);
     if (comp) return this.startMove(comp.id, w, s, e.shiftKey, comp);
-    const frame = this.hitBoxFrame(w);
-    if (frame) return this.startMove(frame.id, w, s, e.shiftKey, null);
+    const edges = this.hitBoxEdge(w);
+    if (edges) return this.startResize(edges, w, s);
+    const closed = this.hitClosedBox(w);
+    if (closed) return this.startMove(closed.id, w, s, e.shiftKey, null);
+    const label = this.hitBoxLabel(w);
+    if (label) return this.startMove(label.id, w, s, e.shiftKey, null);
     const wire = this.hitWire(w);
     if (wire) {
       if (e.shiftKey) {
@@ -1240,9 +1493,40 @@ export class Editor {
       } else this.setSelection([wire.id]);
       return;
     }
+    const bg = this.hitBoxBackground(w);
+    if (bg && this.selection.has(bg.id)) return this.startMove(bg.id, w, s, e.shiftKey, null);
     if (!e.shiftKey && this.selection.size) this.setSelection([]);
-    this.drag = { kind: 'marquee', start: w, cur: w, base: new Set(this.selection) };
+    this.drag = {
+      kind: 'marquee',
+      start: w,
+      cur: w,
+      base: new Set(this.selection),
+      sx: s.x,
+      sy: s.y,
+      moved: false,
+      click: bg?.id ?? null,
+      shift: e.shiftKey,
+    };
   };
+
+  private startResize(edges: BoxEdges, w: Point, s: Point): void {
+    const b = this.doc.boxes.get(edges.box)!;
+    const tree = buildBoxTree(this.doc);
+    const outer: { id: string; orig: Rect }[] = [];
+    for (let p = tree.parent.get(b.id) ?? null; p !== null && outer.length < 1000; p = tree.parent.get(p) ?? null) {
+      const o = this.doc.boxes.get(p)!;
+      outer.push({ id: p, orig: { x: o.x, y: o.y, w: o.w, h: o.h } });
+    }
+    const moving = new Set([b.id, ...outer.map((o) => o.id)]);
+    const ports: { id: string; box: string; side: Side; at: Point; inward: boolean }[] = [];
+    for (const c of this.doc.components.values()) {
+      if (c.kind !== 'port' || !c.box || !moving.has(c.box)) continue;
+      const pb = this.doc.boxes.get(c.box)!;
+      ports.push({ id: c.id, box: c.box, side: portSide(c, pb), at: componentCenter(c), inward: portInward(c, pb) });
+    }
+    const orig = { x: b.x, y: b.y, w: b.w, h: b.h };
+    this.drag = { kind: 'resize', edges, orig, start: w, sx: s.x, sy: s.y, moved: false, outer, ports };
+  }
 
   private startMove(id: string, w: Point, s: Point, shift: boolean, comp: Component | null): void {
     const wasSelected = this.selection.has(id);
@@ -1250,6 +1534,14 @@ export class Editor {
       if (shift) this.selection.add(id);
       else this.selection = new Set([id]);
       this.emit();
+    }
+    if (comp?.kind === 'port' && comp.box) {
+      const box = this.doc.boxes.get(comp.box);
+      if (box) {
+        this.drag = { kind: 'port', comp: comp.id, inward: portInward(comp, box), sx: s.x, sy: s.y, moved: false };
+        this.needsRender = true;
+        return;
+      }
     }
     let press: string | null = null;
     if (comp?.kind === 'button') {
@@ -1341,6 +1633,8 @@ export class Editor {
         break;
       }
       case 'marquee': {
+        if (!d.moved && !far(d.sx, d.sy)) return;
+        d.moved = true;
         d.cur = w;
         const r = {
           x: Math.min(d.start.x, w.x),
@@ -1380,25 +1674,79 @@ export class Editor {
           d.moved = true;
           this.pushUndo(this.snapshot());
         }
-        const b = this.doc.boxes.get(d.box);
+        const b = this.doc.boxes.get(d.edges.box);
         if (!b) return;
         const o = d.orig;
+        const e = d.edges;
         const dx = w.x - d.start.x;
         const dy = w.y - d.start.y;
-        const left = d.handle === 0 || d.handle === 3;
-        const top = d.handle === 0 || d.handle === 1;
         let x0 = o.x;
         let y0 = o.y;
         let x1 = o.x + o.w;
         let y1 = o.y + o.h;
-        if (left) x0 = Math.min(snap(o.x + dx), x1 - 60);
-        else x1 = Math.max(snap(x1 + dx), x0 + 60);
-        if (top) y0 = Math.min(snap(o.y + dy), y1 - 40);
-        else y1 = Math.max(snap(y1 + dy), y0 + 40);
+        if (e.l) x0 = Math.min(snap(o.x + dx), x1 - 60);
+        if (e.r) x1 = Math.max(snap(x1 + dx), x0 + 60);
+        if (e.t) y0 = Math.min(snap(o.y + dy), y1 - 40);
+        if (e.b) y1 = Math.max(snap(y1 + dy), y0 + 40);
         b.x = x0;
         b.y = y0;
         b.w = x1 - x0;
         b.h = y1 - y0;
+        let inner: Rect = b;
+        for (const o of d.outer) {
+          const ob = this.doc.boxes.get(o.id);
+          if (!ob) break;
+          const r = o.orig;
+          ob.x = Math.min(r.x, inner.x - BOX_GAP);
+          ob.y = Math.min(r.y, inner.y - BOX_GAP);
+          ob.w = Math.max(r.x + r.w, inner.x + inner.w + BOX_GAP) - ob.x;
+          ob.h = Math.max(r.y + r.h, inner.y + inner.h + BOX_GAP) - ob.y;
+          inner = ob;
+        }
+        for (const p of d.ports) {
+          const port = this.doc.components.get(p.id);
+          const pb = this.doc.boxes.get(p.box);
+          if (port && pb) placePort(this.doc, port, pb, onSide(pb, p.side, p.at), p.inward);
+        }
+        this.needsRender = true;
+        break;
+      }
+      case 'size': {
+        if (!d.moved) {
+          if (!far(d.sx, d.sy)) return;
+          d.moved = true;
+          this.pushUndo(this.snapshot());
+        }
+        const c = this.doc.components.get(d.comp);
+        if (!c) return;
+        const o = d.orig;
+        const left = d.corner === 0 || d.corner === 3;
+        const top = d.corner === 0 || d.corner === 1;
+        const lim = (v: number) => clamp(v, IO_MIN, IO_MAX);
+        const ww = lim(snap(o.w + (left ? -1 : 1) * (w.x - d.start.x)));
+        const hh = lim(snap(o.h + (top ? -1 : 1) * (w.y - d.start.y)));
+        c.x = left ? o.x + o.w - ww : o.x;
+        c.y = top ? o.y + o.h - hh : o.y;
+        if (c.rot % 2) {
+          c.w = hh;
+          c.h = ww;
+        } else {
+          c.w = ww;
+          c.h = hh;
+        }
+        this.needsRender = true;
+        break;
+      }
+      case 'port': {
+        if (!d.moved) {
+          if (!far(d.sx, d.sy)) return;
+          d.moved = true;
+          this.pushUndo(this.snapshot());
+        }
+        const port = this.doc.components.get(d.comp);
+        const box = port?.box ? this.doc.boxes.get(port.box) : undefined;
+        if (!port || !box) return;
+        placePort(this.doc, port, box, w, d.inward);
         this.needsRender = true;
         break;
       }
@@ -1442,6 +1790,12 @@ export class Editor {
         }
         break;
       case 'marquee':
+        if (!d.moved && d.click && !cancelled) {
+          const next = new Set(d.base);
+          if (d.shift && next.has(d.click)) next.delete(d.click);
+          else next.add(d.click);
+          this.selection = next;
+        }
         this.emit();
         break;
       case 'wire': {
@@ -1460,7 +1814,10 @@ export class Editor {
         break;
       }
       case 'resize':
+      case 'size':
+      case 'port':
         if (d.moved) this.changed(false);
+        else this.emit();
         break;
     }
     this.needsRender = true;
@@ -1475,16 +1832,25 @@ export class Editor {
       this.needsRender = true;
     }
     let cursor = this.tool === 'pan' || this.spaceHeld ? 'grab' : 'default';
+    let edge: BoxEdges | null = null;
+    const corner = this.hitSizeHandle(s);
+    const selecting = this.tool === 'select' && !this.spaceHeld;
     if (this.placing) cursor = 'copy';
     else if (this.hitArrow(s)) cursor = 'pointer';
-    else if (this.hitHandle(s)) {
-      const h = this.hitHandle(s)!.handle;
-      cursor = h === 0 || h === 2 ? 'nwse-resize' : 'nesw-resize';
-    } else if (pin) cursor = 'crosshair';
-    else if (this.tool === 'select' && !this.spaceHeld) {
-      const c = this.hitClosedBox(w) ? null : this.hitComponent(w);
+    else if (corner !== null) cursor = corner === 0 || corner === 2 ? 'nwse-resize' : 'nesw-resize';
+    else if (pin) cursor = 'crosshair';
+    else if (selecting) {
+      const c = this.hitComponent(w);
       if (c) cursor = c.kind === 'switch' || c.kind === 'button' ? 'pointer' : 'move';
-      else if (this.hitClosedBox(w) || this.hitBoxFrame(w)) cursor = 'move';
+      else if ((edge = this.hitBoxEdge(w))) {
+        const e = edge;
+        cursor = (e.l || e.r) && (e.t || e.b) ? ((e.l && e.t) || (e.r && e.b) ? 'nwse-resize' : 'nesw-resize') : e.l || e.r ? 'ew-resize' : 'ns-resize';
+      } else if (this.hitClosedBox(w) || this.hitBoxLabel(w)) cursor = 'move';
+    }
+    const prevEdge = this.hoverEdge;
+    if (edge?.box !== prevEdge?.box || edge?.l !== prevEdge?.l || edge?.t !== prevEdge?.t || edge?.r !== prevEdge?.r || edge?.b !== prevEdge?.b) {
+      this.hoverEdge = edge;
+      this.needsRender = true;
     }
     if (this.canvas) this.canvas.style.cursor = cursor;
   }
@@ -1495,11 +1861,33 @@ export class Editor {
     else this.updateHover(this.toWorld(this.mouse), this.mouse);
   }
 
+  /**
+   * Touchpads: pinch zooms (browsers report it as a ctrl+wheel) and two-finger scrolling pans.
+   * Mouse wheels zoom. A mouse wheel sends line/page units or whole-number vertical steps, while
+   * touchpads send fine pixel deltas; once a gesture looks like a touchpad it keeps panning.
+   */
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const dx = e.deltaX * unit;
     const dy = e.deltaY * unit;
-    this.zoomAt(this.screenPoint(e), Math.exp(-dy * (e.ctrlKey ? 0.01 : 0.0015)));
+    const s = this.screenPoint(e);
+    if (e.ctrlKey) {
+      this.zoomAt(s, Math.exp(-dy * 0.01));
+      return;
+    }
+    const now = performance.now();
+    const wheelLike = e.deltaMode !== 0 || (dx === 0 && Number.isInteger(dy) && Math.abs(dy) >= 50);
+    if (wheelLike && now - this.touchpadAt > 300) {
+      this.zoomAt(s, Math.exp(-dy * 0.0015));
+      return;
+    }
+    this.touchpadAt = now;
+    const z = this.cam.zoom;
+    this.cam = { x: this.cam.x + dx / z, y: this.cam.y + dy / z, zoom: z };
+    this.camAnim = null;
+    this.needsRender = true;
+    this.scheduleAutosave();
   };
 
   private onDragOver = (e: DragEvent): void => {
@@ -1593,7 +1981,9 @@ export class Editor {
         this.changeInputs(-1);
         break;
       default:
-        if (key === 'n') this.toggleNegate();
+        if (key === 'r') this.rotateSelection(e.shiftKey ? -1 : 1);
+        else if (key === 'm') this.flipSelection();
+        else if (key === 'n') this.toggleNegate();
         else if (key === 'f') this.fitView(true, this.selection.size ? expandWithContents(this.doc, this.selection) : undefined);
         else if (key === 'v') this.setTool('select');
         else if (key === 'h') this.setTool('pan');
@@ -1657,8 +2047,34 @@ export class Editor {
   isActive(c: Component): boolean {
     if (c.kind === 'switch') return c.on;
     if (c.kind === 'button') return this.sim.isPressed(c.id);
-    if (c.kind === 'bulb') return this.sim.value(c.id);
+    if (c.kind === 'bulb' || c.kind === 'port') return this.sim.value(c.id);
     return false;
+  }
+
+  /** Presses or releases a button from outside the canvas (the inputs list). */
+  setPressed(id: string, pressed: boolean): void {
+    this.sim.setPressed(id, pressed);
+    this.needsRender = true;
+  }
+
+  /** Switches, buttons and bulbs, sorted by label, for the side lists. */
+  ioList(which: 'inputs' | 'outputs'): Component[] {
+    const out: Component[] = [];
+    for (const c of this.doc.components.values()) {
+      if (which === 'inputs' ? c.kind === 'switch' || c.kind === 'button' : c.kind === 'bulb') out.push(c);
+    }
+    const key = (c: Component) => (which === 'inputs' ? c.name.length : 0);
+    return out.sort(
+      (a, b) => key(a) - key(b) || a.name.localeCompare(b.name, undefined, { numeric: true }) || (a.id < b.id ? -1 : 1),
+    );
+  }
+
+  /** Centres the view on a component and selects it. */
+  locate(id: string): void {
+    const c = this.doc.components.get(id);
+    if (!c) return;
+    this.setSelection([id]);
+    this.animateTo(componentCenter(c), Math.max(this.cam.zoom, 0.8));
   }
 
   pinPosition(ref: PinRef): Point | null {
