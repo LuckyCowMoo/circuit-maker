@@ -3,7 +3,7 @@ import type { Editor, ExportScope, PlaceKind } from '../editor/Editor';
 import { KIND_LABEL } from '../editor/Editor';
 import { INPUT_WARN, MAX_INPUTS } from '../model/geometry';
 import { THEMES, toHex6, wireColors } from '../model/themes';
-import { canRotate, isGate, type Component } from '../model/types';
+import { bundleInput, bundleOutput, canRotate, isGate, isRibbonPort, type Component } from '../model/types';
 import { pickFile } from '../io/download';
 import { FILE_EXTENSION } from '../io/format';
 import formatGuide from '../../docs/CIRCUIT_FORMAT.md?raw';
@@ -17,7 +17,7 @@ type Panel = 'save' | 'open' | 'theme' | 'help' | null;
 const PLACE_GROUPS: PlaceKind[][] = [
   ['and', 'or', 'xor', 'buffer', 'not'],
   ['switch', 'button', 'bulb'],
-  ['marker', 'box'],
+  ['port', 'ribbon-port', 'marker', 'box'],
 ];
 
 function Btn(props: {
@@ -92,7 +92,8 @@ function partTitle(c: Component): string {
     if (c.kind === 'buffer') return c.negate ? 'NOT' : 'Buffer';
     return (c.negate ? 'N' : '') + c.kind.toUpperCase();
   }
-  return c.kind === 'port' ? 'Connector' : KIND_LABEL[c.kind];
+  if (c.kind === 'port') return isRibbonPort(c) || c.inputs > 1 ? 'Ribbon port' : 'Wire port';
+  return KIND_LABEL[c.kind];
 }
 
 function PropsBar({ editor }: { editor: Editor }) {
@@ -103,23 +104,34 @@ function PropsBar({ editor }: { editor: Editor }) {
   const total = comps.length + boxes.length + wires.length;
   if (!total) return null;
   const gates = comps.filter((c) => isGate(c.kind));
+  const ports = comps.filter((c) => c.kind === 'port');
+  const widthParts = [...gates, ...ports];
   const colourable = comps.filter((c) => c.kind !== 'marker' && c.kind !== 'port');
   const rotatable = comps.filter((c) => canRotate(c.kind));
   const markers = comps.filter((c) => c.kind === 'marker');
   const bulbs = comps.filter((c) => c.kind === 'bulb');
   const named = total === 1 ? ((comps[0] && !isGate(comps[0].kind) ? comps[0] : null) ?? boxes[0] ?? null) : null;
   const tinted = [...markers, ...boxes];
-  const title = total === 1 ? (comps[0] ? partTitle(comps[0]) : boxes[0] ? 'Box' : 'Wire') : `${total} selected`;
+  const title =
+    total === 1
+      ? comps[0]
+        ? partTitle(comps[0])
+        : boxes[0]
+          ? 'Box'
+          : wires[0]?.cable
+            ? 'Ribbon cable'
+            : 'Wire'
+      : `${total} selected`;
 
   return (
     <div className="props" onPointerDown={(e) => e.stopPropagation()}>
       <span className="props-title">{title}</span>
-      {gates.length > 0 && (
+      {widthParts.length > 0 && (
         <div className="props-group">
-          <span className="props-label">Inputs</span>
+          <span className="props-label">{widthParts.every((p) => p.kind === 'port') ? 'Width' : 'Inputs'}</span>
           <Stepper
-            value={gates[0].inputs}
-            mixed={!gates.every((g) => g.inputs === gates[0].inputs)}
+            value={widthParts[0].inputs || 1}
+            mixed={!widthParts.every((p) => (p.inputs || 1) === (widthParts[0].inputs || 1))}
             onChange={(n) => editor.setInputs(n)}
           />
           {gates.some((g) => g.inputs > INPUT_WARN) && (
@@ -127,15 +139,55 @@ function PropsBar({ editor }: { editor: Editor }) {
               large
             </span>
           )}
-          <button
-            type="button"
-            className={`chip ${gates.every((g) => g.negate) ? 'active' : ''}`}
-            title="NOT bubble"
-            onClick={() => editor.setNegate(!gates.every((g) => g.negate))}
-          >
-            NOT
-          </button>
+          {gates.length > 0 && (
+            <button
+              type="button"
+              className={`chip ${gates.every((g) => g.negate) ? 'active' : ''}`}
+              title="NOT bubble"
+              onClick={() => editor.setNegate(!gates.every((g) => g.negate))}
+            >
+              NOT
+            </button>
+          )}
         </div>
+      )}
+      {ports.length > 0 && ports.every(isRibbonPort) && (
+        <>
+          <div className="props-group">
+            <span className="props-label">Input side</span>
+            <button
+              type="button"
+              className={`chip ${ports.every(bundleInput) ? 'active' : ''}`}
+              onClick={() => editor.setPortFace('input', true)}
+            >
+              Cable
+            </button>
+            <button
+              type="button"
+              className={`chip ${ports.every((p) => !bundleInput(p)) ? 'active' : ''}`}
+              onClick={() => editor.setPortFace('input', false)}
+            >
+              Wires
+            </button>
+          </div>
+          <div className="props-group">
+            <span className="props-label">Output side</span>
+            <button
+              type="button"
+              className={`chip ${ports.every(bundleOutput) ? 'active' : ''}`}
+              onClick={() => editor.setPortFace('output', true)}
+            >
+              Cable
+            </button>
+            <button
+              type="button"
+              className={`chip ${ports.every((p) => !bundleOutput(p)) ? 'active' : ''}`}
+              onClick={() => editor.setPortFace('output', false)}
+            >
+              Wires
+            </button>
+          </div>
+        </>
       )}
       {rotatable.length > 0 && (
         <div className="props-group">

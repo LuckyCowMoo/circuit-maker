@@ -1,8 +1,10 @@
-import { boxesOuterFirst, boxInBox, componentInBox, makeComponent } from '../model/doc';
+﻿import { boxesOuterFirst, boxInBox, componentInBox, makeComponent } from '../model/doc';
 import {
   attachPos,
   bodyRect,
   componentBounds,
+  cableStripe,
+  CABLE_PITCH,
   curveBounds,
   inflate,
   pinDir,
@@ -19,16 +21,17 @@ import {
   type Xf,
 } from '../model/geometry';
 import { floatsAboveBoxes, partInfo, partLabel } from '../model/parts';
-import { componentOps, textRect, type DrawInfo, type DrawOp, type TextOp } from '../model/shapes';
+import { placePort } from '../model/ports';
+import { componentOps, textRect, type DrawOp, type TextOp } from '../model/shapes';
 import { contrastText, wireColors, type Theme, type WireColors } from '../model/themes';
 import type { Box, Component, Point, Rect } from '../model/types';
+import { laneCount } from '../model/types';
 import { FONT_STACK } from '../io/export';
 import type { Arrow, Camera, Editor } from './Editor';
 
 /** Screen space kept clear at the bottom for the floating toolbar. */
 export const TOOLBAR_SPACE = 110;
 const FAR_ZOOM = 0.3;
-const IDENTITY: Xf = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 
 const pathCache = new Map<string, Path2D>();
 function path2d(d: string): Path2D {
@@ -77,7 +80,7 @@ export function boxOpenness(b: Box, cam: Camera, vw: number, vh: number): number
   const dx = Math.max(sx - cx, 0, cx - (sx + sw));
   const dy = Math.max(sy - cy, 0, cy - (sy + sh));
   const dist = Math.hypot(dx, dy) / (Math.min(vw, vh) / 2);
-  const centre = 1 - smoothstep(0.3, 0.6, dist);
+  const centre = 1 - smoothstep(0.82, 1.02, dist);
   const zoomed = smoothstep(0.18, 0.28, z);
   return smoothstep(0.3, 0.7, size * centre * zoomed);
 }
@@ -169,114 +172,6 @@ class OpBatcher {
   }
 }
 
-interface SpriteCell {
-  sx: number;
-  sy: number;
-  w: number;
-  h: number;
-  /** Device-pixel position of the component origin inside the cell. */
-  ox: number;
-  oy: number;
-}
-
-const ATLAS_SIZE = 2048;
-const SPRITE_MARGIN = 12;
-const MAX_SPRITE = 256;
-
-/**
- * Pre-rendered component images at the current scale. Filling thousands of vector shapes
- * is expensive on the GPU, while stamping images from one atlas is batched cheaply, so
- * zoomed far out components are drawn from here. While the zoom is changing the atlas is
- * rendered at quarter-octave steps and drawn slightly downscaled; once it settles it is
- * rebuilt at the exact scale so sprites are crisp.
- */
-class SpriteAtlas {
-  private canvas: HTMLCanvasElement | null = null;
-  private ctx: CanvasRenderingContext2D | null = null;
-  private cells = new Map<string, SpriteCell>();
-  private scale = 0;
-  private lastScale = 0;
-  private ratio = 1;
-  private theme: Theme | null = null;
-  private x = 0;
-  private y = 0;
-  private rowH = 0;
-
-  /** Returns true if another frame is needed to sharpen the sprites. */
-  begin(theme: Theme, scale: number): boolean {
-    const moving = scale !== this.lastScale;
-    this.lastScale = scale;
-    let target = this.scale;
-    if (theme !== this.theme) target = 0;
-    if (!moving) target = scale;
-    else if (!(target >= scale && target < scale * 1.19)) target = 2 ** (Math.ceil(Math.log2(scale) * 4) / 4);
-    if (target !== this.scale || theme !== this.theme) {
-      this.theme = theme;
-      this.scale = target;
-      this.reset();
-    }
-    this.ratio = scale / this.scale;
-    return this.ratio !== 1;
-  }
-
-  private reset(): void {
-    this.cells.clear();
-    this.x = this.y = this.rowH = 0;
-    this.ctx?.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE);
-  }
-
-  get(c: Component, bounds: Rect, theme: Theme, info: DrawInfo): SpriteCell | null {
-    const key =
-      `${c.kind}|${c.inputs}|${c.negate ? 1 : 0}|${c.stroke}|${c.fill}|${c.color}|${c.w}|${c.h}|${c.rot}|${c.flip ? 1 : 0}|` +
-      `${info.mask}|${info.netOn}|${info.accent}|${info.active ? 1 : 0}`;
-    const hit = this.cells.get(key);
-    if (hit) return hit;
-    const s = this.scale;
-    const rx = bounds.x - c.x - SPRITE_MARGIN;
-    const ry = bounds.y - c.y - SPRITE_MARGIN;
-    const w = Math.ceil((bounds.w + 2 * SPRITE_MARGIN) * s) + 2;
-    const h = Math.ceil((bounds.h + 2 * SPRITE_MARGIN) * s) + 2;
-    if (w > MAX_SPRITE || h > MAX_SPRITE) return null;
-    if (!this.ctx) {
-      this.canvas = document.createElement('canvas');
-      this.canvas.width = this.canvas.height = ATLAS_SIZE;
-      this.ctx = this.canvas.getContext('2d');
-      if (!this.ctx) return null;
-    }
-    if (this.x + w > ATLAS_SIZE) {
-      this.x = 0;
-      this.y += this.rowH;
-      this.rowH = 0;
-    }
-    if (this.y + h > ATLAS_SIZE) {
-      this.reset();
-    }
-    const cell: SpriteCell = { sx: this.x, sy: this.y, w, h, ox: 1 - rx * s, oy: 1 - ry * s };
-    const ctx = this.ctx;
-    const m = xformOf(c);
-    ctx.setTransform(s * m.a, s * m.b, s * m.c, s * m.d, cell.sx + cell.ox + s * (m.e - c.x), cell.sy + cell.oy + s * (m.f - c.y));
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    drawOps(ctx, componentOps(c, theme, info), IDENTITY, 1 / s);
-    this.x += w;
-    this.rowH = Math.max(this.rowH, h);
-    this.cells.set(key, cell);
-    return cell;
-  }
-
-  /** Draws a cell with the component origin at device position (x, y). */
-  draw(ctx: CanvasRenderingContext2D, cell: SpriteCell, x: number, y: number): void {
-    if (!this.canvas) return;
-    const r = this.ratio;
-    if (r === 1) {
-      ctx.drawImage(this.canvas, cell.sx, cell.sy, cell.w, cell.h, Math.round(x - cell.ox), Math.round(y - cell.oy), cell.w, cell.h);
-    } else {
-      ctx.drawImage(this.canvas, cell.sx, cell.sy, cell.w, cell.h, x - cell.ox * r, y - cell.oy * r, cell.w * r, cell.h * r);
-    }
-  }
-}
-
-const sprites = new SpriteAtlas();
 
 function addCurve(p: Path2D, c: WireCurve): void {
   p.moveTo(c.a.x, c.a.y);
@@ -534,8 +429,10 @@ export function renderScene(ed: Editor): void {
   const boxes = boxesOuterFirst(doc);
   ed.boxT.clear();
   const visible: Box[] = [];
+  const hovered = ed.hoverBox ? doc.boxes.get(ed.hoverBox) : undefined;
   for (const b of boxes) {
-    ed.boxT.set(b.id, boxOpenness(b, cam, W, H));
+    const open = hovered && (b.id === hovered.id || boxInBox(hovered, b));
+    ed.boxT.set(b.id, open ? 1 : boxOpenness(b, cam, W, H));
     if (rectsOverlap(b, view)) visible.push(b);
   }
   for (const b of visible) {
@@ -558,14 +455,16 @@ export function renderScene(ed: Editor): void {
   const onPaths = new Map<string, { cols: WireColors; path: Path2D }>();
   const selectedCurves: WireCurve[] = [];
   for (const w of doc.wires.values()) {
+    if (w.cable) continue;
     const a = doc.components.get(w.from);
     const b = doc.components.get(w.to);
     if (!a || !b) continue;
-    const curve = wireBetween(a, b, w.input);
+    const curve = wireBetween(a, b, w.input, w.lane ?? 0);
     if (!curve) continue;
     if (!rectsOverlap(inflate(curveBounds(curve), 8), view)) continue;
     if (covered.length && covered.some((bx) => pointInRect(curve.a, bx) && pointInRect(curve.b, bx))) continue;
-    const cols = colorsFor(pc.roots.get(w.from) ?? w.from, theme);
+    const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
+    const cols = colorsFor(pc.roots.get(srcKey) ?? w.from, theme);
     if (ed.selection.has(w.id)) selectedCurves.push(curve);
     if (sim.value(w.from)) {
       let entry = onPaths.get(cols.on);
@@ -602,20 +501,56 @@ export function renderScene(ed: Editor): void {
     ctx.stroke(path);
   }
 
-  // Components. Zoomed far out, most are stamped from a sprite atlas. Switches, buttons,
-  // bulbs and ports are drawn later, above the box covers, so they stay visible.
+  // Ribbon cables: one stripe per lane, packed with no gap, no glow. Stripe 0 matches lane 0.
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = CABLE_PITCH + 0.8;
+  for (const w of doc.wires.values()) {
+    if (!w.cable) continue;
+    const a = doc.components.get(w.from);
+    const b = doc.components.get(w.to);
+    if (!a || !b) continue;
+    const curve = wireBetween(a, b, 0, 0);
+    if (!curve) continue;
+    const n = Math.min(laneCount(a), laneCount(b));
+    if (!rectsOverlap(inflate(curveBounds(curve), n * CABLE_PITCH), view)) continue;
+    const da = pinDir(a, -1);
+    const db = pinDir(b, 0);
+    for (let i = 0; i < n; i++) {
+      const key = i ? `${w.from}#${i}` : w.from;
+      const cols = colorsFor(pc.roots.get(key) ?? w.from, theme);
+      const stripe = cableStripe(curve, i, n, da, db);
+      ctx.beginPath();
+      ctx.moveTo(stripe[0].x, stripe[0].y);
+      for (let k = 1; k < stripe.length; k++) ctx.lineTo(stripe[k].x, stripe[k].y);
+      ctx.strokeStyle = sim.value(w.from, i) ? cols.on : cols.off;
+      ctx.stroke();
+    }
+    if (ed.selection.has(w.id)) {
+      ctx.strokeStyle = theme.selection;
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = n * CABLE_PITCH + 4;
+      ctx.beginPath();
+      ctx.moveTo(curve.a.x, curve.a.y);
+      ctx.bezierCurveTo(curve.c1.x, curve.c1.y, curve.c2.x, curve.c2.y, curve.b.x, curve.b.y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = CABLE_PITCH + 0.8;
+    }
+  }
+  ctx.lineCap = 'round';
+
+  // Components, batched into a few canvas calls. Switches, buttons, bulbs and ports are
+  // drawn later, above the box covers, so they stay visible.
   const batch = new OpBatcher();
-  const scale = z * dpr;
-  if (far && sprites.begin(theme, scale)) ed.requestRender();
   const drawParts = (list: Iterable<Component>) => {
-    if (far) ctx.setTransform(1, 0, 0, 1, 0, 0);
     for (const c of list) {
       const info = partInfo(pc, c, theme, ed.isActive(c));
-      const cell = far && c.kind !== 'marker' ? sprites.get(c, componentBounds(c), theme, info) : null;
-      if (cell) sprites.draw(ctx, cell, (c.x - cam.x) * scale, (c.y - cam.y) * scale);
-      else batch.add(componentOps(c, theme, info), xformOf(c));
+      info.lanes?.forEach((lane, i) => {
+        lane.on = ed.sim.value(c.id, i);
+      });
+      batch.add(componentOps(c, theme, info), xformOf(c));
     }
-    if (far) worldTransform();
     batch.flush(ctx, dp);
   };
   const lower: Component[] = [];
@@ -757,10 +692,28 @@ export function renderScene(ed: Editor): void {
       ctx.lineWidth = STROKE_W;
       ctx.stroke();
     } else {
-      const ghost = makeComponent(ed.placing, 0, 0, 'ghost');
-      const size = rotatedSize(ghost);
-      ghost.x = snap(ed.ghost.x - size.w / 2);
-      ghost.y = snap(ed.ghost.y - size.h / 2);
+      const kind = ed.placing === 'ribbon-port' ? 'port' : ed.placing;
+      const ghost = makeComponent(kind, 0, 0, 'ghost');
+      if (ed.placing === 'ribbon-port') {
+        ghost.inputs = 4;
+        ghost.plug = ed.ghostSnap?.inward === false ? 'out' : 'in';
+        ghost.inputBundle = ghost.plug === 'in';
+        ghost.outputBundle = ghost.plug === 'out';
+      }
+      if ((ed.placing === 'port' || ed.placing === 'ribbon-port') && ed.ghostSnap) {
+        const box = doc.boxes.get(ed.ghostSnap.box);
+        if (box) {
+          placePort(doc, ghost, box, ed.ghost, ed.ghostSnap.inward);
+        } else {
+          const size = rotatedSize(ghost);
+          ghost.x = snap(ed.ghost.x - size.w / 2);
+          ghost.y = snap(ed.ghost.y - size.h / 2);
+        }
+      } else {
+        const size = rotatedSize(ghost);
+        ghost.x = snap(ed.ghost.x - size.w / 2);
+        ghost.y = snap(ed.ghost.y - size.h / 2);
+      }
       drawOps(ctx, componentOps(ghost, theme, { active: false }), xformOf(ghost), px);
     }
     ctx.globalAlpha = 1;

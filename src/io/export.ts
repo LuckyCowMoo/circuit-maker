@@ -1,9 +1,12 @@
 import { boxesOuterFirst, netRoots, pinMasks } from '../model/doc';
 import {
+  cableStripe,
+  CABLE_PITCH,
   componentBounds,
   curveBounds,
   curveSvgPath,
   inflate,
+  pinDir,
   STROKE_W,
   unionRects,
   wireBetween,
@@ -13,6 +16,7 @@ import { partInfo, partLabel, type PartContext } from '../model/parts';
 import { componentOps, textRect, type DrawOp } from '../model/shapes';
 import { wireColors, type Theme } from '../model/themes';
 import type { Doc, Rect } from '../model/types';
+import { laneCount } from '../model/types';
 import type { Simulator } from '../sim/simulator';
 
 export const FONT_STACK = "Inter, 'Segoe UI', system-ui, -apple-system, sans-serif";
@@ -45,7 +49,7 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
   const wires = [...doc.wires.values()].filter((w) => compIds.has(w.from) && compIds.has(w.to));
   const curves = wires
     .map((w) => {
-      const curve = wireBetween(doc.components.get(w.from)!, doc.components.get(w.to)!, w.input);
+      const curve = wireBetween(doc.components.get(w.from)!, doc.components.get(w.to)!, w.input, w.lane ?? 0);
       return curve ? { w, curve } : null;
     })
     .filter((x) => x !== null);
@@ -80,6 +84,22 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
     );
   }
   for (const { w, curve } of curves) {
+    if (w.cable) {
+      const src = doc.components.get(w.from);
+      const dst = doc.components.get(w.to);
+      const n = src && dst ? Math.min(laneCount(src), laneCount(dst)) : 1;
+      const da = src ? pinDir(src, -1) : undefined;
+      const db = dst ? pinDir(dst, 0) : undefined;
+      for (let i = 0; i < n; i++) {
+        const key = i ? `${w.from}#${i}` : w.from;
+        const cols = wireColors(pc.roots.get(key) ?? w.from, theme);
+        const stripe = cableStripe(curve, i, n, da, db);
+        const d = stripe.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(' ');
+        const on = sim.value(w.from, i);
+        out.push(`<path d="${d}" fill="none" stroke="${on ? cols.on : cols.off}" stroke-width="${CABLE_PITCH + 0.8}" stroke-linecap="butt"/>`);
+      }
+      continue;
+    }
     const cols = wireColors(pc.roots.get(w.from) ?? w.from, theme);
     const d = curveSvgPath(curve);
     if (sim.value(w.from)) {

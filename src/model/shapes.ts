@@ -1,7 +1,7 @@
-import { BUBBLE_D, geomFor, IO_SIZE, MARKER_FONT, PIN_LEN, PORT_SIZE, type Geom } from './geometry';
+import { BUBBLE_D, geomFor, geomOf, IO_SIZE, MARKER_FONT, PIN_LEN, PORT_SIZE, RIBBON_PITCH, type Geom } from './geometry';
 import type { Theme } from './themes';
 import type { Component, ComponentKind, Point, Rect } from './types';
-import { isGate } from './types';
+import { bundleInput, bundleOutput, isGate } from './types';
 
 /** A drawing instruction in component-local coordinates, rendered by both the canvas and SVG export. */
 export type DrawOp =
@@ -29,6 +29,8 @@ export interface DrawInfo {
   mask?: string;
   /** Ports: the colour of their box. */
   accent?: string;
+  /** Ribbon lanes, in order. */
+  lanes?: { on: boolean; color: string }[];
 }
 
 const f = (n: number) => Math.round(n * 100) / 100;
@@ -158,7 +160,7 @@ function filament(g: Geom): string {
 export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
   const stroke = c.stroke ?? theme.stroke;
   const fill = c.fill ?? theme.fill;
-  const g = geomFor(c.kind, c.inputs, c.negate, c.w, c.h);
+  const g = geomOf(c);
   const active = info.active;
   const onColor = info.netOn ?? theme.on;
   const ops: DrawOp[] = [];
@@ -169,6 +171,54 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
     ops.push({ t: 'path', d: p.body, fill, stroke });
     if (p.extra) ops.push({ t: 'path', d: p.extra, stroke });
     if (p.bubble) ops.push({ t: 'path', d: p.bubble, fill, stroke });
+    return ops;
+  }
+  if (c.kind === 'port' && c.inputs > 1) {
+    const mask = info.mask ?? '';
+    const lanesN = Math.max(1, c.inputs);
+    const cableIn = bundleInput(c);
+    const cableOut = bundleOutput(c);
+    ops.push({ t: 'path', d: roundRectD(0, 1, g.w, g.h - 2, 3), fill: info.accent ?? theme.box, stroke });
+    for (let i = 0; i < lanesN; i++) {
+      const lane = info.lanes?.[i];
+      const y = RIBBON_PITCH / 2 + i * RIBBON_PITCH;
+      ops.push({
+        t: 'path',
+        d: `M3 ${f(y)}H${g.w - 3}`,
+        stroke: lane?.on ? lane.color : stroke,
+        width: lane?.on ? 2.6 : 1.2,
+      });
+    }
+    const stub = (x0: number, x1: number, y: number, color?: string) => {
+      ops.push({ t: 'path', d: `M${f(x0)} ${f(y)}H${f(x1)}`, stroke: color ?? stroke, width: 2 });
+    };
+    // Each face independently exposes either one cable socket or one pin per lane.
+    if (cableIn) {
+      const cableWired = mask[lanesN] === '1';
+      const pin = g.inputs[0];
+      if (!cableWired) {
+        stub(pin.x, 0, pin.y);
+        ops.push({ t: 'path', d: roundRectD(pin.x - 3, pin.y - 5, 6, 10, 2), fill: stroke });
+      }
+    } else {
+      g.inputs.forEach((p, i) => {
+        if (mask[lanesN + i] === '1') return;
+        stub(p.x, 0, p.y, info.lanes?.[i]?.color);
+      });
+    }
+    if (cableOut) {
+      const cableWired = mask[0] === '1';
+      const pin = g.outputs![0];
+      if (!cableWired) {
+        stub(g.w, pin.x, pin.y);
+        ops.push({ t: 'path', d: roundRectD(pin.x - 3, pin.y - 5, 6, 10, 2), fill: stroke });
+      }
+    } else {
+      (g.outputs ?? []).forEach((p, i) => {
+        if (mask[i] === '1') return;
+        stub(g.w, p.x, p.y, info.lanes?.[i]?.color);
+      });
+    }
     return ops;
   }
   const s = Math.min(g.w, g.h) / IO_SIZE;
@@ -204,13 +254,15 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
     }
     case 'bulb': {
       const lit = c.color ?? theme.bulb;
+      // Unlit bulbs are hollow unless the user set a fill colour.
+      const bodyFill = active ? lit : c.fill ?? undefined;
       if (stubs) ops.push({ t: 'path', d: stubs, stroke });
       if (active) {
         const w = g.w + 14;
         const h = g.h + 14;
         ops.push({ t: 'path', d: roundRectD(-7, -7, w, h, Math.min(w, h) / 2), fill: lit, alpha: 0.3 });
       }
-      ops.push({ t: 'path', d: shapes(g).body, fill: active ? lit : fill, stroke });
+      ops.push({ t: 'path', d: shapes(g).body, fill: bodyFill, stroke });
       if (Math.min(g.w, g.h) >= 30) ops.push({ t: 'path', d: filament(g), stroke: active ? '#6b3f00' : stroke, width: 1.6 });
       return ops;
     }
@@ -269,7 +321,7 @@ export function portLabel(center: Point, out: Point, text: string, fill: string)
 }
 
 /** Small preview used by toolbar icons. */
-export function iconOps(kind: ComponentKind | 'box' | 'not', theme: Theme, negate = false): { ops: DrawOp[]; viewBox: string } {
+export function iconOps(kind: ComponentKind | 'box' | 'not' | 'ribbon-port', theme: Theme, negate = false): { ops: DrawOp[]; viewBox: string } {
   if (kind === 'box') {
     return {
       ops: [
@@ -281,6 +333,25 @@ export function iconOps(kind: ComponentKind | 'box' | 'not', theme: Theme, negat
   }
   if (kind === 'not') {
     return { ops: [{ t: 'path', d: circlePath(12, 12, 6), stroke: theme.stroke, fill: theme.fill }], viewBox: '-6 0 36 24' };
+  }
+  if (kind === 'ribbon-port') {
+    return {
+      ops: [
+        { t: 'path', d: roundRectD(8, 2, 14, 36, 3), fill: theme.box, stroke: theme.stroke },
+        { t: 'path', d: 'M2 20H8', stroke: theme.stroke, width: 3 },
+        { t: 'path', d: 'M22 8H30M22 16H30M22 24H30M22 32H30', stroke: theme.stroke },
+      ],
+      viewBox: '0 0 34 40',
+    };
+  }
+  if (kind === 'port') {
+    return {
+      ops: [
+        { t: 'path', d: roundRectD(8, 10, 14, 14, 3), fill: theme.box, stroke: theme.stroke },
+        { t: 'path', d: 'M2 17H8M22 17H28', stroke: theme.stroke },
+      ],
+      viewBox: '0 0 32 34',
+    };
   }
   const c: Component = {
     id: 'icon',

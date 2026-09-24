@@ -16,6 +16,7 @@ import {
 } from '../model/doc';
 import {
   bodyRect,
+  CABLE_PITCH,
   componentBounds,
   componentCenter,
   curveBounds,
@@ -39,17 +40,34 @@ import {
 import { floatsAboveBoxes, type PartContext } from '../model/parts';
 import {
   buildBoxTree,
+  cableConnectedPorts,
   dissolvePort,
   normalizePorts,
   onSide,
   placePort,
+  portHasSideWiring,
   portInward,
   portSide,
+  setPortWidth,
+  wallPoint,
   type Side,
 } from '../model/ports';
 import { getTheme, type Theme } from '../model/themes';
 import type { Box, Component, ComponentKind, Doc, Point, Rect, Rotation, Wire } from '../model/types';
-import { canRotate, hasOutput, inputCount, isGate, isIO } from '../model/types';
+import {
+  bundleDest,
+  bundleInput,
+  bundleOutput,
+  bundleSource,
+  CABLE_MIN,
+  canRotate,
+  hasOutput,
+  inputCount,
+  isGate,
+  isIO,
+  isRibbonPort,
+  laneCount,
+} from '../model/types';
 import { Simulator } from '../sim/simulator';
 import { docToText, FILE_EXTENSION, parseCircuit, serialize, type FileView } from '../io/format';
 import { buildSvg, svgToPng } from '../io/export';
@@ -59,7 +77,7 @@ import halfAdderExample from '../../examples/half-adder.cmk.json?raw';
 
 export type Tool = 'select' | 'pan';
 /** Things the toolbar can place. `not` is the NOT bubble, dropped onto a gate. */
-export type PlaceKind = Exclude<ComponentKind, 'port'> | 'box' | 'not';
+export type PlaceKind = ComponentKind | 'box' | 'not' | 'ribbon-port';
 export type ExportFormat = 'project' | 'svg' | 'png';
 export type ExportScope = 'all' | 'selection';
 
@@ -87,6 +105,8 @@ export interface MenuItem {
   label: string;
   kind: PlaceKind;
   negate?: boolean;
+  /** For ribbon ports from the cable drop menu. */
+  portMode?: 'free' | 'box';
 }
 
 export interface Arrow {
@@ -152,6 +172,7 @@ export type Drag =
 
 export const MIN_ZOOM = 0.12;
 export const MAX_ZOOM = 3;
+const BOX_COLORS = ['#6e56cf', '#0f9d8a', '#e5932a', '#3b82c4', '#e5484d', '#d4a017', '#0ea5e9', '#7c3aed'];
 const DRAG_PX = 4;
 const UNDO_LIMIT = 80;
 const AUTOSAVE_KEY = 'circuit-maker:autosave';
@@ -186,6 +207,8 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   marker: 'Marker',
   box: 'Box',
   not: 'NOT bubble',
+  port: 'Wire port',
+  'ribbon-port': 'Ribbon port',
 };
 
 const storage = {
@@ -245,9 +268,15 @@ export class Editor {
   placing: PlaceKind | null = null;
   /** World position of the placement preview. */
   ghost: Point | null = null;
+  /** While placing a port, the box edge the ghost is snapped to. */
+  ghostSnap: { box: string; inward: boolean } | null = null;
+  /** Wire to finish after placing a ribbon port from the cable drop menu. */
+  pendingConnect: PinRef | null = null;
   hoverPin: PinRef | null = null;
   /** Box edge under the pointer, which a drag would resize. */
   hoverEdge: BoxEdges | null = null;
+  /** Innermost box under the pointer. It stays open however far out or near the edge it is. */
+  hoverBox: string | null = null;
   toastMessage: string | null = null;
   toastAction: { label: string; run: () => void } | null = null;
   arrows: Arrow[] = [];
@@ -303,7 +332,7 @@ export class Editor {
     window.addEventListener('contextmenu', this.onContextMenu);
     canvas.addEventListener('dragover', this.onDragOver);
     canvas.addEventListener('drop', this.onDrop);
-    window.addEventListener('keydown', this.onKeyDown);
+    document.addEventListener('keydown', this.onKeyDown, true);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('copy', this.onCopy);
     window.addEventListener('cut', this.onCut);
@@ -326,7 +355,7 @@ export class Editor {
     window.removeEventListener('contextmenu', this.onContextMenu);
     canvas.removeEventListener('dragover', this.onDragOver);
     canvas.removeEventListener('drop', this.onDrop);
-    window.removeEventListener('keydown', this.onKeyDown);
+    document.removeEventListener('keydown', this.onKeyDown, true);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('copy', this.onCopy);
     window.removeEventListener('cut', this.onCut);
@@ -741,7 +770,7 @@ export class Editor {
   }
 
   private addBox(rect: Rect, name = 'Box'): Box {
-    const b: Box = { id: uid(this.doc, 'box_'), ...rect, name, color: null };
+    const b: Box = { id: uid(this.doc, 'box_'), ...rect, name, color: BOX_COLORS[Math.floor(Math.random() * BOX_COLORS.length)] };
     this.doc.boxes.set(b.id, b);
     return b;
   }
@@ -755,14 +784,14 @@ export class Editor {
     }
     this.placing = kind;
     this.ghost = null;
+    this.ghostSnap = null;
     this.emit();
     if (!e) return;
     const sx = e.clientX;
     const sy = e.clientY;
     const move = (ev: PointerEvent) => {
       if (this.placing !== kind) return;
-      this.ghost = this.toWorld(this.screenPoint(ev));
-      this.needsRender = true;
+      this.updateGhost(this.toWorld(this.screenPoint(ev)));
     };
     const up = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', move);
@@ -781,11 +810,31 @@ export class Editor {
   }
 
   cancelPlacing(): void {
-    if (!this.placing) return;
+    if (!this.placing && !this.pendingConnect) return;
     this.placing = null;
     this.ghost = null;
+    this.ghostSnap = null;
+    this.pendingConnect = null;
     this.needsRender = true;
     this.emit();
+  }
+
+  /** Updates the placement ghost, snapping ports to box walls when nearby. */
+  private updateGhost(w: Point): void {
+    if (this.placing === 'port' || this.placing === 'ribbon-port') {
+      const box = this.boxNear(w);
+      if (box) {
+        const wp = wallPoint(box, w);
+        const inward = wp.side === 0 || wp.side === 1;
+        this.ghost = { x: wp.x, y: wp.y };
+        this.ghostSnap = { box: box.id, inward };
+        this.needsRender = true;
+        return;
+      }
+    }
+    this.ghost = w;
+    this.ghostSnap = null;
+    this.needsRender = true;
   }
 
   placeAt(kind: PlaceKind, w: Point): void {
@@ -798,6 +847,61 @@ export class Editor {
       this.checkpoint();
       gate.negate = !gate.negate;
       this.selection = new Set([gate.id]);
+      this.changed(true);
+      return;
+    }
+    if (kind === 'port' || kind === 'ribbon-port') {
+      const box = this.boxNear(w);
+      if (!box) {
+        if (kind === 'port') {
+          this.checkpoint();
+          const c = this.addComponent('buffer', 0, 0);
+          const size = rotatedSize(c);
+          c.x = snap(w.x - size.w / 2);
+          c.y = snap(w.y - size.h / 2);
+          this.selection = new Set([c.id]);
+          this.finishPendingConnect(c.id);
+          this.changed(true);
+          return;
+        }
+        this.checkpoint();
+        const port = this.addComponent('port', 0, 0);
+        const lanes = this.pendingConnect
+          ? laneCount(this.doc.components.get(this.pendingConnect.comp)!)
+          : CABLE_MIN;
+        port.inputs = Math.max(2, lanes);
+        port.plug = this.pendingConnect && this.pendingConnect.pin >= 0 ? 'out' : 'in';
+        port.inputBundle = port.plug === 'in';
+        port.outputBundle = port.plug === 'out';
+        port.placed = true;
+        const size = rotatedSize(port);
+        port.x = snap(w.x - size.w / 2);
+        port.y = snap(w.y - size.h / 2);
+        this.selection = new Set([port.id]);
+        this.finishPendingConnect(port.id);
+        this.changed(true);
+        return;
+      }
+      this.checkpoint();
+      const port = this.addComponent('port', 0, 0);
+      port.box = box.id;
+      port.placed = true;
+      const side = wallPoint(box, w).side;
+      let inward = side === 0 || side === 1;
+      if (kind === 'ribbon-port') {
+        const lanes = this.pendingConnect
+          ? laneCount(this.doc.components.get(this.pendingConnect.comp)!)
+          : CABLE_MIN;
+        port.inputs = Math.max(2, lanes);
+        // Cable drop picks direction from the drag; toolbar placement uses the wall.
+        if (this.pendingConnect) inward = this.pendingConnect.pin < 0;
+        port.plug = inward ? 'in' : 'out';
+        port.inputBundle = inward;
+        port.outputBundle = !inward;
+      }
+      placePort(this.doc, port, box, w, inward);
+      this.selection = new Set([port.id]);
+      this.finishPendingConnect(port.id);
       this.changed(true);
       return;
     }
@@ -817,6 +921,46 @@ export class Editor {
       this.selection = new Set([c.id]);
     }
     this.changed(true);
+  }
+
+  /** Completes a cable drop that asked for a new ribbon port. */
+  private finishPendingConnect(compId: string): void {
+    const from = this.pendingConnect;
+    this.pendingConnect = null;
+    if (!from) return;
+    const c = this.doc.components.get(compId);
+    if (!c) return;
+    if (from.pin < 0) this.connect(from, { comp: compId, pin: 0 });
+    else this.connect({ comp: compId, pin: -1 }, from);
+  }
+
+  /** Innermost box whose edge is near `w`, or that contains `w`. */
+  private boxNear(w: Point): Box | null {
+    const tol = 24;
+    let best: Box | null = null;
+    let bestD = tol;
+    for (const b of boxesOuterFirst(this.doc).reverse()) {
+      if (pointInRect(w, b)) {
+        const d = Math.min(w.x - b.x, b.x + b.w - w.x, w.y - b.y, b.y + b.h - w.y);
+        if (d <= tol) return b;
+        if (!best) best = b;
+      }
+      const on =
+        (w.x >= b.x - tol && w.x <= b.x + b.w + tol && (Math.abs(w.y - b.y) <= tol || Math.abs(w.y - (b.y + b.h)) <= tol)) ||
+        (w.y >= b.y - tol && w.y <= b.y + b.h + tol && (Math.abs(w.x - b.x) <= tol || Math.abs(w.x - (b.x + b.w)) <= tol));
+      if (!on) continue;
+      const d = Math.min(
+        Math.abs(w.x - b.x),
+        Math.abs(w.x - (b.x + b.w)),
+        Math.abs(w.y - b.y),
+        Math.abs(w.y - (b.y + b.h)),
+      );
+      if (d < bestD) {
+        bestD = d;
+        best = b;
+      }
+    }
+    return best;
   }
 
   wrapSelectionInBox(): void {
@@ -840,10 +984,32 @@ export class Editor {
     const src = this.doc.components.get(out.comp);
     const dst = this.doc.components.get(inp.comp);
     if (!src || !dst || !hasOutput(src.kind) || inp.pin >= inputCount(dst)) return false;
+
+    // Ribbon cable: source plug → destination plug. Empty dest ports resize to match.
+    if (bundleSource(src) && bundleDest(dst) && out.pin === -1 && inp.pin === 0) {
+      if (src.inputs !== dst.inputs) {
+        const peers = cableConnectedPorts(this.doc, dst);
+        if (peers.some((p) => portHasSideWiring(this.doc, p))) {
+          this.toast('That ribbon port already has wires; change its width first.');
+          return false;
+        }
+        for (const p of peers) setPortWidth(this.doc, p, src.inputs);
+      }
+      for (const w of [...this.doc.wires.values()]) {
+        if (w.cable && w.to === dst.id) this.doc.wires.delete(w.id);
+        else if (!w.cable && w.to === dst.id && w.input === 0) this.doc.wires.delete(w.id);
+      }
+      const cable: Wire = { id: uid(this.doc, 'w_'), from: src.id, to: dst.id, input: 0, cable: true };
+      this.doc.wires.set(cable.id, cable);
+      return true;
+    }
+
     for (const w of this.doc.wires.values()) {
       if (w.to === dst.id && w.input === inp.pin) this.doc.wires.delete(w.id);
     }
-    const w: Wire = { id: uid(this.doc, 'w_'), from: src.id, to: dst.id, input: inp.pin };
+    const lane = -out.pin - 1;
+    const w: Wire = { id: uid(this.doc, 'w_'), from: src.id, to: dst.id, input: inp.pin, separatePort: true };
+    if (lane > 0) w.lane = lane;
     this.doc.wires.set(w.id, w);
     return true;
   }
@@ -856,6 +1022,13 @@ export class Editor {
   deleteSelection(): void {
     if (!this.selection.size) return;
     this.checkpoint();
+    const wireOnly = [...this.selection].every((id) => this.doc.wires.has(id));
+    if (wireOnly) {
+      for (const id of this.selection) this.doc.wires.delete(id);
+      this.selection = new Set();
+      this.changed(true);
+      return;
+    }
     const ids = expandWithContents(this.doc, this.selection);
     for (const id of ids) {
       this.doc.components.delete(id);
@@ -899,25 +1072,60 @@ export class Editor {
 
   setInputs(n: number): void {
     const count = clamp(Math.round(n), 1, MAX_INPUTS);
+    const selected = this.selectedComponents();
+    const gates = selected.filter((c) => isGate(c.kind));
+    const ports = selected.filter((c) => c.kind === 'port');
+    if (!gates.length && !ports.length) return;
+    const peers = new Set<string>();
+    for (const p of ports) for (const c of cableConnectedPorts(this.doc, p)) peers.add(c.id);
+    this.checkpoint('inputs');
+    for (const g of gates) g.inputs = count;
+    for (const id of peers) {
+      const c = this.doc.components.get(id);
+      if (c?.kind === 'port') setPortWidth(this.doc, c, count);
+    }
+    for (const p of ports) if (!peers.has(p.id)) setPortWidth(this.doc, p, count);
+    this.pruneWires();
+    this.changed(true);
+  }
+
+  changeInputs(delta: number): void {
+    const parts = this.selectedComponents().filter((c) => isGate(c.kind) || c.kind === 'port');
+    if (!parts.length) return;
+    const port = parts.find((c) => c.kind === 'port');
+    if (port) {
+      this.setInputs(clamp(port.inputs + delta, 1, MAX_INPUTS));
+      return;
+    }
     this.editSelection(
       'inputs',
       (it) => {
-        if ('kind' in it && isGate(it.kind)) it.inputs = count;
+        if (!('kind' in it)) return;
+        if (isGate(it.kind)) it.inputs = clamp(it.inputs + delta, 1, MAX_INPUTS);
       },
       true,
     );
   }
 
-  changeInputs(delta: number): void {
-    const gates = this.selectedComponents().filter((c) => isGate(c.kind));
-    if (!gates.length) return;
-    this.editSelection(
-      'inputs',
-      (it) => {
-        if ('kind' in it && isGate(it.kind)) it.inputs = clamp(it.inputs + delta, 1, MAX_INPUTS);
-      },
-      true,
+  /** Changes one ribbon-port face between one cable socket and individual lane pins. */
+  setPortFace(face: 'input' | 'output', cable: boolean): void {
+    const ports = this.selectedComponents().filter(isRibbonPort);
+    if (!ports.length) return;
+    const changing = ports.filter((p) => (face === 'input' ? bundleInput(p) : bundleOutput(p)) !== cable);
+    if (!changing.length) return;
+    const occupied = changing.some((p) =>
+      [...this.doc.wires.values()].some((w) => (face === 'input' ? w.to === p.id : w.from === p.id)),
     );
+    if (occupied) {
+      this.toast(`Disconnect the ${face} side before changing it.`);
+      return;
+    }
+    this.checkpoint('port-face');
+    for (const p of changing) {
+      if (face === 'input') p.inputBundle = cable;
+      else p.outputBundle = cable;
+    }
+    this.changed(true);
   }
 
   setNegate(v: boolean): void {
@@ -1028,8 +1236,10 @@ export class Editor {
       if (!c) continue;
       let box: string | null = null;
       if (c.kind === 'port') {
-        box = c.box ? (map.get(c.box) ?? null) : null;
-        if (!box) continue;
+        if (c.box) {
+          box = map.get(c.box) ?? null;
+          if (!box) continue;
+        } else if (!c.placed) continue;
       }
       const copy: Component = { ...c, id: newId(c.id, `${c.kind}_`), x: c.x + dx, y: c.y + dy, box };
       this.doc.components.set(copy.id, copy);
@@ -1040,6 +1250,8 @@ export class Editor {
       const to = map.get(w.to);
       if (from && to) {
         const copy: Wire = { id: uid(this.doc, 'w_'), from, to, input: w.input };
+        if (w.lane) copy.lane = w.lane;
+        if (w.cable) copy.cable = true;
         this.doc.wires.set(copy.id, copy);
       }
     }
@@ -1188,15 +1400,40 @@ export class Editor {
         { label: 'Box', kind: 'box' },
       ];
     }
+    const src = this.doc.components.get(from.comp);
+    if (src && this.isCablePlug(from, src)) {
+      return [
+        { label: 'Ribbon port (free)', kind: 'ribbon-port', portMode: 'free' },
+        { label: 'Ribbon port (on box)', kind: 'ribbon-port', portMode: 'box' },
+      ];
+    }
     if (from.pin < 0) return [...GATE_MENU, { label: 'Light bulb', kind: 'bulb' }];
     return [...GATE_MENU, { label: 'Switch', kind: 'switch' }, { label: 'Button', kind: 'button' }];
+  }
+
+  /** True when `from` is the ribbon plug of a multi-lane port (cable drag). */
+  private isCablePlug(from: PinRef, c: Component): boolean {
+    if (!isRibbonPort(c)) return false;
+    return (bundleOutput(c) && from.pin === -1) || (bundleInput(c) && from.pin === 0);
+  }
+
+  menuTitle(): string {
+    const from = this.menu?.from;
+    if (!from) return 'Add a part';
+    const src = this.doc.components.get(from.comp);
+    if (src && this.isCablePlug(from, src)) return 'Extend ribbon cable';
+    return 'Connect a new part';
   }
 
   placeFromMenu(item: MenuItem): void {
     const m = this.menu;
     if (!m) return;
     this.menu = null;
-    if (item.kind === 'box' || item.kind === 'not') {
+    if (item.kind === 'ribbon-port' && item.portMode) {
+      this.placeRibbonFromCableMenu(item.portMode, m);
+      return;
+    }
+    if (item.kind === 'box' || item.kind === 'not' || item.kind === 'port' || item.kind === 'ribbon-port') {
       this.placeAt(item.kind, m.world);
       return;
     }
@@ -1217,6 +1454,47 @@ export class Editor {
       c.y = snap(m.world.y - g.h / 2);
     }
     this.selection = new Set([c.id]);
+    this.changed(true);
+  }
+
+  /** Places a ribbon port after dropping a cable in empty space. */
+  private placeRibbonFromCableMenu(mode: 'free' | 'box', m: PlaceMenu): void {
+    const from = m.from;
+    if (!from) return;
+    const source = this.doc.components.get(from.comp);
+    if (!source) return;
+    this.checkpoint();
+    let box: Box | null = null;
+    let at = m.world;
+    if (mode === 'box') {
+      box = this.addBox({
+        x: snap(m.world.x - DEFAULT_BOX.w / 2),
+        y: snap(m.world.y - DEFAULT_BOX.h / 2),
+        ...DEFAULT_BOX,
+      });
+      at = {
+        x: componentCenter(source).x <= m.world.x ? box.x : box.x + box.w,
+        y: m.world.y,
+      };
+    }
+    const port = this.addComponent('port', 0, 0);
+    port.inputs = Math.max(2, laneCount(source));
+    port.placed = true;
+    // Forward cable drag enters the new port; a backward drag leaves it.
+    port.inputBundle = from.pin < 0;
+    port.outputBundle = from.pin >= 0;
+    port.plug = from.pin < 0 ? 'in' : 'out';
+    if (box) {
+      port.box = box.id;
+      placePort(this.doc, port, box, at, from.pin < 0);
+    } else {
+      const size = rotatedSize(port);
+      port.x = snap(at.x - size.w / 2);
+      port.y = snap(at.y - size.h / 2);
+    }
+    this.pendingConnect = from;
+    this.finishPendingConnect(port.id);
+    this.selection = new Set([port.id]);
     this.changed(true);
   }
 
@@ -1259,7 +1537,10 @@ export class Editor {
       if (closed.length && this.hiddenIn(c, closed)) continue;
       const g = geomOf(c);
       const pins: number[] = [];
-      if (want !== 'in' && g.output) pins.push(-1);
+      if (want !== 'in') {
+        const outs = g.outputs ?? (g.output ? [g.output] : []);
+        for (let i = 0; i < outs.length; i++) pins.push(-1 - i);
+      }
       if (want !== 'out') for (let i = 0; i < g.inputs.length; i++) pins.push(i);
       for (const pin of pins) {
         const p = pinPos(c, pin)!;
@@ -1314,6 +1595,13 @@ export class Editor {
     return null;
   }
 
+  /** The innermost box under the pointer, open or closed. */
+  private boxUnder(w: Point): string | null {
+    const boxes = boxesOuterFirst(this.doc);
+    for (let i = boxes.length - 1; i >= 0; i--) if (pointInRect(w, boxes[i])) return boxes[i].id;
+    return null;
+  }
+
   /** The innermost open box whose background is under the pointer. */
   private hitBoxBackground(w: Point): Box | null {
     const closed = this.closedBoxes();
@@ -1346,21 +1634,25 @@ export class Editor {
   }
 
   private hitWire(w: Point): Wire | null {
-    const tol = Math.max(4, 6 / this.cam.zoom);
+    const baseTol = Math.max(4, 6 / this.cam.zoom);
     let hit: Wire | null = null;
+    let best = Infinity;
     for (const wire of this.doc.wires.values()) {
       const a = this.doc.components.get(wire.from);
       const b = this.doc.components.get(wire.to);
       if (!a || !b) continue;
-      const curve = wireBetween(a, b, wire.input);
+      const curve = wireBetween(a, b, wire.input, wire.lane ?? 0);
       if (!curve) continue;
-      if (!pointInRect(w, curveBounds(curve), tol)) continue;
+      const width = wire.cable ? Math.max(laneCount(a), laneCount(b)) * CABLE_PITCH : 0;
+      const tol = Math.max(baseTol, width / 2 + 2);
+      if (!pointInRect(w, inflate(curveBounds(curve), tol + width / 2))) continue;
       let prev = curve.a;
       for (let i = 1; i <= 24; i++) {
         const p = curvePoint(curve, i / 24);
-        if (distToSegment(w, prev, p) < tol) {
+        const d = distToSegment(w, prev, p);
+        if (d < tol && d < best) {
+          best = d;
           hit = wire;
-          break;
         }
         prev = p;
       }
@@ -1433,7 +1725,10 @@ export class Editor {
     } catch {
       // The pointer may already be gone (e.g. a very short touch).
     }
-    this.canvas?.focus();
+    // Explicitly leave toolbar/list text fields so Delete/Backspace applies to the new canvas
+    // selection immediately rather than editing a previously focused label.
+    if (document.activeElement !== this.canvas) (document.activeElement as HTMLElement | null)?.blur?.();
+    this.canvas?.focus({ preventScroll: true });
     this.closeMenu();
     if (this.pointers.size === 2) {
       this.startPinch();
@@ -1577,8 +1872,7 @@ export class Editor {
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, s);
     const w = this.toWorld(s);
     if (this.placing) {
-      this.ghost = w;
-      this.needsRender = true;
+      this.updateGhost(w);
     }
     const d = this.drag;
     if (!d) {
@@ -1846,6 +2140,11 @@ export class Editor {
         const e = edge;
         cursor = (e.l || e.r) && (e.t || e.b) ? ((e.l && e.t) || (e.r && e.b) ? 'nwse-resize' : 'nesw-resize') : e.l || e.r ? 'ew-resize' : 'ns-resize';
       } else if (this.hitClosedBox(w) || this.hitBoxLabel(w)) cursor = 'move';
+    }
+    const under = this.boxUnder(w);
+    if (under !== this.hoverBox) {
+      this.hoverBox = under;
+      this.needsRender = true;
     }
     const prevEdge = this.hoverEdge;
     if (edge?.box !== prevEdge?.box || edge?.l !== prevEdge?.l || edge?.t !== prevEdge?.t || edge?.r !== prevEdge?.r || edge?.b !== prevEdge?.b) {

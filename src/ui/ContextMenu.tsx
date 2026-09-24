@@ -13,13 +13,17 @@ export function ContextMenu({ editor }: { editor: Editor }) {
   const top = Math.max(8, Math.min(m.sy, window.innerHeight - height - 8));
   return (
     <div className="ctx" style={{ left, top }} onPointerDown={(e) => e.stopPropagation()} role="menu">
-      <div className="ctx-title">{m.from ? 'Connect a new part' : 'Add a part'}</div>
+      <div className="ctx-title">{editor.menuTitle()}</div>
       {items.map((it) => (
         <button
           type="button"
           role="menuitem"
           key={it.label}
-          onClick={() => editor.placeFromMenu(it)}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            editor.placeFromMenu(it);
+          }}
         >
           <ComponentIcon kind={it.kind} theme={editor.theme} negate={it.negate} />
           <span>{it.label}</span>

@@ -1,5 +1,5 @@
-import type { ComponentKind, Doc } from '../model/types';
-import { hasOutput, inputCount } from '../model/types';
+import type { Component, ComponentKind, Doc } from '../model/types';
+import { bundleDest, bundleSource, hasOutput, inputCount, laneCount } from '../model/types';
 
 const K_AND = 0;
 const K_OR = 1;
@@ -60,31 +60,61 @@ export class Simulator {
     const prevIndex = this.index;
     const prevOut = this.out;
     const comps = [...doc.components.values()];
-    const n = comps.length;
+    const nodes: { id: string; lane: number; comp: Component }[] = [];
+    for (const c of comps) {
+      const lanes = laneCount(c);
+      for (let lane = 0; lane < lanes; lane++) nodes.push({ id: c.id, lane, comp: c });
+    }
+    const n = nodes.length;
     const index = new Map<string, number>();
-    comps.forEach((c, i) => index.set(c.id, i));
+    nodes.forEach((node, i) => {
+      index.set(node.lane ? `${node.id}#${node.lane}` : node.id, i);
+    });
 
     const kind = new Uint8Array(n);
     const neg = new Uint8Array(n);
     const src = new Uint8Array(n);
     const inStart = new Int32Array(n + 1);
     for (let i = 0; i < n; i++) {
-      const c = comps[i];
-      kind[i] = KIND_CODE[c.kind];
-      neg[i] = c.negate && kind[i] <= K_BUF ? 1 : 0;
+      const c = nodes[i].comp;
+      const multi = laneCount(c) > 1;
+      kind[i] = multi ? K_BUF : KIND_CODE[c.kind];
+      neg[i] = !multi && c.negate && kind[i] <= K_BUF ? 1 : 0;
       if (c.kind === 'switch') src[i] = c.on ? 1 : 0;
       else if (c.kind === 'button') src[i] = this.pressed.has(c.id) ? 1 : 0;
-      inStart[i + 1] = inStart[i] + inputCount(c);
+      inStart[i + 1] = inStart[i] + (multi ? 1 : inputCount(c));
     }
 
     const inSrc = new Int32Array(inStart[n]).fill(-1);
     const foCount = new Int32Array(n + 1);
+    const join = (s: number, t: number) => {
+      const slot = inStart[t];
+      const multi = laneCount(nodes[t].comp) > 1;
+      const at = multi ? slot : slot + 0;
+      if (at < inStart[t] || at >= inStart[t + 1]) return;
+      if (inSrc[at] >= 0) foCount[inSrc[at] + 1]--;
+      inSrc[at] = s;
+      foCount[s + 1]++;
+    };
     for (const w of doc.wires.values()) {
-      const t = index.get(w.to);
-      const s = index.get(w.from);
-      if (t === undefined || s === undefined) continue;
-      if (!hasOutput(comps[s].kind) || w.input < 0 || w.input >= inStart[t + 1] - inStart[t]) continue;
-      const slot = inStart[t] + w.input;
+      const srcNode = nodes.find((node) => node.id === w.from);
+      const dest = doc.components.get(w.to);
+      if (!dest || !srcNode || !hasOutput(srcNode.comp.kind)) continue;
+      if (w.cable && bundleSource(srcNode.comp) && bundleDest(dest)) {
+        const n = Math.min(laneCount(srcNode.comp), laneCount(dest));
+        for (let i = 0; i < n; i++) {
+          const s = index.get(i ? `${w.from}#${i}` : w.from);
+          const t = index.get(i ? `${w.to}#${i}` : w.to);
+          if (s !== undefined && t !== undefined) join(s, t);
+        }
+        continue;
+      }
+      const s = index.get(w.lane ? `${w.from}#${w.lane}` : w.from);
+      if (s === undefined) continue;
+      const t = laneCount(dest) > 1 ? index.get(w.input ? `${w.to}#${w.input}` : w.to) : index.get(w.to);
+      if (t === undefined) continue;
+      const slot = laneCount(dest) > 1 ? inStart[t] : inStart[t] + w.input;
+      if (slot < inStart[t] || slot >= inStart[t + 1]) continue;
       if (inSrc[slot] >= 0) foCount[inSrc[slot] + 1]--;
       inSrc[slot] = s;
       foCount[s + 1]++;
@@ -103,12 +133,13 @@ export class Simulator {
     const out = new Uint8Array(n);
     let fresh = 0;
     for (let i = 0; i < n; i++) {
-      const prev = prevIndex.get(comps[i].id);
+      const node = nodes[i];
+      const prev = prevIndex.get(node.lane ? `${node.id}#${node.lane}` : node.id);
       if (prev !== undefined && prev < prevOut.length) out[i] = prevOut[prev];
       else fresh++;
     }
 
-    this.ids = comps.map((c) => c.id);
+    this.ids = nodes.map((node) => (node.lane ? `${node.id}#${node.lane}` : node.id));
     this.index = index;
     this.kind = kind;
     this.neg = neg;
@@ -255,9 +286,9 @@ export class Simulator {
     return this.pressed.has(id);
   }
 
-  /** Output value of a component (for bulbs, whether it is lit). */
-  value(id: string): boolean {
-    const i = this.index.get(id);
+  /** Output of one lane. Parts with a single output use lane 0. */
+  value(id: string, lane = 0): boolean {
+    const i = this.index.get(lane ? `${id}#${lane}` : id);
     return i !== undefined && this.out[i] === 1;
   }
 }

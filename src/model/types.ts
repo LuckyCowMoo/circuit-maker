@@ -50,6 +50,15 @@ export interface Component {
   h: number;
   /** Ports only: the box whose wall this port sits in. */
   box: string | null;
+  /**
+   * Legacy ribbon layout. Kept for old project files; new code uses `inputBundle`/`outputBundle`.
+   */
+  plug?: 'in' | 'out';
+  /** Ribbon input/output face uses one cable socket instead of one pin per lane. */
+  inputBundle?: boolean;
+  outputBundle?: boolean;
+  /** Ports placed from the toolbar stay when unwired. */
+  placed?: boolean;
 }
 
 export interface Wire {
@@ -60,6 +69,15 @@ export interface Wire {
   to: string;
   /** Input pin index on `to`. */
   input: number;
+  /** Which output lane of `from` drives this wire. Omitted (0) for parts with one output. */
+  lane?: number;
+  /**
+   * A ribbon cable between two ribbon ports. Lane i of `from` drives lane i of `to`.
+   * Drawn as parallel stripes, not as a component.
+   */
+  cable?: boolean;
+  /** Editor-created branch should get a new wall port instead of reusing the driver's port. */
+  separatePort?: boolean;
 }
 
 export interface Box {
@@ -89,8 +107,32 @@ export const isInput = (k: ComponentKind): boolean => k === 'switch' || k === 'b
 /** Parts the user can rotate, flip and (for IO) resize. */
 export const canRotate = (k: ComponentKind): boolean => isGate(k) || isIO(k);
 
+/** Fewest lanes that auto-bundle into a ribbon cable. Narrower runs stay as ordinary wires. */
+export const CABLE_MIN = 4;
+
 export const hasOutput = (k: ComponentKind): boolean =>
   isGate(k) || k === 'switch' || k === 'button' || k === 'port';
 
-export const inputCount = (c: Component): number =>
-  isGate(c.kind) ? c.inputs : c.kind === 'bulb' || c.kind === 'port' ? 1 : 0;
+/** How many signals a ribbon port carries. */
+export const laneCount = (c: Component): number =>
+  c.kind === 'port' && c.inputs > 1 ? Math.max(1, c.inputs) : 1;
+
+/** A multi-lane port that can take a ribbon cable (or individual lane wires). */
+export const isRibbonPort = (c: Component): boolean => c.kind === 'port' && c.inputs > 1;
+
+/** Whether each face of a ribbon port is a cable socket. Legacy `plug` supplies the default. */
+export const bundleInput = (c: Component): boolean =>
+  isRibbonPort(c) && (c.inputBundle ?? c.plug === 'in');
+export const bundleOutput = (c: Component): boolean =>
+  isRibbonPort(c) && (c.outputBundle ?? c.plug === 'out');
+
+export const bundleSource = bundleOutput;
+export const bundleDest = bundleInput;
+
+export const inputCount = (c: Component): number => {
+  // Ribbon ports accept one wire per lane (input index = lane), whether the plug faces in or out.
+  if (c.kind === 'port' && c.inputs > 1) return Math.max(1, c.inputs);
+  if (isGate(c.kind)) return Math.max(1, c.inputs);
+  if (c.kind === 'bulb' || c.kind === 'port') return Math.max(1, c.inputs || 1);
+  return 0;
+};

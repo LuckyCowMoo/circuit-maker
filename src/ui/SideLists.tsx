@@ -71,10 +71,15 @@ export function SideList({
   const items = editor.ioList(which);
   const title = which === 'inputs' ? 'Inputs' : 'Outputs';
   return (
-    <div className={`io-wrap ${which}`}>
-      {open && (
+    <div className={`io-wrap ${which}${open ? ' open' : ''}`}>
+      {open ? (
         <div className="io-list" onPointerDown={(e) => e.stopPropagation()}>
-          <div className="panel-title">{title}</div>
+          <div className="io-list-head">
+            <div className="panel-title">{title}</div>
+            <button type="button" className="io-minimise" title={`Minimise ${title}`} onClick={onToggle}>
+              {Icons.chevron}
+            </button>
+          </div>
           {items.length ? (
             <ul>
               {items.map((c) => (
@@ -85,18 +90,13 @@ export function SideList({
             <p className="hint">{which === 'inputs' ? 'No switches or buttons yet.' : 'No light bulbs yet.'}</p>
           )}
         </div>
+      ) : (
+        <button type="button" className="io-toggle" title={title} aria-expanded={false} onClick={onToggle}>
+          {which === 'inputs' ? Icons.inputs : Icons.outputs}
+          <span>{items.length}</span>
+          <span className="io-chevron">{Icons.chevron}</span>
+        </button>
       )}
-      <button
-        type="button"
-        className={`io-toggle ${open ? 'active' : ''}`}
-        title={title}
-        aria-expanded={open}
-        onClick={onToggle}
-      >
-        {which === 'inputs' ? Icons.inputs : Icons.outputs}
-        <span>{items.length}</span>
-        <span className={`io-chevron ${open ? 'open' : ''}`}>{Icons.chevron}</span>
-      </button>
     </div>
   );
 }

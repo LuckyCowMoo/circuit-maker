@@ -72,6 +72,7 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `w`, `h` | switch, button, bulb     | Body size, 20 to 400 (default 40 x 40). Use long thin bulbs for display segments. |
 | `box`    | port                     | Id of the box whose wall the port sits in.                             |
 | `dir`    | port                     | `"in"` if the signal enters the box, `"out"` if it leaves.              |
+| `inputSide`, `outputSide` | ribbon port | `"cable"` for one ribbon socket or `"wires"` for one pin per lane. |
 
 ### Types
 
@@ -85,7 +86,7 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `button` | 0 in, 1 out               | Momentary input: on only while the user holds it down.                    |
 | `bulb`   | 1 in (input `0`), 0 out   | Output indicator; lights up when its input is on.                        |
 | `marker` | none                      | Non-functional navigation flag with a `name` and `color`.                 |
-| `port`   | 1 in (input `0`), 1 out   | Connector in a box wall that passes its input straight through. The app creates these itself (see section 5); you never need to write them. |
+| `port`   | 1 or N in, 1 or N out     | Wire/ribbon connector. Ribbon input and output faces can independently be a cable socket or an array of lane pins. |
 
 Inverted gates are written with `"not": true`. These shorthand types are also accepted
 and are converted automatically: `nand`, `nor`, `xnor`, `not` (buffer with a bubble),

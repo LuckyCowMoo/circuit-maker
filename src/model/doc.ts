@@ -1,6 +1,6 @@
 import { bodyRect, componentBounds, geomFor, inflate, IO_SIZE, pointInRect, rectInside, rectsOverlap } from './geometry';
 import type { Box, Component, ComponentKind, Doc, Rect } from './types';
-import { inputCount, isGate, isInput } from './types';
+import { bundleDest, bundleSource, inputCount, isGate, isInput, laneCount } from './types';
 
 export function emptyDoc(name = 'Untitled circuit'): Doc {
   return { name, components: new Map(), wires: new Map(), boxes: new Map() };
@@ -185,10 +185,12 @@ export function nextLabel(doc: Doc, kind: ComponentKind, taken: Set<string> = ne
 
 /** Which pins of each component are wired: character 0 is the output, then one per input. */
 export function pinMasks(doc: Doc): Map<string, string> {
-  const outs = new Set<string>();
+  const outLanes = new Map<string, Set<number>>();
   const ins = new Map<string, Set<number>>();
   for (const w of doc.wires.values()) {
-    outs.add(w.from);
+    let lanes = outLanes.get(w.from);
+    if (!lanes) outLanes.set(w.from, (lanes = new Set()));
+    lanes.add(w.lane ?? 0);
     let s = ins.get(w.to);
     if (!s) ins.set(w.to, (s = new Set()));
     s.add(w.input);
@@ -197,29 +199,47 @@ export function pinMasks(doc: Doc): Map<string, string> {
   for (const c of doc.components.values()) {
     const n = inputCount(c);
     const s = ins.get(c.id);
-    let m = outs.has(c.id) ? '1' : '0';
+    const lanes = laneCount(c);
+    let m = '';
+    for (let i = 0; i < lanes; i++) m += outLanes.get(c.id)?.has(i) ? '1' : '0';
     for (let i = 0; i < n; i++) m += s?.has(i) ? '1' : '0';
     masks.set(c.id, m);
   }
   return masks;
 }
 
-/** The component that really drives each component's output, looking back through ports. */
+const netKey = (id: string, lane = 0) => (lane ? `${id}#${lane}` : id);
+
+/** The component that really drives each output lane, looking back through ports and ribbons. */
 export function netRoots(doc: Doc): Map<string, string> {
-  const driver = new Map<string, string>();
+  const driver = new Map<string, { id: string; lane: number }>();
   for (const w of doc.wires.values()) {
     const t = doc.components.get(w.to);
-    if (t?.kind === 'port') driver.set(t.id, w.from);
+    const src = doc.components.get(w.from);
+    if (t && src && t.kind === 'port') {
+      if (w.cable && bundleSource(src) && bundleDest(t)) {
+        const n = Math.min(laneCount(src), laneCount(t));
+        for (let i = 0; i < n; i++) driver.set(netKey(t.id, i), { id: w.from, lane: i });
+      } else driver.set(netKey(t.id, w.input), { id: w.from, lane: w.lane ?? 0 });
+    }
   }
+  const follow = (id: string, lane: number): string => {
+    let cur = id;
+    let ln = lane;
+    for (let i = 0; i < 64; i++) {
+      const c = doc.components.get(cur);
+      if (!c || c.kind !== 'port') return cur;
+      const d = driver.get(netKey(cur, ln));
+      if (!d) return cur;
+      cur = d.id;
+      ln = d.lane;
+    }
+    return cur;
+  };
   const roots = new Map<string, string>();
   for (const c of doc.components.values()) {
-    let id = c.id;
-    for (let i = 0; i < 64 && doc.components.get(id)?.kind === 'port'; i++) {
-      const d = driver.get(id);
-      if (!d) break;
-      id = d;
-    }
-    roots.set(c.id, id);
+    const lanes = laneCount(c);
+    for (let i = 0; i < lanes; i++) roots.set(netKey(c.id, i), follow(c.id, i));
   }
   return roots;
 }

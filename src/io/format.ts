@@ -2,7 +2,7 @@ import { componentCenter, IO_MAX, IO_MIN, IO_SIZE, MAX_INPUTS, snap } from '../m
 import { emptyDoc, idTaken, makeComponent, uid } from '../model/doc';
 import { normalizePorts, placePort, portInward } from '../model/ports';
 import type { Box, Component, ComponentKind, Doc, Rotation, Wire } from '../model/types';
-import { canRotate, hasOutput, inputCount, isGate, isIO } from '../model/types';
+import { bundleInput, bundleOutput, canRotate, hasOutput, inputCount, isGate, isIO } from '../model/types';
 
 export const FORMAT_ID = 'circuit-maker';
 export const FORMAT_VERSION = 1;
@@ -35,12 +35,21 @@ export interface FileComponent {
   /** Ports: the box they sit in and which way the signal goes through its wall. */
   box?: string;
   dir?: 'in' | 'out';
+  /** Ribbon-port face type. */
+  inputSide?: 'cable' | 'wires';
+  outputSide?: 'cable' | 'wires';
+  /** Ports placed from the toolbar stay when unwired. */
+  placed?: boolean;
 }
 
 export interface FileWire {
   from: string;
   to: string;
   input: number;
+  /** Output lane of `from`, when it is a ribbon port. */
+  lane?: number;
+  /** Ribbon cable: every lane of `from` drives the same lane of `to`. */
+  cable?: boolean;
 }
 
 export interface FileBox {
@@ -72,13 +81,15 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
   for (const c of doc.components.values()) {
     if (ids && !ids.has(c.id)) continue;
     const portBox = c.kind === 'port' && c.box ? doc.boxes.get(c.box) : undefined;
-    if (c.kind === 'port' && (!portBox || (ids && !ids.has(portBox.id)))) continue;
+    if (c.kind === 'port' && !portBox && !c.placed) continue;
+    if (c.kind === 'port' && portBox && ids && !ids.has(portBox.id)) continue;
     included.add(c.id);
     const fc: FileComponent = { id: c.id, type: c.kind, x: r2(c.x), y: r2(c.y) };
     if (isGate(c.kind)) {
       fc.inputs = c.inputs;
       if (c.negate) fc.not = true;
     }
+    if (c.kind === 'port' && c.inputs > 1) fc.inputs = c.inputs;
     if (c.kind === 'switch' && c.on) fc.on = true;
     if (c.kind === 'marker' || (c.name && !isGate(c.kind))) fc.name = c.name;
     if (c.color && (c.kind === 'marker' || c.kind === 'bulb')) fc.color = c.color;
@@ -92,15 +103,30 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
       if (c.w !== IO_SIZE) fc.w = c.w;
       if (c.h !== IO_SIZE) fc.h = c.h;
     }
-    if (portBox) {
-      fc.box = portBox.id;
-      fc.dir = portInward(c, portBox) ? 'in' : 'out';
+    if (c.kind === 'port') {
+      if (portBox) {
+        fc.box = portBox.id;
+        fc.dir = portInward(c, portBox) ? 'in' : 'out';
+      } else if (c.plug) {
+        fc.dir = c.plug;
+      }
+      if (c.placed) fc.placed = true;
+      if (!portBox && c.rot) fc.rotate = c.rot * 90;
+      if (c.inputs > 1) {
+        fc.inputSide = bundleInput(c) ? 'cable' : 'wires';
+        fc.outputSide = bundleOutput(c) ? 'cable' : 'wires';
+      }
     }
     components.push(fc);
   }
   const wires: FileWire[] = [];
   for (const w of doc.wires.values()) {
-    if (included.has(w.from) && included.has(w.to)) wires.push({ from: w.from, to: w.to, input: w.input });
+    if (included.has(w.from) && included.has(w.to)) {
+      const fw: FileWire = { from: w.from, to: w.to, input: w.input };
+      if (w.lane) fw.lane = w.lane;
+      if (w.cable) fw.cable = true;
+      wires.push(fw);
+    }
   }
   const boxes: FileBox[] = [];
   for (const b of doc.boxes.values()) {
@@ -246,6 +272,7 @@ export function parseCircuit(text: string): ParseResult {
       c.inputs = Math.max(1, Math.min(MAX_INPUTS, Math.round(num(o.inputs, 2))));
       c.negate = Boolean(alias.not) !== Boolean(o.not);
     }
+    if (c.kind === 'port' && o.inputs != null) c.inputs = Math.max(1, Math.min(MAX_INPUTS, Math.round(num(o.inputs, 1))));
     if (c.kind === 'switch') c.on = o.on === true;
     if (c.kind === 'marker') c.name = str(o.name) ?? 'Marker';
     else if (!isGate(c.kind)) c.name = str(o.name) ?? '';
@@ -262,14 +289,33 @@ export function parseCircuit(text: string): ParseResult {
       c.flip = o.flip === true;
     }
     if (c.kind === 'port') {
-      const box = doc.boxes.get(str(o.box) ?? '');
-      if (!box) return warnings.push(`components[${i}]: port needs "box" naming one of the boxes; skipped.`);
-      c.box = box.id;
-      ports.push({ c, box, inward: o.dir !== 'out' });
+      const boxId = str(o.box);
+      const box = boxId ? doc.boxes.get(boxId) : undefined;
+      if (box) {
+        c.box = box.id;
+        if (o.placed) c.placed = true;
+        if (c.inputs > 1) c.plug = o.dir === 'out' ? 'out' : 'in';
+        if (c.inputs > 1) {
+          c.inputBundle = o.inputSide === 'cable' || (o.inputSide == null && c.plug === 'in');
+          c.outputBundle = o.outputSide === 'cable' || (o.outputSide == null && c.plug === 'out');
+        }
+        ports.push({ c, box, inward: o.dir !== 'out' });
+      } else if (o.placed || c.inputs > 1) {
+        c.placed = true;
+        c.box = null;
+        if (c.inputs > 1) c.plug = o.dir === 'out' ? 'out' : 'in';
+        if (c.inputs > 1) {
+          c.inputBundle = o.inputSide === 'cable' || (o.inputSide == null && c.plug === 'in');
+          c.outputBundle = o.outputSide === 'cable' || (o.outputSide == null && c.plug === 'out');
+        }
+        c.rot = ((((Math.round(num(o.rotate, 0) / 90) % 4) + 4) % 4) as Rotation);
+      } else {
+        return warnings.push(`components[${i}]: port needs "box" naming one of the boxes; skipped.`);
+      }
     }
     doc.components.set(id, c);
   });
-  for (const p of ports) placePort(doc, p.c, p.box, componentCenter(p.c), p.inward);
+  for (const p of ports) placePort(doc, p.c, p.box, componentCenter(p.c), p.inward, false);
 
   const splitRef = (ref: string): { id: string; pin: number | null } => {
     if (doc.components.has(ref)) return { id: ref, pin: null };
@@ -310,6 +356,9 @@ export function parseCircuit(text: string): ParseResult {
       doc.wires.delete(prev);
     }
     const w: Wire = { id: uid(doc, 'w'), from, to: dst.id, input };
+    const lane = Math.round(num(o.lane, 0));
+    if (lane > 0) w.lane = lane;
+    if (o.cable) w.cable = true;
     doc.wires.set(w.id, w);
     taken.set(key, w.id);
   });

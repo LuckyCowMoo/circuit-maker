@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { docToText, parseCircuit } from '../io/format';
 import { Simulator } from '../sim/simulator';
+import { emptyDoc, makeComponent } from './doc';
 import { componentCenter } from './geometry';
 import { buildBoxTree, normalizePorts, portInward } from './ports';
 import type { Doc } from './types';
@@ -85,5 +86,23 @@ describe('box ports', () => {
     const again = parseCircuit(text);
     expect(again.warnings).toEqual([]);
     expect(docToText(again.doc)).toBe(text);
+  });
+
+  it('gives an explicitly branched wire its own wall port', () => {
+    const doc = emptyDoc();
+    doc.boxes.set('B', { id: 'B', name: 'B', x: 0, y: 0, w: 200, h: 160, color: null });
+    const sw = makeComponent('switch', 40, 50, 's');
+    const a = makeComponent('bulb', 300, 20, 'a');
+    const b = makeComponent('bulb', 300, 100, 'b');
+    doc.components.set(sw.id, sw);
+    doc.components.set(a.id, a);
+    doc.components.set(b.id, b);
+    doc.wires.set('w1', { id: 'w1', from: sw.id, to: a.id, input: 0 });
+    normalizePorts(doc);
+    doc.wires.set('w2', { id: 'w2', from: sw.id, to: b.id, input: 0, separatePort: true });
+    normalizePorts(doc);
+    const box = doc.boxes.get('B')!;
+    const outward = ports(doc).filter((p) => !portInward(p, box));
+    expect(outward).toHaveLength(2);
   });
 });

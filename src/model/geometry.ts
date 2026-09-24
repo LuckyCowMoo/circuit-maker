@@ -1,5 +1,5 @@
 import type { Component, ComponentKind, Point, Rect, Rotation } from './types';
-import { isGate } from './types';
+import { bundleDest, bundleInput, bundleOutput, bundleSource, isGate } from './types';
 
 export const GRID = 10;
 export const PIN_LEN = 20;
@@ -12,6 +12,8 @@ export const IO_SIZE = 40;
 export const IO_MIN = 20;
 export const IO_MAX = 400;
 export const PORT_SIZE = 20;
+/** Distance between lanes of a ribbon cable. */
+export const RIBBON_PITCH = 16;
 
 export interface Geom {
   kind: ComponentKind;
@@ -31,6 +33,8 @@ export interface Geom {
   /** x where each input stub meets the body. */
   back: number[];
   output: Point | null;
+  /** One point per output lane. Ribbons and ribbon ports; absent means the single `output`. */
+  outputs?: Point[];
   /** Local bounds including pin stubs. */
   bounds: Rect;
 }
@@ -94,7 +98,40 @@ function buildGate(kind: ComponentKind, n: number, negate: boolean): Geom {
   };
 }
 
-function build(kind: ComponentKind, n: number, negate: boolean, w: number, h: number): Geom {
+/** Ribbon port with independently configurable cable/wire faces. */
+function ribbonPortGeom(n: number, inputBundle: boolean, outputBundle: boolean): Geom {
+  const count = Math.max(1, n);
+  const h = count * RIBBON_PITCH;
+  const w = 22;
+  const lanes = (x: number) => Array.from({ length: count }, (_, i) => ({ x, y: RIBBON_PITCH / 2 + i * RIBBON_PITCH }));
+  const inputs = inputBundle ? [{ x: -PIN_LEN, y: h / 2 }] : lanes(-PIN_LEN);
+  const outputs = outputBundle ? [{ x: w + PIN_LEN, y: h / 2 }] : lanes(w + PIN_LEN);
+  return {
+    kind: 'port',
+    n: count,
+    negate: false,
+    w,
+    h,
+    offset: 0,
+    depth: 0,
+    tip: w,
+    inputs,
+    back: inputs.map(() => 0),
+    output: outputs[0],
+    outputs,
+    bounds: { x: -PIN_LEN, y: 0, w: w + 2 * PIN_LEN, h },
+  };
+}
+
+function build(
+  kind: ComponentKind,
+  n: number,
+  negate: boolean,
+  w: number,
+  h: number,
+  inputBundle = false,
+  outputBundle = false,
+): Geom {
   if (isGate(kind)) return buildGate(kind, n, negate);
   const base = { kind, n: 0, negate: false, offset: 0, depth: 0, back: [] as number[] };
   switch (kind) {
@@ -121,6 +158,7 @@ function build(kind: ComponentKind, n: number, negate: boolean, w: number, h: nu
         bounds: { x: -PIN_LEN, y: 0, w: w + PIN_LEN, h },
       };
     case 'port':
+      if (n > 1) return ribbonPortGeom(n, inputBundle, outputBundle);
       return {
         ...base,
         w: PORT_SIZE,
@@ -136,20 +174,33 @@ function build(kind: ComponentKind, n: number, negate: boolean, w: number, h: nu
   }
 }
 
-export function geomFor(kind: ComponentKind, n: number, negate: boolean, w = IO_SIZE, h = IO_SIZE): Geom {
+export function geomFor(
+  kind: ComponentKind,
+  n: number,
+  negate: boolean,
+  w = IO_SIZE,
+  h = IO_SIZE,
+  inputBundle = false,
+  outputBundle = false,
+): Geom {
   const gate = isGate(kind);
+  const wide = kind === 'port' && n > 1;
   const io = kind === 'switch' || kind === 'button' || kind === 'bulb';
   const key =
-    KIND_INDEX[kind] * 1_000_000 + (gate ? n * 2 + (negate ? 1 : 0) : io ? Math.round(w) * 1000 + Math.round(h) : 0);
+    KIND_INDEX[kind] * 1_000_000 +
+    (inputBundle ? 500_000 : 0) +
+    (outputBundle ? 250_000 : 0) +
+    (gate || wide ? n * 2 + (negate ? 1 : 0) : io ? Math.round(w) * 1000 + Math.round(h) : 0);
   let g = cache.get(key);
   if (!g) {
-    g = build(kind, gate ? n : 0, gate && negate, w, h);
+    g = build(kind, gate || wide ? n : 0, gate && negate, w, h, inputBundle, outputBundle);
     cache.set(key, g);
   }
   return g;
 }
 
-export const geomOf = (c: Component): Geom => geomFor(c.kind, c.inputs, c.negate, c.w, c.h);
+export const geomOf = (c: Component): Geom =>
+  geomFor(c.kind, c.inputs, c.negate, c.w, c.h, bundleInput(c), bundleOutput(c));
 
 export const snap = (v: number): number => Math.round(v / GRID) * GRID;
 
@@ -230,7 +281,10 @@ export function outputPos(c: Component): Point | null {
 
 /** pin < 0 means the output pin. */
 export function pinPos(c: Component, pin: number): Point | null {
-  return pin < 0 ? outputPos(c) : inputPos(c, pin);
+  if (pin >= 0) return inputPos(c, pin);
+  const g = geomOf(c);
+  const p = g.outputs?.[-pin - 1] ?? (pin === -1 ? g.output : null);
+  return p ? applyXf(xformOf(c), p) : null;
 }
 
 /** Unit vector pointing away from the component at a pin. */
@@ -242,7 +296,10 @@ export function pinDir(c: Component, pin: number): Point {
 export function attachPos(c: Component, pin: number): Point | null {
   const g = geomOf(c);
   const m = xformOf(c);
-  if (pin < 0) return g.output ? applyXf(m, { x: g.tip, y: g.output.y }) : null;
+  if (pin < 0) {
+    const p = g.outputs?.[-pin - 1] ?? (pin === -1 ? g.output : null);
+    return p ? applyXf(m, { x: g.tip, y: p.y }) : null;
+  }
   const p = g.inputs[pin];
   return p ? applyXf(m, { x: g.back[pin] ?? 0, y: p.y }) : null;
 }
@@ -340,9 +397,9 @@ export function wireCurve(a: Point, b: Point, da: Point = RIGHT, db: Point = LEF
 }
 
 /** The curve of a wire from `src`'s output to input `input` of `dst`. */
-export function wireBetween(src: Component, dst: Component, input: number): WireCurve | null {
-  const a = attachPos(src, -1);
-  const b = attachPos(dst, input);
+export function wireBetween(src: Component, dst: Component, input: number, lane = 0): WireCurve | null {
+  const a = attachPos(src, bundleSource(src) ? -1 : -1 - lane);
+  const b = attachPos(dst, bundleDest(dst) ? 0 : input);
   if (!a || !b) return null;
   return wireCurve(a, b, pinDir(src, -1), pinDir(dst, input));
 }
@@ -353,6 +410,46 @@ export function curveBounds(c: WireCurve): Rect {
   const y0 = Math.min(c.a.y, c.b.y, c.c1.y, c.c2.y);
   const y1 = Math.max(c.a.y, c.b.y, c.c1.y, c.c2.y);
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** Thickness of one stripe in a ribbon cable. Stripes sit against each other. */
+export const CABLE_PITCH = 4;
+
+/**
+ * One stripe of a ribbon cable. Stripe 0 is on the left of the direction of travel (the top of
+ * a cable that runs to the right). Offsets stay at full width through both ends; the tip no
+ * longer collapses onto the plug.
+ */
+export function cableStripe(curve: WireCurve, index: number, count: number, da?: Point, db?: Point): Point[] {
+  const off = (index - (count - 1) / 2) * CABLE_PITCH;
+  const startN = da ? { x: -da.y, y: da.x } : null;
+  const endN = db ? { x: db.y, y: -db.x } : null;
+  const pts: Point[] = [];
+  const steps = 28;
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const p = curvePoint(curve, t);
+    let nx: number;
+    let ny: number;
+    if (t < 0.001 && startN) {
+      nx = startN.x;
+      ny = startN.y;
+    } else if (t > 0.999 && endN) {
+      nx = endN.x;
+      ny = endN.y;
+    } else {
+      const t0 = Math.max(0, t - 0.02);
+      const t1 = Math.min(1, t + 0.02);
+      const a = curvePoint(curve, t0);
+      const b = curvePoint(curve, t1);
+      const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      nx = -((b.y - a.y) / len);
+      ny = (b.x - a.x) / len;
+    }
+    const nlen = Math.hypot(nx, ny) || 1;
+    pts.push({ x: p.x + (nx / nlen) * off, y: p.y + (ny / nlen) * off });
+  }
+  return pts;
 }
 
 export function curvePoint(c: WireCurve, t: number): Point {

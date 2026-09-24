@@ -6,6 +6,16 @@ import type { Box, ComponentKind, Doc, GateKind, Rect, Rotation } from '../model
 /** A signal source: a component id, or null for a constant 0 (an unconnected input). */
 export type Src = string | null;
 
+/** "A0 A1 A2" becomes "A0–A2" when the names are one prefix and a run of numbers. */
+function busName(names: string[]): string {
+  const parts = names.map((n) => /^(\D*?)(\d+)$/.exec(n));
+  if (names.length > 1 && names.every(Boolean) && parts.every((p) => p) && parts.every((p) => p![1] === parts[0]![1])) {
+    const nums = parts.map((p) => Number(p![2]));
+    if (nums.every((n, i) => i === 0 || n === nums[i - 1] + 1)) return `${parts[0]![1]}${nums[0]}–${nums[nums.length - 1]}`;
+  }
+  return names.filter(Boolean).join(' ');
+}
+
 export interface PartOptions {
   inputs?: number;
   not?: boolean;
@@ -63,10 +73,11 @@ export class Builder {
     return id;
   }
 
-  wire(from: Src, to: string, input = 0): void {
+  wire(from: Src, to: string, input = 0, lane = 0): void {
     if (!from) return;
     const id = this.id('w');
-    this.doc.wires.set(id, { id, from, to, input });
+    const wire = { id, from, to, input, lane: lane || undefined };
+    this.doc.wires.set(id, wire);
   }
 
   /** Names a signal so ports it passes through get that label. */
@@ -105,11 +116,20 @@ export class Builder {
   finish(): Doc {
     normalizePorts(this.doc);
     const roots = netRoots(this.doc);
+    const label = (root: string) => {
+      const src = this.doc.components.get(root);
+      return this.signals.get(root) ?? (src && src.kind !== 'port' && !['and', 'or', 'xor', 'buffer'].includes(src.kind) ? src.name : '');
+    };
     for (const c of this.doc.components.values()) {
       if (c.kind !== 'port') continue;
-      const root = roots.get(c.id) ?? c.id;
-      const src = this.doc.components.get(root);
-      c.name = this.signals.get(root) ?? (src && src.kind !== 'port' && !['and', 'or', 'xor', 'buffer'].includes(src.kind) ? src.name : '');
+      if (c.inputs > 1) {
+        const names = [];
+        for (let i = 0; i < c.inputs; i++) names.push(label(roots.get(i ? `${c.id}#${i}` : c.id) ?? c.id));
+        c.name = busName(names);
+      } else {
+        const root = roots.get(c.id) ?? c.id;
+        c.name = label(root);
+      }
     }
     return this.doc;
   }

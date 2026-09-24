@@ -3,7 +3,7 @@ import { outwardNormal, portSide } from './ports';
 import { labelBeside, portLabel, type DrawInfo, type TextOp } from './shapes';
 import type { Theme, WireColors } from './themes';
 import type { Component, Doc } from './types';
-import { isIO } from './types';
+import { bundleInput, isIO, laneCount } from './types';
 
 /** Per-document data needed to draw parts, recomputed when the wiring changes. */
 export interface PartContext {
@@ -21,6 +21,14 @@ export function partInfo(pc: PartContext, c: Component, theme: Theme, active: bo
     info.netOn = pc.colors(pc.roots.get(c.id) ?? c.id, theme).on;
   }
   if (c.kind === 'port') info.accent = (c.box && pc.doc.boxes.get(c.box)?.color) || theme.box;
+  if (laneCount(c) > 1) {
+    info.lanes = [];
+    for (let i = 0; i < laneCount(c); i++) {
+      const root = pc.roots.get(i ? `${c.id}#${i}` : c.id) ?? c.id;
+      const cols = pc.colors(root, theme);
+      info.lanes.push({ on: false, color: cols.on });
+    }
+  }
   return info;
 }
 
@@ -33,8 +41,9 @@ export function partLabel(doc: Doc, c: Component, theme: Theme): TextOp | null {
   }
   if (c.kind === 'port') {
     const box = c.box ? doc.boxes.get(c.box) : undefined;
-    if (!box) return null;
-    return portLabel(componentCenter(c), outwardNormal(portSide(c, box)), c.name, box.color ?? theme.box);
+    if (box) return portLabel(componentCenter(c), outwardNormal(portSide(c, box)), c.name, box.color ?? theme.box);
+    const d = pinDir(c, bundleInput(c) ? 0 : -1);
+    return labelBeside(bodyRect(c), { x: -d.x, y: -d.y }, c.name, theme.text);
   }
   return null;
 }

@@ -1,6 +1,19 @@
 import { boxInBox, componentInBox, makeComponent, uid } from './doc';
-import { componentCenter, GRID, pinDir, pinPos, PORT_SIZE } from './geometry';
-import { isInput, type Box, type Component, type Doc, type Point, type Rotation, type Wire } from './types';
+import { componentCenter, GRID, pinDir, pinPos, PORT_SIZE, rotatedSize } from './geometry';
+import {
+  bundleDest,
+  bundleInput,
+  bundleOutput,
+  bundleSource,
+  CABLE_MIN,
+  isInput,
+  type Box,
+  type Component,
+  type Doc,
+  type Point,
+  type Rotation,
+  type Wire,
+} from './types';
 
 /** Sides of a box: left, top, right, bottom. */
 export type Side = 0 | 1 | 2 | 3;
@@ -112,7 +125,7 @@ export function wallPoint(box: Box, p: Point): { side: Side; x: number; y: numbe
  * Moves a port onto the wall of its box as close to `target` as possible, sliding along the wall
  * past other ports, and points it in or out.
  */
-export function placePort(doc: Doc, port: Component, box: Box, target: Point, inward: boolean): void {
+export function placePort(doc: Doc, port: Component, box: Box, target: Point, inward: boolean, slide = true): void {
   const wp = wallPoint(box, target);
   const n = outwardNormal(wp.side);
   const vertical = wp.side === 0 || wp.side === 2;
@@ -128,8 +141,17 @@ export function placePort(doc: Doc, port: Component, box: Box, target: Point, in
   }
   const base = vertical ? wp.y : wp.x;
   let pos = base;
-  const free = (v: number) => others.every((o) => Math.abs(o - v) >= PORT_SIZE);
-  if (!free(base)) {
+  port.flip = false;
+  port.rot = rotFor(inward ? { x: -n.x, y: -n.y } : n);
+  if (port.inputs > 1 && port.inputBundle === undefined && port.outputBundle === undefined) {
+    port.plug = inward ? 'in' : 'out';
+    port.inputBundle = inward;
+    port.outputBundle = !inward;
+  }
+  const span = vertical ? rotatedSize(port).h : rotatedSize(port).w;
+  const gap = Math.max(PORT_SIZE, span);
+  const free = (v: number) => others.every((o) => Math.abs(o - v) >= gap);
+  if (slide && !free(base)) {
     for (let k = 1; k < 400; k++) {
       const up = base - k * GRID;
       const down = base + k * GRID;
@@ -143,18 +165,92 @@ export function placePort(doc: Doc, port: Component, box: Box, target: Point, in
       }
     }
   }
+  if (!slide) {
+    // Keep x,y from the file / caller; only lock rotation to the nearest matching wall.
+    let best = Infinity;
+    let rot = port.rot;
+    for (let side = 0; side < 4; side++) {
+      port.rot = rotFor(inward ? { x: -NORMALS[side].x, y: -NORMALS[side].y } : NORMALS[side]);
+      const c = componentCenter(port);
+      const wall = side === 0 ? box.x : side === 2 ? box.x + box.w : side === 1 ? box.y : box.y + box.h;
+      const d = side === 0 || side === 2 ? Math.abs(c.x - wall) : Math.abs(c.y - wall);
+      if (d < best) {
+        best = d;
+        rot = port.rot;
+      }
+    }
+    port.rot = rot;
+    return;
+  }
   const cx = vertical ? wp.x : pos;
   const cy = vertical ? pos : wp.y;
-  port.rot = rotFor(inward ? { x: -n.x, y: -n.y } : n);
-  port.flip = false;
-  port.x = cx - PORT_SIZE / 2;
-  port.y = cy - PORT_SIZE / 2;
+  const size = rotatedSize(port);
+  port.x = cx - size.w / 2;
+  port.y = cy - size.h / 2;
 }
 
-function addWire(doc: Doc, from: string, to: string, input: number): void {
+/** True when a ribbon port has any non-cable wire on a lane pin. */
+export function portHasSideWiring(doc: Doc, port: Component): boolean {
+  for (const w of doc.wires.values()) {
+    if (w.cable) continue;
+    if (bundleInput(port)) {
+      if (w.from === port.id) return true;
+    } else if (bundleOutput(port)) {
+      if (w.to === port.id) return true;
+    } else if (w.to === port.id || w.from === port.id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Every ribbon port reachable from `start` through ribbon cables, including `start`. */
+export function cableConnectedPorts(doc: Doc, start: Component): Component[] {
+  if (start.kind !== 'port' || start.inputs <= 1) return [start];
+  const out: Component[] = [];
+  const seen = new Set<string>();
+  const queue = [start.id];
+  while (queue.length) {
+    const id = queue.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const c = doc.components.get(id);
+    if (!c || c.kind !== 'port' || c.inputs <= 1) continue;
+    out.push(c);
+    for (const w of doc.wires.values()) {
+      if (!w.cable) continue;
+      if (w.from === id) queue.push(w.to);
+      else if (w.to === id) queue.push(w.from);
+    }
+  }
+  return out;
+}
+
+/** Sets lane count on a ribbon port and re-seats it on its wall when it has one. */
+export function setPortWidth(doc: Doc, port: Component, n: number): void {
+  const count = Math.max(1, n);
+  const box = port.box ? doc.boxes.get(port.box) : undefined;
+  const at = componentCenter(port);
+  const inward = box ? (port.plug ? port.plug === 'in' : portInward(port, box)) : true;
+  port.inputs = count;
+  if (count <= 1) {
+    delete port.plug;
+    delete port.inputBundle;
+    delete port.outputBundle;
+  } else if (port.inputBundle === undefined && port.outputBundle === undefined) {
+    port.plug = inward ? 'in' : 'out';
+    port.inputBundle = inward;
+    port.outputBundle = !inward;
+  }
+  if (box) placePort(doc, port, box, at, inward, true);
+}
+
+function addWire(doc: Doc, from: string, to: string, input: number): Wire {
   for (const [id, w] of doc.wires) if (w.to === to && w.input === input) doc.wires.delete(id);
   const id = uid(doc, 'w');
-  doc.wires.set(id, { id, from, to, input });
+  const wire: Wire = { id, from, to, input };
+  doc.wires.set(id, wire);
+  return wire;
 }
 
 function pinPoint(doc: Doc, id: string, pin: number): Point {
@@ -174,22 +270,31 @@ export function normalizePorts(doc: Doc): boolean {
     if (c.kind !== 'port') continue;
     const box = c.box ? doc.boxes.get(c.box) : undefined;
     if (!box) {
+      if (c.placed) continue;
       dissolvePort(doc, c);
       changed = true;
       continue;
     }
-    const inward = portInward(c, box);
-    const before = `${c.x},${c.y},${c.rot}`;
-    placePort(doc, c, box, componentCenter(c), inward);
-    if (`${c.x},${c.y},${c.rot}` !== before) changed = true;
+    if (c.inputs > 1 && c.inputBundle === undefined && c.outputBundle === undefined) {
+      c.inputBundle = c.plug === 'in';
+      c.outputBundle = c.plug === 'out';
+      changed = true;
+    }
+    // Width changes re-seat via setPortWidth; avoid moving ports during ordinary normalize.
   }
   if (!hasBoxWork(doc)) return changed;
 
   for (let pass = 0; pass < 12; pass++) {
     const tree = buildBoxTree(doc);
     const info = portInfo(doc, tree);
-    const inScope = (c: Component) => (c.kind === 'port' ? info.get(c.id)!.inScope : tree.scope(c));
-    const outScope = (c: Component) => (c.kind === 'port' ? info.get(c.id)!.outScope : tree.scope(c));
+    const inScope = (c: Component) => {
+      const pi = c.kind === 'port' ? info.get(c.id) : undefined;
+      return pi ? pi.inScope : tree.scope(c);
+    };
+    const outScope = (c: Component) => {
+      const pi = c.kind === 'port' ? info.get(c.id) : undefined;
+      return pi ? pi.outScope : tree.scope(c);
+    };
     let dirty = false;
     for (const w of [...doc.wires.values()]) {
       if (!doc.wires.has(w.id)) continue;
@@ -199,23 +304,28 @@ export function normalizePorts(doc: Doc): boolean {
       const S = outScope(s);
       const T = inScope(t);
       if (S === T) continue;
+      if (bundleSource(s) && bundleDest(t)) continue;
       dirty = true;
       if (t.kind === 'port') {
-        const pi = info.get(t.id)!;
-        const fromInside = tree.within(S, pi.box);
-        if (pi.inward === fromInside) {
-          dissolveInto(doc, w, t);
-          continue;
+        const pi = info.get(t.id);
+        if (pi) {
+          const fromInside = tree.within(S, pi.box);
+          if (pi.inward === fromInside) {
+            dissolveInto(doc, w, t);
+            continue;
+          }
         }
       }
       if (s.kind === 'port') {
-        const pi = info.get(s.id)!;
-        const toInside = tree.within(T, pi.box);
-        const driver = pi.driver;
-        if (pi.inward !== toInside && driver) {
-          doc.wires.delete(w.id);
-          addWire(doc, driver, w.to, w.input);
-          continue;
+        const pi = info.get(s.id);
+        if (pi) {
+          const toInside = tree.within(T, pi.box);
+          const driver = pi.driver;
+          if (pi.inward !== toInside && driver) {
+            doc.wires.delete(w.id);
+            addWire(doc, driver, w.to, w.input);
+            continue;
+          }
         }
       }
       route(doc, tree, info, w, S, T);
@@ -230,11 +340,119 @@ export function normalizePorts(doc: Doc): boolean {
         }
       }
       if (!wired) {
+        // Ribbon ports and toolbar-placed ports stay put when empty.
+        if (c.inputs >= 2 || c.placed) continue;
         doc.components.delete(c.id);
         dirty = true;
       }
     }
     if (!dirty) break;
+    changed = true;
+  }
+  if (bundlePorts(doc)) changed = true;
+  if (spliceRibbons(doc)) changed = true;
+  return changed;
+}
+
+/**
+ * Replaces a complete set of lane wires between two ribbon ports with one ribbon cable.
+ * The cable is a wire: lane i of the source plug drives lane i of the destination plug.
+ */
+function spliceRibbons(doc: Doc): boolean {
+  const groups = new Map<string, Wire[]>();
+  for (const w of doc.wires.values()) {
+    if (w.cable) continue;
+    const s = doc.components.get(w.from);
+    const t = doc.components.get(w.to);
+    if (!s || !t || !bundleSource(s) || !bundleDest(t)) continue;
+    const key = `${s.id}>${t.id}`;
+    const list = groups.get(key);
+    if (list) list.push(w);
+    else groups.set(key, [w]);
+  }
+  let changed = false;
+  for (const list of groups.values()) {
+    const s = doc.components.get(list[0].from)!;
+    const t = doc.components.get(list[0].to)!;
+    if (list.length < CABLE_MIN || list.length !== s.inputs || list.length !== t.inputs) continue;
+    const lanes = new Set(list.map((w) => w.lane ?? 0));
+    const inputs = new Set(list.map((w) => w.input));
+    if (lanes.size !== list.length || inputs.size !== list.length) continue;
+    const laneOf = new Map(list.map((w) => [w.input, w.lane ?? 0]));
+    const moved: { w: Wire; lane: number }[] = [];
+    for (const w of doc.wires.values()) {
+      if (w.from !== t.id || w.cable || !laneOf.has(w.lane ?? 0)) continue;
+      moved.push({ w, lane: laneOf.get(w.lane ?? 0)! });
+    }
+    for (const m of moved) {
+      if (m.lane) m.w.lane = m.lane;
+      else delete m.w.lane;
+    }
+    for (const w of list) doc.wires.delete(w.id);
+    const wire = addWire(doc, s.id, t.id, 0);
+    wire.cable = true;
+    changed = true;
+  }
+  return changed;
+}
+
+/** Gathers one-signal ports that share a wall and all lead to the same neighbouring box. */
+function bundlePorts(doc: Doc): boolean {
+  const tree = buildBoxTree(doc);
+  const peerOf = (port: Component): string => {
+    const outward = !portInward(port, doc.boxes.get(port.box!)!);
+    for (const w of doc.wires.values()) {
+      if (outward ? w.from !== port.id : w.to !== port.id) continue;
+      const other = doc.components.get(outward ? w.to : w.from);
+      if (!other) continue;
+      if (other.kind === 'port' && other.box) return other.box;
+      return tree.scope(other) ?? '';
+    }
+    return '';
+  };
+  const groups = new Map<string, Component[]>();
+  for (const c of doc.components.values()) {
+    if (c.kind !== 'port' || !c.box || c.inputs > 1) continue;
+    const box = doc.boxes.get(c.box);
+    if (!box) continue;
+    const key = `${c.box}|${portSide(c, box)}|${portInward(c, box) ? 1 : 0}|${peerOf(c)}`;
+    const list = groups.get(key);
+    if (list) list.push(c);
+    else groups.set(key, [c]);
+  }
+  let changed = false;
+  for (const list of groups.values()) {
+    if (list.length < 2 || list.length < CABLE_MIN) continue;
+    const box = doc.boxes.get(list[0].box!)!;
+    const side = portSide(list[0], box);
+    const vertical = side === 0 || side === 2;
+    list.sort((a, b) => {
+      const ca = componentCenter(a);
+      const cb = componentCenter(b);
+      return vertical ? ca.y - cb.y : ca.x - cb.x;
+    });
+    const inward = portInward(list[0], box);
+    const port = makeComponent('port', 0, 0, uid(doc, 'p'));
+    port.inputs = list.length;
+    port.box = box.id;
+    port.name = list.map((p) => p.name).filter(Boolean).join(' ');
+    doc.components.set(port.id, port);
+    port.plug = inward ? 'in' : 'out';
+    port.inputBundle = inward;
+    port.outputBundle = !inward;
+    placePort(doc, port, box, componentCenter(list[Math.floor(list.length / 2)]), inward);
+    list.forEach((old, i) => {
+      for (const w of doc.wires.values()) {
+        if (w.to === old.id) {
+          w.to = port.id;
+          w.input = i;
+        } else if (w.from === old.id) {
+          w.from = port.id;
+          w.lane = i;
+        }
+      }
+      doc.components.delete(old.id);
+    });
     changed = true;
   }
   return changed;
@@ -322,9 +540,12 @@ function route(doc: Doc, tree: BoxTree, info: Map<string, PortInfo>, w: Wire, S:
   const target = pinPoint(doc, w.to, w.input);
   let cur = w.from;
   const through = (boxId: string, inward: boolean, toward: Point) => {
-    for (const [pid, pi] of info) {
-      if (pi.box === boxId && pi.inward === inward && pi.driver === cur && doc.components.has(pid)) return pid;
+    if (!w.separatePort) {
+      for (const [pid, pi] of info) {
+        if (pi.box === boxId && pi.inward === inward && pi.driver === cur && doc.components.has(pid)) return pid;
+      }
     }
+    // Explicit editor branches get their own wall port, even when their driver is shared.
     const box = doc.boxes.get(boxId)!;
     const id = uid(doc, 'p');
     const port = makeComponent('port', 0, 0, id);
