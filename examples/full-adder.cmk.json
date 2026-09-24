@@ -1,0 +1,36 @@
+{
+  "format": "circuit-maker",
+  "version": 1,
+  "name": "Full adder",
+  "boxes": [
+    {"id":"full_adder","name":"Full adder","x":100,"y":-60,"w":520,"h":300},
+    {"id":"ha1","name":"Half adder 1","x":130,"y":-30,"w":160,"h":150,"color":"#0f9d8a"},
+    {"id":"ha2","name":"Half adder 2","x":320,"y":-30,"w":160,"h":230,"color":"#0f9d8a"}
+  ],
+  "components": [
+    {"id":"a","type":"switch","x":0,"y":0},
+    {"id":"b","type":"switch","x":0,"y":60},
+    {"id":"cin","type":"switch","x":0,"y":160},
+    {"id":"x1","type":"xor","x":180,"y":0,"inputs":2},
+    {"id":"a1","type":"and","x":180,"y":60,"inputs":2},
+    {"id":"x2","type":"xor","x":370,"y":0,"inputs":2},
+    {"id":"a2","type":"and","x":370,"y":120,"inputs":2},
+    {"id":"o1","type":"or","x":510,"y":70,"inputs":2},
+    {"id":"sum","type":"bulb","x":680,"y":0},
+    {"id":"cout","type":"bulb","x":680,"y":70}
+  ],
+  "wires": [
+    {"from":"a","to":"x1","input":0},
+    {"from":"b","to":"x1","input":1},
+    {"from":"a","to":"a1","input":0},
+    {"from":"b","to":"a1","input":1},
+    {"from":"x1","to":"x2","input":0},
+    {"from":"cin","to":"x2","input":1},
+    {"from":"x1","to":"a2","input":0},
+    {"from":"cin","to":"a2","input":1},
+    {"from":"a1","to":"o1","input":0},
+    {"from":"a2","to":"o1","input":1},
+    {"from":"x2","to":"sum","input":0},
+    {"from":"o1","to":"cout","input":0}
+  ]
+}

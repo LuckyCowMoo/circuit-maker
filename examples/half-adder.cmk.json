@@ -1,0 +1,25 @@
+{
+  "format": "circuit-maker",
+  "version": 1,
+  "name": "Half adder",
+  "boxes": [
+    {"id":"half_adder","name":"Half adder","x":120,"y":-40,"w":240,"h":220}
+  ],
+  "components": [
+    {"id":"start","type":"marker","x":0,"y":-100,"name":"Start here"},
+    {"id":"a","type":"switch","x":0,"y":0},
+    {"id":"b","type":"switch","x":0,"y":80},
+    {"id":"sum_gate","type":"xor","x":180,"y":10,"inputs":2},
+    {"id":"carry_gate","type":"and","x":180,"y":100,"inputs":2},
+    {"id":"sum","type":"bulb","x":420,"y":10},
+    {"id":"carry","type":"bulb","x":420,"y":100}
+  ],
+  "wires": [
+    {"from":"a","to":"sum_gate","input":0},
+    {"from":"b","to":"sum_gate","input":1},
+    {"from":"a","to":"carry_gate","input":0},
+    {"from":"b","to":"carry_gate","input":1},
+    {"from":"sum_gate","to":"sum","input":0},
+    {"from":"carry_gate","to":"carry","input":0}
+  ]
+}
