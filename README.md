@@ -5,7 +5,7 @@ Build and simulate Boolean logic circuits in the browser. Drag in gates, wire th
 ## Features
 
 - **Gates:** AND, OR, XOR and buffer, each with 1 to 256 inputs and an optional NOT bubble (so NAND, NOR, XNOR and NOT are one click away; you can also drag the NOT bubble from the toolbar onto a gate). Gates can be rotated and flipped, and outline and fill colours can be changed after placing.
-- **Inputs and outputs:** switches (toggle), buttons (held while pressed) and light bulbs. They can be resized and reshaped (long thin bulbs make display segments), and they stay visible above boxes when zoomed out. New inputs are labelled A, B, C … Z, AA, AB …; new bulbs 1, 2, 3 …. Collapsible lists either side of the toolbar show every input and output, where you can toggle, press, rename and find them.
+- **Inputs and outputs:** switches, momentary buttons, programmable pulse timers, light bulbs and RGB bulbs. Switches and buttons can be bound to a keyboard key (toggle on press for switches, hold for buttons). RGB bulbs mix three binary red/green/blue channels and accept either three wires or a 3-lane ribbon cable. They can be resized and reshaped, and stay visible above boxes when zoomed out.
 - **Wiring:** drag from pin to pin. Drop a wire on empty space to pick a new part that is placed and connected for you. Wires are curved, run right up to the part they connect to, and each has its own dark hue; they glow in that hue when on, and the switch or button driving them lights up in the same colour. Free pins show a short stub.
 - **Real-time simulation:** event-driven, so only the parts of a circuit that change get re-evaluated. Circuits with tens of thousands of gates stay responsive, and latches and oscillators behave as they should.
 - **Markers:** named, coloured pins. When a marker is off-screen an arrow at the edge points to it; click the arrow to fly there. If nothing is on screen, an arrow points to the nearest part.
@@ -13,7 +13,7 @@ Build and simulate Boolean logic circuits in the browser. Drag in gates, wire th
 - **Box connectors:** every wire through a box wall passes through a connector in the wall that you can label and slide along it, so a box reads like a chip with named pins. Copy a box and its connectors come with it, ready to be wired up; delete the wire on one side of a connector and the other side stays attached.
 - **Examples:** grouped, with previews: logic gates, adders, an 8-bit adder and subtractor, 4-bit multiplier, divider, modulus and comparator, latches, a memory cell, D flip-flop, 8-bit register, 4-bit counter, 7-segment and 3-digit displays, a multiplexer and a decoder. Picking one adds it to the current project.
 - **Infinite canvas:** pan in any direction; zoom is limited to a sensible range.
-- **Themes:** Paper (the default: black on white), Midnight, Blueprint and Solar.
+- **Themes:** Solar (default), Paper, Midnight and Blueprint.
 - **Files:**
   - Save the whole document or only the selection as a project (`.cmk.json`), SVG or PNG.
   - Open a project (in a new tab), or add one into the current project (for example, dropping a saved adder into a bigger calculator). A new blank project also opens in a new tab.

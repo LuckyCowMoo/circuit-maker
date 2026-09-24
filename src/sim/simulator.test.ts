@@ -99,6 +99,78 @@ describe('Simulator', () => {
     expect(sim.value('x')).toBe(false);
   });
 
+  it('updates timer outputs from cycle and pulse lengths in seconds', () => {
+    const doc = build(
+      [
+        ['clock', 'timer'],
+        ['lamp', 'bulb'],
+      ],
+      [['clock', 'lamp', 0]],
+    );
+    const clock = doc.components.get('clock')!;
+    clock.period = 0.5;
+    clock.pulse = 0.1;
+    const sim = run(doc);
+
+    expect(sim.tickTime(50)).toBe(true);
+    sim.settle();
+    expect(sim.value('clock')).toBe(true);
+    expect(sim.value('lamp')).toBe(true);
+
+    expect(sim.tickTime(150)).toBe(true);
+    sim.settle();
+    expect(sim.value('clock')).toBe(false);
+    expect(sim.value('lamp')).toBe(false);
+    expect(sim.tickTime(499)).toBe(false);
+    expect(sim.tickTime(550)).toBe(true);
+  });
+
+  it('simulates three independent RGB inputs from wires or a cable', () => {
+    const wires = build(
+      [
+        ['red', 'switch'],
+        ['green', 'switch'],
+        ['blue', 'switch'],
+        ['rgb', 'rgb'],
+      ],
+      [
+        ['red', 'rgb', 0],
+        ['green', 'rgb', 1],
+        ['blue', 'rgb', 2],
+      ],
+    );
+    const wireSim = run(wires);
+    wireSim.setSwitch('red', true);
+    wireSim.setSwitch('blue', true);
+    wireSim.settle();
+    expect([0, 1, 2].map((lane) => wireSim.value('rgb', lane))).toEqual([true, false, true]);
+
+    const cable = build(
+      [
+        ['red', 'switch'],
+        ['green', 'switch'],
+        ['blue', 'switch'],
+        ['port', 'port', { inputs: 3 }],
+        ['rgb', 'rgb'],
+      ],
+      [
+        ['red', 'port', 0],
+        ['green', 'port', 1],
+        ['blue', 'port', 2],
+      ],
+    );
+    const port = cable.components.get('port')!;
+    port.outputBundle = true;
+    const rgb = cable.components.get('rgb')!;
+    rgb.inputBundle = true;
+    cable.wires.set('cable', { id: 'cable', from: 'port', to: 'rgb', input: 0, cable: true });
+    const cableSim = run(cable);
+    cableSim.setSwitch('green', true);
+    cableSim.setSwitch('blue', true);
+    cableSim.settle();
+    expect([0, 1, 2].map((lane) => cableSim.value('rgb', lane))).toEqual([false, true, true]);
+  });
+
   it('holds state in an SR latch across recompiles', () => {
     const doc = build(
       [

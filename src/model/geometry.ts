@@ -46,9 +46,11 @@ const KIND_INDEX: Record<ComponentKind, number> = {
   buffer: 3,
   switch: 4,
   button: 5,
-  bulb: 6,
-  marker: 7,
-  port: 8,
+  timer: 6,
+  bulb: 7,
+  rgb: 8,
+  marker: 9,
+  port: 10,
 };
 
 const cache = new Map<number, Geom>();
@@ -137,6 +139,7 @@ function build(
   switch (kind) {
     case 'switch':
     case 'button':
+    case 'timer':
       return {
         ...base,
         w,
@@ -157,6 +160,29 @@ function build(
         output: null,
         bounds: { x: -PIN_LEN, y: 0, w: w + PIN_LEN, h },
       };
+    case 'rgb': {
+      const ys = [h / 4, h / 2, (3 * h) / 4];
+      const inputs = inputBundle ? [{ x: -PIN_LEN, y: h / 2 }] : ys.map((y) => ({ x: -PIN_LEN, y }));
+      // Meet the circular body at each pin's height (not the leftmost tangent).
+      const cx = w / 2;
+      const cy = h / 2;
+      const r = Math.min(w, h) / 2 - 3;
+      const edgeX = (y: number) => {
+        const dy = y - cy;
+        return cx - Math.sqrt(Math.max(0, r * r - dy * dy));
+      };
+      return {
+        ...base,
+        n: 3,
+        w,
+        h,
+        tip: w,
+        inputs,
+        back: inputs.map((p) => edgeX(p.y)),
+        output: null,
+        bounds: { x: -PIN_LEN, y: 0, w: w + PIN_LEN, h },
+      };
+    }
     case 'port':
       if (n > 1) return ribbonPortGeom(n, inputBundle, outputBundle);
       return {
@@ -185,7 +211,7 @@ export function geomFor(
 ): Geom {
   const gate = isGate(kind);
   const wide = kind === 'port' && n > 1;
-  const io = kind === 'switch' || kind === 'button' || kind === 'bulb';
+  const io = kind === 'switch' || kind === 'button' || kind === 'timer' || kind === 'bulb' || kind === 'rgb';
   const key =
     KIND_INDEX[kind] * 1_000_000 +
     (inputBundle ? 500_000 : 0) +

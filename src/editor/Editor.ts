@@ -53,6 +53,7 @@ import {
   type Side,
 } from '../model/ports';
 import { getTheme, type Theme } from '../model/themes';
+import { isModifierOnly } from '../model/keys';
 import type { Box, Component, ComponentKind, Doc, Point, Rect, Rotation, Wire } from '../model/types';
 import {
   bundleDest,
@@ -203,7 +204,9 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   buffer: 'Buffer',
   switch: 'Switch',
   button: 'Button',
+  timer: 'Timer',
   bulb: 'Light bulb',
+  rgb: 'RGB bulb',
   marker: 'Marker',
   box: 'Box',
   not: 'NOT bubble',
@@ -303,6 +306,8 @@ export class Editor {
   private tab = tabId();
   /** Time of the last wheel event that looked like a touchpad, so the whole gesture pans. */
   private touchpadAt = 0;
+  /** Buttons currently held down by a keyboard binding. */
+  private keyHeldButtons = new Set<string>();
   private needsRender = true;
   private topologyDirty = true;
   private raf = 0;
@@ -393,6 +398,7 @@ export class Editor {
       this.parts = { doc: this.doc, masks: pinMasks(this.doc), roots: netRoots(this.doc), colors: colorsFor };
       this.topologyDirty = false;
     }
+    this.sim.tickTime(now);
     if (this.sim.pending) this.sim.step();
     if (this.sim.changed) {
       this.sim.changed = false;
@@ -988,6 +994,10 @@ export class Editor {
     // Ribbon cable: source plug → destination plug. Empty dest ports resize to match.
     if (bundleSource(src) && bundleDest(dst) && out.pin === -1 && inp.pin === 0) {
       if (src.inputs !== dst.inputs) {
+        if (dst.kind === 'rgb') {
+          this.toast('An RGB bulb needs a 3-lane ribbon cable.');
+          return false;
+        }
         const peers = cableConnectedPorts(this.doc, dst);
         if (peers.some((p) => portHasSideWiring(this.doc, p))) {
           this.toast('That ribbon port already has wires; change its width first.');
@@ -1128,6 +1138,31 @@ export class Editor {
     this.changed(true);
   }
 
+  /** Changes selected RGB bulbs between three wire pins and one three-lane cable socket. */
+  setRgbInput(cable: boolean): void {
+    const bulbs = this.selectedComponents().filter((c) => c.kind === 'rgb');
+    const changing = bulbs.filter((c) => bundleInput(c) !== cable);
+    if (!changing.length) return;
+    if (changing.some((c) => [...this.doc.wires.values()].some((w) => w.to === c.id))) {
+      this.toast('Disconnect the RGB input before changing it.');
+      return;
+    }
+    this.checkpoint('rgb-input');
+    for (const c of changing) c.inputBundle = cable;
+    this.changed(true);
+  }
+
+  setTimerTiming(period: number, pulse: number): void {
+    const timers = this.selectedComponents().filter((c) => c.kind === 'timer');
+    if (!timers.length) return;
+    this.checkpoint('timer-timing');
+    for (const timer of timers) {
+      timer.period = clamp(period, 0.01, 3600);
+      timer.pulse = clamp(pulse, 0.001, timer.period);
+    }
+    this.changed(true);
+  }
+
   setNegate(v: boolean): void {
     this.editSelection(
       'negate',
@@ -1204,6 +1239,16 @@ export class Editor {
     this.sim.setSwitch(id, c.on);
     this.needsRender = true;
     this.scheduleAutosave();
+    this.emit();
+  }
+
+  /** Sets or clears the keyboard binding on selected switches and buttons. */
+  setKeyBind(code: string | null): void {
+    const inputs = this.selectedComponents().filter((c) => c.kind === 'switch' || c.kind === 'button');
+    if (!inputs.length) return;
+    this.checkpoint('key-bind');
+    for (const c of inputs) c.key = code;
+    this.changed(false);
   }
 
   nudge(dx: number, dy: number): void {
@@ -1395,7 +1440,9 @@ export class Editor {
         ...GATE_MENU,
         { label: 'Switch', kind: 'switch' },
         { label: 'Button', kind: 'button' },
+        { label: 'Timer', kind: 'timer' },
         { label: 'Light bulb', kind: 'bulb' },
+        { label: 'RGB bulb', kind: 'rgb' },
         { label: 'Marker', kind: 'marker' },
         { label: 'Box', kind: 'box' },
       ];
@@ -1407,12 +1454,13 @@ export class Editor {
         { label: 'Ribbon port (on box)', kind: 'ribbon-port', portMode: 'box' },
       ];
     }
-    if (from.pin < 0) return [...GATE_MENU, { label: 'Light bulb', kind: 'bulb' }];
-    return [...GATE_MENU, { label: 'Switch', kind: 'switch' }, { label: 'Button', kind: 'button' }];
+    if (from.pin < 0) return [...GATE_MENU, { label: 'Light bulb', kind: 'bulb' }, { label: 'RGB bulb', kind: 'rgb' }];
+    return [...GATE_MENU, { label: 'Switch', kind: 'switch' }, { label: 'Button', kind: 'button' }, { label: 'Timer', kind: 'timer' }];
   }
 
   /** True when `from` is the ribbon plug of a multi-lane port (cable drag). */
   private isCablePlug(from: PinRef, c: Component): boolean {
+    if (c.kind === 'rgb') return bundleInput(c) && from.pin === 0;
     if (!isRibbonPort(c)) return false;
     return (bundleOutput(c) && from.pin === -1) || (bundleInput(c) && from.pin === 0);
   }
@@ -2213,6 +2261,10 @@ export class Editor {
     if (isTyping(e.target)) return;
     const mod = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
+    if (!mod && !e.altKey && this.handleBoundKey(e, true)) {
+      e.preventDefault();
+      return;
+    }
     if (e.key === ' ') {
       if (!this.spaceHeld) {
         this.spaceHeld = true;
@@ -2294,10 +2346,43 @@ export class Editor {
       this.spaceHeld = false;
       this.updateCursor();
     }
+    if (!isTyping(e.target)) this.handleBoundKey(e, false);
   };
+
+  /** Applies keyboard bindings for switches (toggle) and buttons (hold). */
+  private handleBoundKey(e: KeyboardEvent, down: boolean): boolean {
+    if (isModifierOnly(e)) return false;
+    let hit = false;
+    for (const c of this.doc.components.values()) {
+      if (!c.key || c.key !== e.code) continue;
+      hit = true;
+      if (c.kind === 'switch') {
+        if (down && !e.repeat) this.toggleSwitch(c.id);
+      } else if (c.kind === 'button') {
+        if (down) {
+          if (this.keyHeldButtons.has(c.id)) continue;
+          this.keyHeldButtons.add(c.id);
+          this.sim.setPressed(c.id, true);
+          this.needsRender = true;
+        } else if (this.keyHeldButtons.delete(c.id)) {
+          this.sim.setPressed(c.id, false);
+          this.needsRender = true;
+        }
+      }
+    }
+    return hit;
+  }
+
+  private releaseKeyHeldButtons(): void {
+    if (!this.keyHeldButtons.size) return;
+    for (const id of this.keyHeldButtons) this.sim.setPressed(id, false);
+    this.keyHeldButtons.clear();
+    this.needsRender = true;
+  }
 
   private onBlur = (): void => {
     this.spaceHeld = false;
+    this.releaseKeyHeldButtons();
     if (this.drag?.kind === 'move' && this.drag.press) this.sim.setPressed(this.drag.press, false);
   };
 
@@ -2346,7 +2431,8 @@ export class Editor {
   isActive(c: Component): boolean {
     if (c.kind === 'switch') return c.on;
     if (c.kind === 'button') return this.sim.isPressed(c.id);
-    if (c.kind === 'bulb' || c.kind === 'port') return this.sim.value(c.id);
+    if (c.kind === 'timer' || c.kind === 'bulb' || c.kind === 'port') return this.sim.value(c.id);
+    if (c.kind === 'rgb') return this.sim.value(c.id) || this.sim.value(c.id, 1) || this.sim.value(c.id, 2);
     return false;
   }
 
@@ -2356,11 +2442,15 @@ export class Editor {
     this.needsRender = true;
   }
 
-  /** Switches, buttons and bulbs, sorted by label, for the side lists. */
+  /** Inputs and output indicators, sorted by label, for the side lists. */
   ioList(which: 'inputs' | 'outputs'): Component[] {
     const out: Component[] = [];
     for (const c of this.doc.components.values()) {
-      if (which === 'inputs' ? c.kind === 'switch' || c.kind === 'button' : c.kind === 'bulb') out.push(c);
+      if (
+        which === 'inputs'
+          ? c.kind === 'switch' || c.kind === 'button' || c.kind === 'timer'
+          : c.kind === 'bulb' || c.kind === 'rgb'
+      ) out.push(c);
     }
     const key = (c: Component) => (which === 'inputs' ? c.name.length : 0);
     return out.sort(

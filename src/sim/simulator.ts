@@ -7,8 +7,9 @@ const K_XOR = 2;
 const K_BUF = 3;
 const K_SWITCH = 4;
 const K_BUTTON = 5;
-const K_BULB = 6;
-const K_MARKER = 7;
+const K_TIMER = 6;
+const K_BULB = 7;
+const K_MARKER = 8;
 
 const KIND_CODE: Record<ComponentKind, number> = {
   and: K_AND,
@@ -17,7 +18,9 @@ const KIND_CODE: Record<ComponentKind, number> = {
   buffer: K_BUF,
   switch: K_SWITCH,
   button: K_BUTTON,
+  timer: K_TIMER,
   bulb: K_BULB,
+  rgb: K_BULB,
   marker: K_MARKER,
   port: K_BUF,
 };
@@ -49,6 +52,7 @@ export class Simulator {
   private inQ = new Uint8Array(0);
   private qLen = 0;
   private pressed = new Set<string>();
+  private timers: { index: number; periodMs: number; pulseMs: number }[] = [];
   /** Set whenever an output changes; the owner clears it after redrawing. */
   changed = false;
 
@@ -75,6 +79,7 @@ export class Simulator {
     const neg = new Uint8Array(n);
     const src = new Uint8Array(n);
     const inStart = new Int32Array(n + 1);
+    const timers: { index: number; periodMs: number; pulseMs: number }[] = [];
     for (let i = 0; i < n; i++) {
       const c = nodes[i].comp;
       const multi = laneCount(c) > 1;
@@ -82,6 +87,15 @@ export class Simulator {
       neg[i] = !multi && c.negate && kind[i] <= K_BUF ? 1 : 0;
       if (c.kind === 'switch') src[i] = c.on ? 1 : 0;
       else if (c.kind === 'button') src[i] = this.pressed.has(c.id) ? 1 : 0;
+      else if (c.kind === 'timer') {
+        const periodSec = Math.max(0.01, Math.min(3600, c.period ?? 5));
+        const pulseSec = Math.max(0.001, Math.min(periodSec, c.pulse ?? 1));
+        timers.push({
+          index: i,
+          periodMs: periodSec * 1000,
+          pulseMs: pulseSec * 1000,
+        });
+      }
       inStart[i + 1] = inStart[i] + (multi ? 1 : inputCount(c));
     }
 
@@ -144,6 +158,7 @@ export class Simulator {
     this.kind = kind;
     this.neg = neg;
     this.src = src;
+    this.timers = timers;
     this.inStart = inStart;
     this.inSrc = inSrc;
     this.foStart = foStart;
@@ -222,6 +237,7 @@ export class Simulator {
         break;
       case K_SWITCH:
       case K_BUTTON:
+      case K_TIMER:
         v = this.src[i];
         break;
       case K_BULB: {
@@ -280,6 +296,19 @@ export class Simulator {
     if (i === undefined) return;
     this.src[i] = pressed ? 1 : 0;
     this.schedule(i);
+  }
+
+  /** Updates real-time timer sources. Returns true when at least one timer edge occurred. */
+  tickTime(now: number): boolean {
+    let moved = false;
+    for (const timer of this.timers) {
+      const value = now % timer.periodMs < timer.pulseMs ? 1 : 0;
+      if (this.src[timer.index] === value) continue;
+      this.src[timer.index] = value;
+      this.schedule(timer.index);
+      moved = true;
+    }
+    return moved;
   }
 
   isPressed(id: string): boolean {

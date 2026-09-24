@@ -110,10 +110,21 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
     }
   }
   for (const c of comps) {
-    const active = c.kind === 'switch' ? c.on : c.kind === 'button' ? sim.isPressed(c.id) : sim.value(c.id);
+    const active =
+      c.kind === 'switch'
+        ? c.on
+        : c.kind === 'button'
+          ? sim.isPressed(c.id)
+          : c.kind === 'rgb'
+            ? sim.value(c.id) || sim.value(c.id, 1) || sim.value(c.id, 2)
+            : sim.value(c.id);
+    const info = partInfo(pc, c, theme, active);
+    info.lanes?.forEach((lane, i) => {
+      lane.on = sim.value(c.id, i);
+    });
     const m = xformOf(c);
     const t = `matrix(${[m.a, m.b, m.c, m.d, m.e, m.f].map((n) => Math.round(n * 100) / 100).join(' ')})`;
-    out.push(`<g transform="${t}">${componentOps(c, theme, partInfo(pc, c, theme, active)).map(opToSvg).join('')}</g>`);
+    out.push(`<g transform="${t}">${componentOps(c, theme, info).map(opToSvg).join('')}</g>`);
   }
   for (const l of labels) out.push(opToSvg(l));
   for (const b of boxes) {

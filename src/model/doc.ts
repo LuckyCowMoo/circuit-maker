@@ -19,12 +19,12 @@ export function uid(doc: Doc, prefix: string): string {
 }
 
 export function makeComponent(kind: ComponentKind, x: number, y: number, id: string): Component {
-  return {
+  const c: Component = {
     id,
     kind,
     x,
     y,
-    inputs: isGate(kind) ? 2 : 0,
+    inputs: isGate(kind) ? 2 : kind === 'rgb' ? 3 : 0,
     negate: false,
     stroke: null,
     fill: null,
@@ -37,6 +37,12 @@ export function makeComponent(kind: ComponentKind, x: number, y: number, id: str
     h: IO_SIZE,
     box: null,
   };
+  if (kind === 'timer') {
+    c.period = 5;
+    c.pulse = 1;
+  }
+  if (kind === 'rgb') c.inputBundle = false;
+  return c;
 }
 
 export function componentSize(kind: ComponentKind): { w: number; h: number } {
@@ -175,7 +181,7 @@ export function nextLabel(doc: Doc, kind: ComponentKind, taken: Set<string> = ne
   const used = new Set(taken);
   const inputs = isInput(kind);
   for (const c of doc.components.values()) {
-    if (inputs ? isInput(c.kind) : c.kind === 'bulb') used.add(c.name.toUpperCase());
+    if (inputs ? isInput(c.kind) : c.kind === 'bulb' || c.kind === 'rgb') used.add(c.name.toUpperCase());
   }
   for (let n = 1; ; n++) {
     const label = inputs ? letterLabel(n) : String(n);

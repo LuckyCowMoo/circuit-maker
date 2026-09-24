@@ -104,7 +104,7 @@ interface ShapePaths {
 const shapeCache = new WeakMap<Geom, ShapePaths>();
 
 function ioBody(g: Geom): string {
-  if (g.kind === 'bulb') {
+  if (g.kind === 'bulb' || g.kind === 'rgb') {
     const w = g.w - 6;
     const h = g.h - 6;
     return roundRectD(3, 3, w, h, Math.min(w, h) / 2);
@@ -221,6 +221,55 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
     }
     return ops;
   }
+  if (c.kind === 'rgb') {
+    const mask = info.mask ?? '';
+    const cable = bundleInput(c);
+    const cableWired = mask[3] === '1';
+    const channel = info.lanes ?? [];
+    const r = channel[0]?.on ? 255 : 0;
+    const green = channel[1]?.on ? 255 : 0;
+    const b = channel[2]?.on ? 255 : 0;
+    const lit = r + green + b > 0;
+    const mixed = `rgb(${r},${green},${b})`;
+    const stub = (x0: number, x1: number, y: number, color: string) =>
+      ops.push({ t: 'path', d: `M${f(x0)} ${f(y)}H${f(x1)}`, stroke: color, width: 2 });
+    if (cable) {
+      const pin = g.inputs[0];
+      if (!cableWired) {
+        stub(pin.x, g.back[0] ?? 3, pin.y, stroke);
+        ops.push({ t: 'path', d: roundRectD(pin.x - 3, pin.y - 5, 6, 10, 2), fill: stroke });
+      }
+    } else {
+      g.inputs.forEach((pin, i) => {
+        if (mask[3 + i] !== '1') stub(pin.x, g.back[i] ?? 3, pin.y, ['#ef4444', '#22c55e', '#3b82f6'][i]);
+      });
+    }
+    if (lit) {
+      ops.push({
+        t: 'path',
+        d: roundRectD(-7, -7, g.w + 14, g.h + 14, Math.min(g.w, g.h) / 2),
+        fill: mixed,
+        alpha: 0.3,
+      });
+    }
+    ops.push({ t: 'path', d: shapes(g).body, fill: lit ? mixed : c.fill ?? undefined, stroke });
+    const labels = ['R', 'G', 'B'];
+    if (!cable) {
+      g.inputs.forEach((pin, i) =>
+        ops.push({
+          t: 'text',
+          text: labels[i],
+          x: g.w / 2,
+          y: pin.y,
+          size: 8,
+          fill: stroke,
+          bold: true,
+          anchor: 'middle',
+        }),
+      );
+    }
+    return ops;
+  }
   const s = Math.min(g.w, g.h) / IO_SIZE;
   const cx = g.w / 2;
   const cy = g.h / 2;
@@ -250,6 +299,23 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
         { t: 'path', d: rr(outer), fill: theme.trackOff, stroke, width: 1.8 },
         { t: 'path', d: rr(inner), fill: active ? onColor : fill, stroke, width: 1.8 },
       );
+      return ops;
+    }
+    case 'timer': {
+      if (stubs) ops.push({ t: 'path', d: stubs, stroke });
+      ops.push({ t: 'path', d: shapes(g).body, fill, stroke });
+      const y0 = cy + 6 * s;
+      const y1 = cy - 6 * s;
+      const x0 = cx - 12 * s;
+      const x1 = cx - 4 * s;
+      const x2 = cx + 5 * s;
+      const x3 = cx + 12 * s;
+      ops.push({
+        t: 'path',
+        d: `M${f(x0)} ${f(y0)}H${f(x1)}V${f(y1)}H${f(x2)}V${f(y0)}H${f(x3)}`,
+        stroke: active ? onColor : stroke,
+        width: 2,
+      });
       return ops;
     }
     case 'bulb': {
@@ -358,7 +424,7 @@ export function iconOps(kind: ComponentKind | 'box' | 'not' | 'ribbon-port', the
     kind,
     x: 0,
     y: 0,
-    inputs: isGate(kind) ? 2 : 0,
+    inputs: isGate(kind) ? 2 : kind === 'rgb' ? 3 : 0,
     negate,
     stroke: null,
     fill: null,
@@ -370,11 +436,22 @@ export function iconOps(kind: ComponentKind | 'box' | 'not' | 'ribbon-port', the
     w: IO_SIZE,
     h: IO_SIZE,
     box: null,
+    inputBundle: false,
   };
   const g = geomFor(kind, c.inputs, negate);
   const b = g.bounds;
   return {
-    ops: componentOps(c, theme, { active: kind === 'bulb', netOn: theme.on }),
+    ops: componentOps(c, theme, {
+      active: kind === 'bulb' || kind === 'timer',
+      netOn: theme.on,
+      lanes: kind === 'rgb'
+        ? [
+            { on: true, color: '#ef4444' },
+            { on: true, color: '#22c55e' },
+            { on: true, color: '#3b82f6' },
+          ]
+        : undefined,
+    }),
     viewBox: `${b.x - 3} ${b.y - 3} ${b.w + 6} ${b.h + 6}`,
   };
 }

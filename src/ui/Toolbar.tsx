@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Editor, ExportScope, PlaceKind } from '../editor/Editor';
 import { KIND_LABEL } from '../editor/Editor';
 import { INPUT_WARN, MAX_INPUTS } from '../model/geometry';
+import { isModifierOnly, keyBindLabel } from '../model/keys';
 import { THEMES, toHex6, wireColors } from '../model/themes';
 import { bundleInput, bundleOutput, canRotate, isGate, isRibbonPort, type Component } from '../model/types';
 import { pickFile } from '../io/download';
@@ -16,7 +17,7 @@ type Panel = 'save' | 'open' | 'theme' | 'help' | null;
 
 const PLACE_GROUPS: PlaceKind[][] = [
   ['and', 'or', 'xor', 'buffer', 'not'],
-  ['switch', 'button', 'bulb'],
+  ['switch', 'button', 'timer', 'bulb', 'rgb'],
   ['port', 'ribbon-port', 'marker', 'box'],
 ];
 
@@ -44,6 +45,57 @@ function Btn(props: {
 }
 
 const Sep = () => <div className="tb-sep" />;
+
+/** Click, then press a key to bind a switch or button. Escape cancels. */
+function KeyBindField({
+  value,
+  mixed,
+  onChange,
+}: {
+  value: string | null;
+  mixed: boolean;
+  onChange: (code: string | null) => void;
+}) {
+  const [listening, setListening] = useState(false);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  useEffect(() => {
+    if (!listening) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        setListening(false);
+        return;
+      }
+      if (e.repeat || isModifierOnly(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+      onChangeRef.current(e.code);
+      setListening(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [listening]);
+  const label = listening ? 'Press a key…' : mixed ? 'mixed' : value ? keyBindLabel(value) : 'None';
+  return (
+    <div className="props-group">
+      <span className="props-label">Key</span>
+      <button
+        type="button"
+        className={`chip key-bind ${listening ? 'active' : ''}`}
+        title={value ? `Bound to ${keyBindLabel(value)}. Click to change.` : 'Click, then press a key to bind'}
+        onClick={() => setListening((v) => !v)}
+        onBlur={() => setListening(false)}
+      >
+        {label}
+      </button>
+      {(value || mixed) && !listening && (
+        <button type="button" className="chip" title="Clear key binding" onClick={() => onChange(null)}>
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
 
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (c: string) => void }) {
   return (
@@ -110,6 +162,9 @@ function PropsBar({ editor }: { editor: Editor }) {
   const rotatable = comps.filter((c) => canRotate(c.kind));
   const markers = comps.filter((c) => c.kind === 'marker');
   const bulbs = comps.filter((c) => c.kind === 'bulb');
+  const rgbBulbs = comps.filter((c) => c.kind === 'rgb');
+  const timers = comps.filter((c) => c.kind === 'timer');
+  const keyable = comps.filter((c) => c.kind === 'switch' || c.kind === 'button');
   const named = total === 1 ? ((comps[0] && !isGate(comps[0].kind) ? comps[0] : null) ?? boxes[0] ?? null) : null;
   const tinted = [...markers, ...boxes];
   const title =
@@ -188,6 +243,62 @@ function PropsBar({ editor }: { editor: Editor }) {
             </button>
           </div>
         </>
+      )}
+      {rgbBulbs.length > 0 && (
+        <div className="props-group">
+          <span className="props-label">Input</span>
+          <button
+            type="button"
+            className={`chip ${rgbBulbs.every(bundleInput) ? 'active' : ''}`}
+            onClick={() => editor.setRgbInput(true)}
+          >
+            Cable
+          </button>
+          <button
+            type="button"
+            className={`chip ${rgbBulbs.every((c) => !bundleInput(c)) ? 'active' : ''}`}
+            onClick={() => editor.setRgbInput(false)}
+          >
+            Wires
+          </button>
+        </div>
+      )}
+      {timers.length === 1 && (
+        <>
+          <label className="props-group">
+            <span className="props-label">Cycle</span>
+            <input
+              className="number-input"
+              type="number"
+              min="0.01"
+              max="3600"
+              step="0.1"
+              value={timers[0].period ?? 5}
+              onChange={(e) => editor.setTimerTiming(Number(e.target.value), timers[0].pulse ?? 1)}
+            />
+            <span className="props-label">s</span>
+          </label>
+          <label className="props-group">
+            <span className="props-label">Pulse</span>
+            <input
+              className="number-input"
+              type="number"
+              min="0.001"
+              max={timers[0].period ?? 5}
+              step="0.1"
+              value={timers[0].pulse ?? 1}
+              onChange={(e) => editor.setTimerTiming(timers[0].period ?? 5, Number(e.target.value))}
+            />
+            <span className="props-label">s</span>
+          </label>
+        </>
+      )}
+      {keyable.length > 0 && (
+        <KeyBindField
+          value={keyable[0].key ?? null}
+          mixed={!keyable.every((c) => (c.key ?? null) === (keyable[0].key ?? null))}
+          onChange={(code) => editor.setKeyBind(code)}
+        />
       )}
       {rotatable.length > 0 && (
         <div className="props-group">
@@ -436,7 +547,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
             <li><b>Drag</b> a part from the toolbar, or click it then click the canvas</li>
             <li><b>Drag from a pin</b> to wire it; drop on empty space to add a connected part</li>
             <li><b>Drag from a wired input</b> to move or remove that wire</li>
-            <li><b>Click</b> switches to toggle; hold buttons to press</li>
+            <li><b>Click</b> switches to toggle; hold buttons to press. Select one and set a <b>Key</b> to control it from the keyboard (hold for buttons, press to toggle switches)</li>
             <li><b>Drag the NOT bubble</b> onto a gate to invert it</li>
             <li><b>Two fingers</b> to pan, <b>pinch</b> to zoom; with a mouse, <b>wheel</b> zooms and <b>right-drag</b> pans</li>
             <li><b>Right-click</b> empty space for the add menu</li>

@@ -63,16 +63,20 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `inputs` | gates                    | Number of input pins, 1 or more (default 2, maximum 256).               |
 | `not`    | gates                    | `true` adds a NOT bubble to the output (inverts it).                    |
 | `on`     | switch                   | `true` if the switch starts switched on.                                |
-| `name`   | switch, button, bulb, marker, port | Label shown beside it. Name inputs `A`, `B`, `C`... and outputs `1`, `2`, `3`... or with what they mean (`Sum`, `Carry`). |
+| `key`    | switch, button           | Keyboard binding as a `KeyboardEvent.code` (e.g. `"KeyA"`, `"Space"`). Switches toggle on press; buttons stay on while held. |
+| `period` | timer                   | Cycle length in seconds, from 0.01 to 3600 (default 5).                   |
+| `pulse`  | timer                   | High-time of each pulse in seconds (default 1, capped by `period`).      |
+| `name`   | switch, button, timer, bulb, rgb, marker, port | Label shown beside it. Name inputs `A`, `B`, `C`... and outputs `1`, `2`, `3`... or with what they mean (`Sum`, `Carry`). |
 | `color`  | marker, bulb             | Marker colour, or the colour a bulb glows. CSS colour, e.g. `"#e5484d"`. |
-| `stroke` | gates, switch, button, bulb | Outline colour. Omit to use the theme colour (recommended).          |
-| `fill`   | gates, switch, button, bulb | Interior colour. Omit to use the theme colour (recommended).         |
-| `rotate` | gates, switch, button, bulb | Clockwise rotation in degrees: `0`, `90`, `180` or `270`. Default `0` (output pointing right). |
-| `flip`   | gates, switch, button, bulb | `true` mirrors the part left to right (before rotating).             |
-| `w`, `h` | switch, button, bulb     | Body size, 20 to 400 (default 40 x 40). Use long thin bulbs for display segments. |
+| `stroke` | gates, switch, button, timer, bulb, rgb | Outline colour. Omit to use the theme colour.               |
+| `fill`   | gates, switch, button, timer, bulb, rgb | Interior colour. Bulbs are transparent when omitted.        |
+| `rotate` | gates, switch, button, timer, bulb, rgb | Clockwise rotation in degrees: `0`, `90`, `180` or `270`.    |
+| `flip`   | gates, switch, button, timer, bulb, rgb | `true` mirrors the part left to right before rotating.       |
+| `w`, `h` | switch, button, timer, bulb, rgb | Body size, 20 to 400 (default 40 x 40).                          |
 | `box`    | port                     | Id of the box whose wall the port sits in.                             |
 | `dir`    | port                     | `"in"` if the signal enters the box, `"out"` if it leaves.              |
 | `inputSide`, `outputSide` | ribbon port | `"cable"` for one ribbon socket or `"wires"` for one pin per lane. |
+| `inputSide` | rgb | `"cable"` for one 3-lane socket or `"wires"` for separate R, G and B pins. |
 
 ### Types
 
@@ -82,15 +86,18 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `or`     | `inputs` in, 1 out        | On when **any** input is on.                                              |
 | `xor`    | `inputs` in, 1 out        | On when an **odd number** of inputs are on.                               |
 | `buffer` | `inputs` in, 1 out        | Copies its input (with several inputs: on when any input is on).          |
-| `switch` | 0 in, 1 out               | Toggle input. The user clicks it to flip it on/off.                       |
-| `button` | 0 in, 1 out               | Momentary input: on only while the user holds it down.                    |
+| `switch` | 0 in, 1 out               | Toggle input. Click or a bound key toggles it.                            |
+| `button` | 0 in, 1 out               | Momentary input: on while the pointer or a bound key is held.             |
+| `timer`  | 0 in, 1 out               | Repeating pulse source controlled by `period` and `pulse` (seconds).      |
 | `bulb`   | 1 in (input `0`), 0 out   | Output indicator; lights up when its input is on.                        |
+| `rgb`    | 3 in, 0 out               | RGB indicator: inputs `0`, `1`, `2` control red, green and blue.         |
 | `marker` | none                      | Non-functional navigation flag with a `name` and `color`.                 |
 | `port`   | 1 or N in, 1 or N out     | Wire/ribbon connector. Ribbon input and output faces can independently be a cable socket or an array of lane pins. |
 
 Inverted gates are written with `"not": true`. These shorthand types are also accepted
 and are converted automatically: `nand`, `nor`, `xnor`, `not` (buffer with a bubble),
-`lamp`/`light`/`led`/`output` (bulb), `toggle`/`input` (switch), `pushbutton` (button),
+`lamp`/`light`/`led`/`output` (bulb), `rgbbulb` (RGB bulb), `clock`/`pulse` (timer),
+`toggle`/`input` (switch), `pushbutton` (button),
 `label`/`flag` (marker). Prefer the canonical form above.
 
 ### Component sizes and pin positions
@@ -139,9 +146,9 @@ General rule: `and` w = 50 if h = 40, else 60. `or` w = min(90, 60 + 10 * floor(
 
 | Field   | Meaning                                                                  |
 |---------|--------------------------------------------------------------------------|
-| `from`  | Id of the component whose **output** drives the wire (a gate, switch, button or port). |
-| `to`    | Id of the component receiving the signal (a gate, bulb or port).          |
-| `input` | Which input pin of `to`, counting from 0 at the top. Bulbs only have input `0`. |
+| `from`  | Id of the component whose **output** drives the wire (a gate, switch, button, timer or port). |
+| `to`    | Id of the component receiving the signal (a gate, bulb, RGB bulb or port). |
+| `input` | Which input pin of `to`, counting from 0. RGB uses 0=red, 1=green, 2=blue. |
 
 Rules:
 

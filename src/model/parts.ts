@@ -17,7 +17,7 @@ export interface PartContext {
 
 export function partInfo(pc: PartContext, c: Component, theme: Theme, active: boolean): DrawInfo {
   const info: DrawInfo = { active, mask: pc.masks.get(c.id) };
-  if (c.kind === 'switch' || c.kind === 'button' || c.kind === 'port') {
+  if (c.kind === 'switch' || c.kind === 'button' || c.kind === 'timer' || c.kind === 'port') {
     info.netOn = pc.colors(pc.roots.get(c.id) ?? c.id, theme).on;
   }
   if (c.kind === 'port') info.accent = (c.box && pc.doc.boxes.get(c.box)?.color) || theme.box;
@@ -36,7 +36,7 @@ export function partInfo(pc: PartContext, c: Component, theme: Theme, active: bo
 export function partLabel(doc: Doc, c: Component, theme: Theme): TextOp | null {
   if (!c.name) return null;
   if (isIO(c.kind)) {
-    const d = pinDir(c, c.kind === 'bulb' ? 0 : -1);
+    const d = pinDir(c, c.kind === 'bulb' || c.kind === 'rgb' ? 0 : -1);
     return labelBeside(bodyRect(c), { x: -d.x, y: -d.y }, c.name, theme.text);
   }
   if (c.kind === 'port') {

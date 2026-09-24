@@ -108,6 +108,29 @@ describe('ribbon ports', () => {
     expect(attachPos(bulb, 0)!.x).toBe(103);
   });
 
+  it('uses three spaced RGB wire pins or one centred cable socket', () => {
+    const rgb = makeComponent('rgb', 100, 20, 'rgb');
+    expect([0, 1, 2].map((pin) => pinPos(rgb, pin))).toEqual([
+      { x: 80, y: 30 },
+      { x: 80, y: 40 },
+      { x: 80, y: 50 },
+    ]);
+    const attach = [0, 1, 2].map((pin) => attachPos(rgb, pin)!);
+    expect(attach[1]).toEqual({ x: 103, y: 40 });
+    // R and B meet the circle further right than the mid-height tangent.
+    expect(attach[0].x).toBeGreaterThan(attach[1].x);
+    expect(attach[2].x).toBeGreaterThan(attach[1].x);
+    expect(attach[0].x).toBeCloseTo(attach[2].x, 5);
+    expect(attach[0].y).toBe(30);
+    expect(attach[2].y).toBe(50);
+
+    rgb.inputBundle = true;
+    expect(pinPos(rgb, 0)).toEqual({ x: 80, y: 40 });
+    expect(attachPos(rgb, 0)).toEqual({ x: 103, y: 40 });
+    expect(pinPos(rgb, 1)).toBeNull();
+    expect(pinPos(rgb, 2)).toBeNull();
+  });
+
   it('normalises and round-trips wired free ports with independent face modes', () => {
     const doc = emptyDoc();
     const a = makeComponent('port', 0, 0, 'a');

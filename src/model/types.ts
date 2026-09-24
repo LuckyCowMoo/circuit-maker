@@ -1,6 +1,6 @@
 export const GATE_KINDS = ['and', 'or', 'xor', 'buffer'] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
-export const IO_KINDS = ['switch', 'button', 'bulb'] as const;
+export const IO_KINDS = ['switch', 'button', 'timer', 'bulb', 'rgb'] as const;
 export type IOKind = (typeof IO_KINDS)[number];
 /** `port` is the connector where a wire passes through the wall of a box. */
 export type ComponentKind = GateKind | IOKind | 'marker' | 'port';
@@ -37,6 +37,15 @@ export interface Component {
   fill: string | null;
   /** Switch state. */
   on: boolean;
+  /**
+   * Keyboard binding for switches and buttons (`KeyboardEvent.code`, e.g. `"KeyA"`, `"Space"`).
+   * Switches toggle on press; buttons stay on while the key is held.
+   */
+  key?: string | null;
+  /** Timer cycle length in seconds. */
+  period?: number;
+  /** Timer high-time in seconds. */
+  pulse?: number;
   /** Label of a marker, switch, button, bulb or port. */
   name: string;
   /** Marker colour or bulb lit colour, or null for the theme default. */
@@ -100,9 +109,10 @@ export interface Doc {
 export const isGate = (k: ComponentKind): k is GateKind =>
   k === 'and' || k === 'or' || k === 'xor' || k === 'buffer';
 
-export const isIO = (k: ComponentKind): k is IOKind => k === 'switch' || k === 'button' || k === 'bulb';
+export const isIO = (k: ComponentKind): k is IOKind =>
+  k === 'switch' || k === 'button' || k === 'timer' || k === 'bulb' || k === 'rgb';
 
-export const isInput = (k: ComponentKind): boolean => k === 'switch' || k === 'button';
+export const isInput = (k: ComponentKind): boolean => k === 'switch' || k === 'button' || k === 'timer';
 
 /** Parts the user can rotate, flip and (for IO) resize. */
 export const canRotate = (k: ComponentKind): boolean => isGate(k) || isIO(k);
@@ -111,18 +121,19 @@ export const canRotate = (k: ComponentKind): boolean => isGate(k) || isIO(k);
 export const CABLE_MIN = 4;
 
 export const hasOutput = (k: ComponentKind): boolean =>
-  isGate(k) || k === 'switch' || k === 'button' || k === 'port';
+  isGate(k) || k === 'switch' || k === 'button' || k === 'timer' || k === 'port';
 
 /** How many signals a ribbon port carries. */
 export const laneCount = (c: Component): number =>
-  c.kind === 'port' && c.inputs > 1 ? Math.max(1, c.inputs) : 1;
+  c.kind === 'rgb' ? 3 : c.kind === 'port' && c.inputs > 1 ? Math.max(1, c.inputs) : 1;
 
 /** A multi-lane port that can take a ribbon cable (or individual lane wires). */
 export const isRibbonPort = (c: Component): boolean => c.kind === 'port' && c.inputs > 1;
 
 /** Whether each face of a ribbon port is a cable socket. Legacy `plug` supplies the default. */
 export const bundleInput = (c: Component): boolean =>
-  isRibbonPort(c) && (c.inputBundle ?? c.plug === 'in');
+  (c.kind === 'rgb' && c.inputBundle === true) ||
+  (isRibbonPort(c) && (c.inputBundle ?? c.plug === 'in'));
 export const bundleOutput = (c: Component): boolean =>
   isRibbonPort(c) && (c.outputBundle ?? c.plug === 'out');
 
@@ -133,6 +144,7 @@ export const inputCount = (c: Component): number => {
   // Ribbon ports accept one wire per lane (input index = lane), whether the plug faces in or out.
   if (c.kind === 'port' && c.inputs > 1) return Math.max(1, c.inputs);
   if (isGate(c.kind)) return Math.max(1, c.inputs);
+  if (c.kind === 'rgb') return 3;
   if (c.kind === 'bulb' || c.kind === 'port') return Math.max(1, c.inputs || 1);
   return 0;
 };

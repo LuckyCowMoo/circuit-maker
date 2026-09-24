@@ -8,8 +8,15 @@ import { useEditor } from './useEditor';
 function Row({ editor, c }: { editor: Editor; c: Component }) {
   const theme = editor.theme;
   const active = editor.isActive(c);
-  const color =
-    c.kind === 'bulb' ? (c.color ?? theme.bulb) : colorsFor(editor.parts.roots.get(c.id) ?? c.id, theme).on;
+  const rgb =
+    c.kind === 'rgb'
+      ? [0, 1, 2].map((lane) => (editor.sim.value(c.id, lane) ? 255 : 0))
+      : null;
+  const color = rgb
+    ? `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`
+    : c.kind === 'bulb'
+      ? (c.color ?? theme.bulb)
+      : colorsFor(editor.parts.roots.get(c.id) ?? c.id, theme).on;
   const control =
     c.kind === 'switch' ? (
       <button
@@ -87,7 +94,7 @@ export function SideList({
               ))}
             </ul>
           ) : (
-            <p className="hint">{which === 'inputs' ? 'No switches or buttons yet.' : 'No light bulbs yet.'}</p>
+            <p className="hint">{which === 'inputs' ? 'No switches, buttons or timers yet.' : 'No light bulbs yet.'}</p>
           )}
         </div>
       ) : (

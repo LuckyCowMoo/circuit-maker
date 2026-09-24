@@ -23,6 +23,11 @@ export interface FileComponent {
   inputs?: number;
   not?: boolean;
   on?: boolean;
+  /** Keyboard binding for switches and buttons (`KeyboardEvent.code`). */
+  key?: string;
+  /** Timer cycle length and high-time in seconds. */
+  period?: number;
+  pulse?: number;
   name?: string;
   color?: string;
   stroke?: string;
@@ -91,6 +96,11 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
     }
     if (c.kind === 'port' && c.inputs > 1) fc.inputs = c.inputs;
     if (c.kind === 'switch' && c.on) fc.on = true;
+    if ((c.kind === 'switch' || c.kind === 'button') && c.key) fc.key = c.key;
+    if (c.kind === 'timer') {
+      fc.period = c.period ?? 5;
+      fc.pulse = c.pulse ?? 1;
+    }
     if (c.kind === 'marker' || (c.name && !isGate(c.kind))) fc.name = c.name;
     if (c.color && (c.kind === 'marker' || c.kind === 'bulb')) fc.color = c.color;
     if (c.stroke && c.kind !== 'marker' && c.kind !== 'port') fc.stroke = c.stroke;
@@ -117,6 +127,7 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
         fc.outputSide = bundleOutput(c) ? 'cable' : 'wires';
       }
     }
+    if (c.kind === 'rgb') fc.inputSide = bundleInput(c) ? 'cable' : 'wires';
     components.push(fc);
   }
   const wires: FileWire[] = [];
@@ -184,11 +195,16 @@ const TYPE_ALIASES: Record<string, { kind: ComponentKind; not?: boolean }> = {
   button: { kind: 'button' },
   pushbutton: { kind: 'button' },
   push: { kind: 'button' },
+  timer: { kind: 'timer' },
+  clock: { kind: 'timer' },
+  pulse: { kind: 'timer' },
   bulb: { kind: 'bulb' },
   lamp: { kind: 'bulb' },
   light: { kind: 'bulb' },
   led: { kind: 'bulb' },
   output: { kind: 'bulb' },
+  rgb: { kind: 'rgb' },
+  rgbbulb: { kind: 'rgb' },
   marker: { kind: 'marker' },
   label: { kind: 'marker' },
   flag: { kind: 'marker' },
@@ -274,6 +290,28 @@ export function parseCircuit(text: string): ParseResult {
     }
     if (c.kind === 'port' && o.inputs != null) c.inputs = Math.max(1, Math.min(MAX_INPUTS, Math.round(num(o.inputs, 1))));
     if (c.kind === 'switch') c.on = o.on === true;
+    if (c.kind === 'switch' || c.kind === 'button') {
+      const bind = str(o.key);
+      if (bind) c.key = bind;
+    }
+    if (c.kind === 'timer') {
+      // Prefer seconds; still accept the short-lived Hz / ms fields from early drafts.
+      const period =
+        o.period != null
+          ? num(o.period, 5)
+          : o.frequency != null
+            ? 1 / Math.max(0.01, num(o.frequency, 1))
+            : 5;
+      const pulse =
+        o.pulse != null
+          ? num(o.pulse, 1)
+          : o.pulseMs != null
+            ? num(o.pulseMs, 1000) / 1000
+            : 1;
+      c.period = Math.max(0.01, Math.min(3600, period));
+      c.pulse = Math.max(0.001, Math.min(c.period, pulse));
+    }
+    if (c.kind === 'rgb') c.inputBundle = o.inputSide === 'cable';
     if (c.kind === 'marker') c.name = str(o.name) ?? 'Marker';
     else if (!isGate(c.kind)) c.name = str(o.name) ?? '';
     c.color = color(o.color);
