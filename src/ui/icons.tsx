@@ -165,4 +165,45 @@ export const Icons = {
       <path d="M6 15l6-6 6 6" />
     </Svg>
   ),
+  navigation: (
+    <Svg>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M14.6 9.4l-1.3 4.1-4.1 1.3 1.3-4.1z" fill="currentColor" stroke="none" />
+    </Svg>
+  ),
+  gates: (
+    <Svg>
+      <path d="M6 5h6a6 6 0 010 12H6z" />
+      <path d="M3 8h3M3 14h3M18 11h3" />
+    </Svg>
+  ),
+  io: (
+    <Svg>
+      <rect x="3" y="8" width="14" height="8" rx="4" />
+      <circle cx="13" cy="12" r="2.2" />
+      <path d="M17 12h4" />
+    </Svg>
+  ),
+  comments: (
+    <Svg>
+      <path d="M4 8c1.6-1.6 3.2 1.6 4.8 0S12.4 9.6 14 8s3.2 1.6 4.8 0 1.2-1.6 1.2 0v7c-1.6 1.6-3.2-1.6-4.8 0s-3.2 1.6-4.8 0-3.2-1.6-4.8 0S4 16.6 4 15z" />
+    </Svg>
+  ),
+  components: (
+    <Svg>
+      <rect x="7" y="6" width="10" height="12" rx="2" />
+      <path d="M3 9h4M3 15h4M17 12h4" />
+    </Svg>
+  ),
+  time: (
+    <Svg>
+      <circle cx="12" cy="13" r="7" />
+      <path d="M12 10v3.5l2.5 1.5M8 4.5h8" />
+    </Svg>
+  ),
+  menu: (
+    <Svg>
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </Svg>
+  ),
 };

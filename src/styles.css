@@ -99,10 +99,106 @@ button {
   scrollbar-width: none;
 }
 
+.toolbar.thin {
+  overflow: visible;
+}
+
+.toolbar.inline {
+  overflow: hidden;
+}
+
+.tb-slot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+
+.tb-slot-icon {
+  transition: width 0.28s ease, opacity 0.2s ease, margin 0.28s ease;
+}
+
+.tb-slot.open .tb-slot-icon {
+  width: 0;
+  min-width: 0;
+  opacity: 0;
+  pointer-events: none;
+  margin: 0;
+  overflow: hidden;
+}
+
+.tb-reveal {
+  display: flex;
+  max-width: 0;
+  overflow: hidden;
+  transition: max-width 0.28s ease;
+}
+
+.tb-slot.open .tb-reveal {
+  max-width: var(--slot-w);
+}
+
+.tb-reveal-inner {
+  display: flex;
+  gap: 2px;
+  transform: translateX(calc(var(--slide) * -18px));
+  transition: transform 0.28s ease;
+}
+
+.tb-slot.open .tb-reveal-inner {
+  transform: translateX(0);
+}
+
+.tb-body-probe {
+  position: absolute;
+  display: flex;
+  gap: 2px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .tb-group {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+.tb-seg {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.tb-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 16px;
+  z-index: 6;
+}
+
+.tb-seg:first-child .tb-pop {
+  left: 0;
+  transform: none;
+}
+
+.tb-seg:last-child .tb-pop {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.tb-measure {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .tb-sep {
@@ -111,6 +207,26 @@ button {
   margin: 0 5px;
   background: var(--ui-border);
   flex: none;
+}
+
+.inline-label {
+  position: fixed;
+  z-index: 8;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+  font-weight: 700;
+  font-family: inherit;
+  display: block;
+  box-sizing: border-box;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 
 .tb-btn {
@@ -707,6 +823,7 @@ kbd {
 /* ---------------------------------------------------------------- inputs / outputs lists */
 
 .tb-row {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: end;

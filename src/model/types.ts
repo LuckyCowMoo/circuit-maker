@@ -3,8 +3,8 @@ export type GateKind = (typeof GATE_KINDS)[number];
 export const IO_KINDS = ['switch', 'button', 'timer', 'bulb', 'rgb'] as const;
 export type IOKind = (typeof IO_KINDS)[number];
 /** `port` is the connector where a wire passes through the wall of a box. */
-export type ComponentKind = GateKind | IOKind | 'marker' | 'port';
-export const COMPONENT_KINDS: readonly ComponentKind[] = [...GATE_KINDS, ...IO_KINDS, 'marker', 'port'];
+export type ComponentKind = GateKind | IOKind | 'marker' | 'note' | 'port';
+export const COMPONENT_KINDS: readonly ComponentKind[] = [...GATE_KINDS, ...IO_KINDS, 'marker', 'note', 'port'];
 
 export interface Point {
   x: number;
@@ -143,6 +143,7 @@ export const bundleDest = bundleInput;
 export const inputCount = (c: Component): number => {
   // Ribbon ports accept one wire per lane (input index = lane), whether the plug faces in or out.
   if (c.kind === 'port' && c.inputs > 1) return Math.max(1, c.inputs);
+  if (c.kind === 'buffer') return 1;
   if (isGate(c.kind)) return Math.max(1, c.inputs);
   if (c.kind === 'rgb') return 3;
   if (c.kind === 'bulb' || c.kind === 'port') return Math.max(1, c.inputs || 1);

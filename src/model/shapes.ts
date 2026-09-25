@@ -40,6 +40,232 @@ export interface DrawInfo {
 
 const f = (n: number) => Math.round(n * 100) / 100;
 
+export const NOTE_BG = '#ffe08a';
+
+/** Hue opposite `hex`, with lightness chosen so the text stays readable. */
+export function complementColor(hex: string): string {
+  const raw = hex.trim();
+  const m = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(raw);
+  if (!m) return '#073642';
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let hue = 0;
+  const d = max - min;
+  if (d > 1e-6) {
+    if (max === r) hue = ((g - b) / d) % 6;
+    else if (max === g) hue = (b - r) / d + 2;
+    else hue = (r - g) / d + 4;
+    hue *= 60;
+    if (hue < 0) hue += 360;
+  }
+  const nh = (hue + 180) % 360;
+  const nl = l > 0.55 ? 0.16 : 0.94;
+  const c = (1 - Math.abs(2 * nl - 1)) * 0.72;
+  const x = c * (1 - Math.abs(((nh / 60) % 2) - 1));
+  const m2 = nl - c / 2;
+  const seg = Math.floor(nh / 60);
+  const rgb =
+    seg === 0 ? [c, x, 0] : seg === 1 ? [x, c, 0] : seg === 2 ? [0, c, x] : seg === 3 ? [0, x, c] : seg === 4 ? [x, 0, c] : [c, 0, x];
+  const hex2 = (v: number) => Math.round(Math.min(1, Math.max(0, v + m2)) * 255).toString(16).padStart(2, '0');
+  return `#${hex2(rgb[0])}${hex2(rgb[1])}${hex2(rgb[2])}`;
+}
+
+const WAVE_K = 0.5522847498;
+
+export function noteAmp(w: number, h: number): number {
+  return Math.max(3.5, Math.min(7, Math.min(w, h) * 0.07));
+}
+
+/** Space kept inside the wave, between the outline and the words. */
+export const notePad = (w: number, h: number): number => noteAmp(w, h) + 22;
+
+const NOTE_FONT = "Inter, 'Segoe UI', system-ui, -apple-system, sans-serif";
+
+export interface NoteLine {
+  text: string;
+  start: number;
+}
+
+export interface NoteLayout {
+  pad: number;
+  innerW: number;
+  innerH: number;
+  size: number;
+  lineH: number;
+  lines: NoteLine[];
+}
+
+let noteMeasure: CanvasRenderingContext2D | null = null;
+
+function noteWidth(text: string, size: number): number {
+  if (noteMeasure === null && typeof document !== 'undefined') {
+    noteMeasure = document.createElement('canvas').getContext('2d');
+  }
+  if (!noteMeasure) return text.length * size * 0.56;
+  noteMeasure.font = `700 ${size}px ${NOTE_FONT}`;
+  return noteMeasure.measureText(text).width;
+}
+
+/** Breaks text on spaces so each line fits `maxW`. A word longer than the line breaks on its own. */
+export function wrapNote(text: string, maxW: number, size: number): NoteLine[] {
+  if (!text) return [{ text: '', start: 0 }];
+  const lines: NoteLine[] = [];
+  let i = 0;
+  while (i < text.length) {
+    if (lines.length && text[i] === ' ') i++;
+    if (i >= text.length) break;
+    let end = i;
+    let breakAt = -1;
+    while (end < text.length && text[end] !== '\n') {
+      const next = end + 1;
+      if (next > i + 1 && noteWidth(text.slice(i, next), size) > maxW) break;
+      if (text[end] === ' ') breakAt = end;
+      end = next;
+    }
+    if (end < text.length && text[end] !== '\n' && breakAt > i) end = breakAt;
+    if (end === i) end = Math.min(text.length, i + 1);
+    lines.push({ text: text.slice(i, end).trimEnd(), start: i });
+    i = end;
+    if (text[i] === ' ' || text[i] === '\n') i++;
+  }
+  return lines.length ? lines : [{ text: '', start: 0 }];
+}
+
+/** Font size and wrapped lines for a text box, centered in the area inside the padding. */
+export function noteLayout(text: string, w: number, h: number): NoteLayout {
+  const pad = notePad(w, h);
+  const innerW = Math.max(8, w - pad * 2);
+  const innerH = Math.max(8, h - pad * 2);
+  let size = Math.min(32, innerH * 0.62);
+  let lines = wrapNote(text, innerW, size);
+  const lineH = (s: number) => s * 1.25;
+  while (size > 8 && lines.length * lineH(size) > innerH) {
+    size -= 1;
+    lines = wrapNote(text, innerW, size);
+  }
+  return { pad, innerW, innerH, size, lineH: lineH(size), lines };
+}
+
+/** Character index in `text` nearest a point in the box's local coordinates. */
+export function noteCaret(text: string, w: number, h: number, x: number, y: number): number {
+  const layout = noteLayout(text, w, h);
+  const block = layout.lines.length * layout.lineH;
+  const top = layout.pad + (layout.innerH - block) / 2;
+  if (y <= top) return 0;
+  if (y >= top + block) return text.length;
+  const line = layout.lines[Math.min(layout.lines.length - 1, Math.floor((y - top) / layout.lineH))];
+  const shown = line.text;
+  const lineW = noteWidth(shown, layout.size);
+  const left = layout.pad + (layout.innerW - lineW) / 2;
+  if (x <= left) return line.start;
+  let acc = 0;
+  for (let i = 0; i < shown.length; i++) {
+    const dw = noteWidth(shown[i], layout.size);
+    if (x < left + acc + dw / 2) return line.start + i;
+    acc += dw;
+  }
+  return Math.min(text.length, line.start + shown.length);
+}
+
+function hashSeed(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Wave spans that average about 45px, then exactly fill `length`. */
+function waveSpans(length: number, rand: () => number): number[] {
+  if (length < 1) return [];
+  const spans: number[] = [];
+  let used = 0;
+  while (used < length - 0.5) {
+    const span = 45 * (0.62 + rand() * 0.76);
+    const room = length - used;
+    if (spans.length && room < span * 0.55) {
+      spans[spans.length - 1] += room;
+      break;
+    }
+    const next = Math.min(span, room);
+    spans.push(next);
+    used += next;
+  }
+  return spans;
+}
+
+/** Smooth bumps of uneven length. Each crest reaches a different distance toward the center. */
+function waveSide(x: number, y: number, dx: number, dy: number, length: number, amp: number, rand: () => number): string {
+  const spans = waveSpans(length, rand);
+  if (!spans.length) return '';
+  const ux = dx / length;
+  const uy = dy / length;
+  const ix = -uy;
+  const iy = ux;
+  let d = '';
+  let s = 0;
+  for (const wave of spans) {
+    const depth = amp * (0.25 + rand() * 1.45);
+    const half = wave / 2;
+    const k = half / 3;
+    const m = s + half;
+    const e = s + wave;
+    const sx = x + ux * s;
+    const sy = y + uy * s;
+    const mx = x + ux * m + ix * depth;
+    const my = y + uy * m + iy * depth;
+    const ex = x + ux * e;
+    const ey = y + uy * e;
+    d += `C${f(sx + ux * k)} ${f(sy + uy * k)} ${f(mx - ux * k)} ${f(my - uy * k)} ${f(mx)} ${f(my)}`;
+    d += `C${f(mx + ux * k)} ${f(my + uy * k)} ${f(ex - ux * k)} ${f(ey - uy * k)} ${f(ex)} ${f(ey)}`;
+    s = e;
+  }
+  return d;
+}
+
+/** The wavy hole outline in component-local coordinates. */
+export function noteHole(w: number, h: number, seed: string): string {
+  return wavyRect(w, h, seed);
+}
+
+/** Rectangle whose sides are smooth waves, joined by round corners. `seed` keeps one box stable. */
+function wavyRect(w: number, h: number, seed = 'note'): string {
+  const amp = noteAmp(w, h);
+  const rand = mulberry32(hashSeed(seed));
+  const r = Math.min(amp, w / 4, h / 4);
+  const top = Math.max(0, w - 2 * r);
+  const side = Math.max(0, h - 2 * r);
+  const kr = WAVE_K * r;
+  return (
+    `M${f(r)} 0` +
+    waveSide(r, 0, top, 0, top, amp, rand) +
+    `C${f(w - r + kr)} 0 ${f(w)} ${f(r - kr)} ${f(w)} ${f(r)}` +
+    waveSide(w, r, 0, side, side, amp, rand) +
+    `C${f(w)} ${f(h - r + kr)} ${f(w - r + kr)} ${f(h)} ${f(w - r)} ${f(h)}` +
+    waveSide(w - r, h, -top, 0, top, amp, rand) +
+    `C${f(r - kr)} ${f(h)} 0 ${f(h - r + kr)} 0 ${f(h - r)}` +
+    waveSide(0, h - r, 0, -side, side, amp, rand) +
+    `C0 ${f(r - kr)} ${f(r - kr)} 0 ${f(r)} 0Z`
+  );
+}
+
 export function circlePath(cx: number, cy: number, r: number): string {
   return `M${f(cx + r)} ${f(cy)}A${f(r)} ${f(r)} 0 1 1 ${f(cx - r)} ${f(cy)}A${f(r)} ${f(r)} 0 1 1 ${f(cx + r)} ${f(cy)}Z`;
 }
@@ -354,12 +580,37 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
       if (Math.min(g.w, g.h) >= 30) ops.push({ t: 'path', d: filament(g), stroke: power > 0.5 ? '#6b3f00' : stroke, width: 1.6 });
       return ops;
     }
+    case 'note': {
+      const bg = c.color ?? NOTE_BG;
+      const ink = complementColor(bg);
+      const label = c.name || 'Text';
+      const layout = noteLayout(label, g.w, g.h);
+      const block = layout.lines.length * layout.lineH;
+      const y0 = layout.pad + (layout.innerH - block) / 2 + layout.lineH / 2;
+      ops.push({ t: 'path', d: wavyRect(g.w, g.h, c.id), fill: bg, stroke: ink, width: 1.8 });
+      layout.lines.forEach((line, i) => {
+        if (!line.text) return;
+        ops.push({
+          t: 'text',
+          text: line.text,
+          x: g.w / 2,
+          y: y0 + i * layout.lineH,
+          size: layout.size,
+          fill: ink,
+          bold: true,
+          anchor: 'middle',
+        });
+      });
+      return ops;
+    }
     case 'port': {
       const accent = info.accent ?? theme.box;
-      return [
+      if (stubs) ops.push({ t: 'path', d: stubs, stroke: accent, width: 2 });
+      ops.push(
         { t: 'path', d: PORT_PLUG, fill: theme.bg, stroke: accent, width: 2 },
         { t: 'path', d: PORT_ARROW, fill: active ? onColor : accent },
-      ];
+      );
+      return ops;
     }
     default: {
       const color = c.color ?? theme.marker;
@@ -408,8 +659,22 @@ export function portLabel(center: Point, out: Point, text: string, fill: string)
   return { t: 'text', text, x: center.x + 14, y: center.y + out.y * 12, size, fill, bold: true, anchor: 'start' };
 }
 
+function wavyIcon(): DrawOp[] {
+  const ink = complementColor(NOTE_BG);
+  return [{ t: 'path', d: wavyRect(56, 32, 'note-icon'), fill: NOTE_BG, stroke: ink, width: 1.6 }];
+}
+
 /** Small preview used by toolbar icons. */
 export function iconOps(kind: ComponentKind | 'box' | 'not' | 'ribbon-port', theme: Theme, negate = false): { ops: DrawOp[]; viewBox: string } {
+  if (kind === 'note') {
+    return {
+      ops: [
+        ...wavyIcon(),
+        { t: 'text', text: 'Text', x: 28, y: 16, size: 11, fill: complementColor(NOTE_BG), bold: true, anchor: 'middle' },
+      ],
+      viewBox: '0 0 56 32',
+    };
+  }
   if (kind === 'box') {
     return {
       ops: [
@@ -446,7 +711,7 @@ export function iconOps(kind: ComponentKind | 'box' | 'not' | 'ribbon-port', the
     kind,
     x: 0,
     y: 0,
-    inputs: isGate(kind) ? 2 : kind === 'rgb' ? 3 : 0,
+    inputs: kind === 'buffer' ? 1 : isGate(kind) ? 2 : kind === 'rgb' ? 3 : 0,
     negate,
     stroke: null,
     fill: null,

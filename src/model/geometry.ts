@@ -1,5 +1,5 @@
 import type { Component, ComponentKind, Point, Rect, Rotation } from './types';
-import { bundleDest, bundleInput, bundleOutput, bundleSource, isGate } from './types';
+import { bundleDest, bundleInput, bundleOutput, bundleSource, isGate, isRibbonPort } from './types';
 
 export const GRID = 10;
 export const PIN_LEN = 20;
@@ -50,6 +50,7 @@ const KIND_INDEX: Record<ComponentKind, number> = {
   bulb: 7,
   rgb: 8,
   marker: 9,
+  note: 11,
   port: 10,
 };
 
@@ -190,11 +191,13 @@ function build(
         w: PORT_SIZE,
         h: PORT_SIZE,
         tip: PORT_SIZE,
-        inputs: [{ x: 0, y: PORT_SIZE / 2 }],
+        inputs: [{ x: -PIN_LEN, y: PORT_SIZE / 2 }],
         back: [0],
-        output: { x: PORT_SIZE, y: PORT_SIZE / 2 },
-        bounds: { x: 0, y: 0, w: PORT_SIZE, h: PORT_SIZE },
+        output: { x: PORT_SIZE + PIN_LEN, y: PORT_SIZE / 2 },
+        bounds: { x: -PIN_LEN, y: 0, w: PORT_SIZE + 2 * PIN_LEN, h: PORT_SIZE },
       };
+    case 'note':
+      return { ...base, w, h, tip: w, inputs: [], output: null, bounds: { x: 0, y: 0, w, h } };
     default:
       return { ...base, w: 30, h: 40, tip: 30, inputs: [], output: null, bounds: { x: 0, y: 0, w: 30, h: 40 } };
   }
@@ -211,7 +214,7 @@ export function geomFor(
 ): Geom {
   const gate = isGate(kind);
   const wide = kind === 'port' && n > 1;
-  const io = kind === 'switch' || kind === 'button' || kind === 'timer' || kind === 'bulb' || kind === 'rgb';
+  const io = kind === 'switch' || kind === 'button' || kind === 'timer' || kind === 'bulb' || kind === 'rgb' || kind === 'note';
   const key =
     KIND_INDEX[kind] * 1_000_000 +
     (inputBundle ? 500_000 : 0) +
@@ -424,12 +427,18 @@ export function wireCurve(a: Point, b: Point, da: Point = RIGHT, db: Point = LEF
   return { a, c1: { x: a.x + da.x * k, y: a.y + da.y * k }, c2: { x: b.x + db.x * k, y: b.y + db.y * k }, b };
 }
 
-/** The curve of a wire from `src`'s output to input `input` of `dst`. */
+/** Pin a wire end attaches to. A single wire into a cable-input port lands on that lane's wire pin. */
+export function wireEndPin(c: Component, pin: number, cable = false): number {
+  if (cable) return bundleDest(c) && pin >= 0 ? 0 : bundleSource(c) && pin < 0 ? -1 : pin;
+  if (pin >= 0 && bundleInput(c) && !bundleOutput(c) && isRibbonPort(c)) return -1 - pin;
+  if (pin < 0 && bundleOutput(c) && !bundleInput(c) && isRibbonPort(c)) return -pin - 1;
+  return pin;
+}
 export function wireBetween(src: Component, dst: Component, input: number, lane = 0): WireCurve | null {
-  const a = attachPos(src, bundleSource(src) ? -1 : -1 - lane);
-  const b = attachPos(dst, bundleDest(dst) ? 0 : input);
+  const a = attachPos(src, wireEndPin(src, bundleSource(src) ? -1 : -1 - lane, false));
+  const b = attachPos(dst, wireEndPin(dst, input, false));
   if (!a || !b) return null;
-  return wireCurve(a, b, pinDir(src, -1), pinDir(dst, input));
+  return wireCurve(a, b, pinDir(src, -1), pinDir(dst, wireEndPin(dst, input, false)));
 }
 
 export function curveBounds(c: WireCurve): Rect {

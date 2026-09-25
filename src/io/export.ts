@@ -30,7 +30,9 @@ function opToSvg(op: DrawOp): string {
     return `<text x="${op.x}" y="${op.y}" font-size="${op.size}" font-weight="${op.bold ? 700 : 400}" fill="${esc(op.fill)}" text-anchor="${anchor}" dominant-baseline="middle">${esc(op.text)}</text>`;
   }
   const attrs = [`d="${op.d}"`, `fill="${op.fill ? esc(op.fill) : 'none'}"`];
-  if (op.stroke) attrs.push(`stroke="${esc(op.stroke)}"`, `stroke-width="${op.width ?? STROKE_W}"`);
+  if (op.stroke) {
+    attrs.push(`stroke="${esc(op.stroke)}"`, `stroke-width="${op.width ?? STROKE_W}"`);
+  }
   if (op.alpha !== undefined) attrs.push(`opacity="${op.alpha}"`);
   return `<path ${attrs.join(' ')}/>`;
 }

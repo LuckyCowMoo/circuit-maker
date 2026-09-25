@@ -23,6 +23,7 @@ const KIND_CODE: Record<ComponentKind, number> = {
   bulb: K_BULB,
   rgb: K_BULB,
   marker: K_MARKER,
+  note: K_MARKER,
   port: K_BUF,
 };
 

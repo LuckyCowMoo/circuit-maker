@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Editor } from './editor/Editor';
+import { LabelEdit } from './ui/LabelEdit';
 import { Toolbar } from './ui/Toolbar';
 import { ContextMenu } from './ui/ContextMenu';
 import { useEditor } from './ui/useEditor';
@@ -45,6 +46,7 @@ export default function App() {
   return (
     <>
       <canvas ref={canvasRef} className="stage" tabIndex={0} aria-label="Circuit canvas" />
+      <LabelEdit editor={editor} />
       <ContextMenu editor={editor} />
       <Toolbar editor={editor} />
     </>

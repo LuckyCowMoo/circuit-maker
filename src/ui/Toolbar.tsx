@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Editor, ExportScope, PlaceKind } from '../editor/Editor';
 import { KIND_LABEL } from '../editor/Editor';
 import { INPUT_WARN, MAX_INPUTS } from '../model/geometry';
 import { isModifierOnly, keyBindLabel } from '../model/keys';
+import { NOTE_BG } from '../model/shapes';
 import { THEMES, toHex6, wireColors } from '../model/themes';
 import { bundleInput, bundleOutput, canRotate, isGate, isRibbonPort, type Component } from '../model/types';
 import { pickFile } from '../io/download';
@@ -18,7 +19,8 @@ type Panel = 'save' | 'open' | 'theme' | 'help' | 'live' | null;
 const PLACE_GROUPS: PlaceKind[][] = [
   ['and', 'or', 'xor', 'buffer', 'not'],
   ['switch', 'button', 'timer', 'bulb', 'rgb'],
-  ['port', 'ribbon-port', 'marker', 'box'],
+  ['marker', 'note'],
+  ['port', 'ribbon-port', 'box'],
 ];
 
 function Btn(props: {
@@ -156,6 +158,7 @@ const COUNT_ORDER = [
   'Wire port',
   'Ribbon port',
   'Marker',
+  'Text box',
   'Box',
 ];
 
@@ -192,16 +195,18 @@ function PropsBar({ editor }: { editor: Editor }) {
   if (!total) return null;
   const gates = comps.filter((c) => isGate(c.kind));
   const ports = comps.filter((c) => c.kind === 'port');
-  const widthParts = [...gates, ...ports];
-  const colourable = comps.filter((c) => c.kind !== 'marker' && c.kind !== 'port');
+  const inputGates = gates.filter((g) => g.kind !== 'buffer');
+  const widthParts = [...inputGates, ...ports];
+  const colourable = comps.filter((c) => c.kind !== 'marker' && c.kind !== 'port' && c.kind !== 'note');
   const rotatable = comps.filter((c) => canRotate(c.kind));
   const markers = comps.filter((c) => c.kind === 'marker');
+  const notes = comps.filter((c) => c.kind === 'note');
   const bulbs = comps.filter((c) => c.kind === 'bulb');
   const rgbBulbs = comps.filter((c) => c.kind === 'rgb');
   const timers = comps.filter((c) => c.kind === 'timer');
   const keyable = comps.filter((c) => c.kind === 'switch' || c.kind === 'button');
   const named = total === 1 ? ((comps[0] && !isGate(comps[0].kind) ? comps[0] : null) ?? boxes[0] ?? null) : null;
-  const tinted = [...markers, ...boxes];
+  const tinted = [...markers, ...notes, ...boxes];
   const title =
     total === 1
       ? comps[0]
@@ -216,15 +221,19 @@ function PropsBar({ editor }: { editor: Editor }) {
   return (
     <div className="props" onPointerDown={(e) => e.stopPropagation()}>
       <span className="props-title">{title}</span>
-      {widthParts.length > 0 && (
+      {(widthParts.length > 0 || gates.length > 0) && (
         <div className="props-group">
-          <span className="props-label">{widthParts.every((p) => p.kind === 'port') ? 'Width' : 'Inputs'}</span>
-          <Stepper
-            value={widthParts[0].inputs || 1}
-            mixed={!widthParts.every((p) => (p.inputs || 1) === (widthParts[0].inputs || 1))}
-            onChange={(n) => editor.setInputs(n)}
-          />
-          {gates.some((g) => g.inputs > INPUT_WARN) && (
+          {widthParts.length > 0 && (
+            <>
+              <span className="props-label">{widthParts.every((p) => p.kind === 'port') ? 'Width' : 'Inputs'}</span>
+              <Stepper
+                value={widthParts[0].inputs || 1}
+                mixed={!widthParts.every((p) => (p.inputs || 1) === (widthParts[0].inputs || 1))}
+                onChange={(n) => editor.setInputs(n)}
+              />
+            </>
+          )}
+          {inputGates.some((g) => g.inputs > INPUT_WARN) && (
             <span className="warn" title="Very large gates are fine to simulate but hard to wire and read.">
               large
             </span>
@@ -381,8 +390,11 @@ function PropsBar({ editor }: { editor: Editor }) {
           )}
           {tinted.length > 0 && (
             <ColorField
-              label="Colour"
-              value={tinted[0].color ?? ('kind' in tinted[0] ? theme.marker : theme.box)}
+              label={notes.length && tinted.length === notes.length ? 'Background' : 'Colour'}
+              value={
+                tinted[0].color ??
+                (!('kind' in tinted[0]) ? theme.box : tinted[0].kind === 'note' ? NOTE_BG : theme.marker)
+              }
               onChange={(c) => editor.setColor(c)}
             />
           )}
@@ -538,7 +550,14 @@ export function Toolbar({ editor }: { editor: Editor }) {
   const [transparent, setTransparent] = useState(false);
   const [live, setLive] = useState(true);
   const [lists, setLists] = useState({ inputs: false, outputs: false });
+  const [mode, setMode] = useState<'full' | 'inline' | 'thin'>('full');
+  const [openSeg, setOpenSeg] = useState<string | null>(null);
+  const [slotW, setSlotW] = useState<Record<string, number>>({});
+  const [slide, setSlide] = useState(1);
   const dockRef = useRef<HTMLDivElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const thinRef = useRef<HTMLDivElement>(null);
   const theme = editor.theme;
   const hasSelection = editor.selection.size > 0;
 
@@ -569,6 +588,65 @@ export function Toolbar({ editor }: { editor: Editor }) {
 
   const toggle = (p: Panel) => setPanel((cur) => (cur === p ? null : p));
 
+  useEffect(() => {
+    const row = rowRef.current;
+    const measure = measureRef.current;
+    const thin = thinRef.current;
+    if (!row || !measure || !thin) return;
+    const check = () => {
+      let ioW = 0;
+      row.querySelectorAll('.io-toggle').forEach((el) => {
+        ioW += (el as HTMLElement).offsetWidth;
+      });
+      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+      const room = row.clientWidth - ioW - gap * 2;
+      const widths: Record<string, number> = {};
+      let maxBody = 0;
+      row.querySelectorAll('.tb-body-probe').forEach((el) => {
+        const id = (el as HTMLElement).dataset.seg;
+        if (!id) return;
+        const w = (el as HTMLElement).offsetWidth;
+        widths[id] = w;
+        maxBody = Math.max(maxBody, w);
+      });
+      const icon = thin.querySelector('.tb-btn')?.getBoundingClientRect().width ?? 40;
+      const inlineW = thin.offsetWidth - icon + maxBody;
+      const next = measure.offsetWidth <= room + 1 ? 'full' : inlineW <= room + 1 ? 'inline' : 'thin';
+      setMode((cur) => (cur === next ? cur : next));
+      setSlotW((cur) => {
+        const same = Object.keys(widths).every((id) => Math.abs((cur[id] ?? 0) - widths[id]) < 1);
+        return same ? cur : widths;
+      });
+    };
+    const ro = new ResizeObserver(check);
+    ro.observe(row);
+    ro.observe(measure);
+    ro.observe(thin);
+    row.querySelectorAll('.tb-body-probe').forEach((el) => ro.observe(el));
+    check();
+    return () => ro.disconnect();
+  }, [lists.inputs, lists.outputs]);
+
+  useEffect(() => {
+    if (mode === 'inline') setOpenSeg((cur) => cur ?? 'navigation');
+    else setOpenSeg(null);
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== 'thin' || !openSeg) return;
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpenSeg(null);
+    const outside = (e: PointerEvent) => {
+      const host = rowRef.current?.querySelector(`[data-seg="${openSeg}"]`);
+      if (host && !host.contains(e.target as Node)) setOpenSeg(null);
+    };
+    window.addEventListener('keydown', esc);
+    window.addEventListener('pointerdown', outside);
+    return () => {
+      window.removeEventListener('keydown', esc);
+      window.removeEventListener('pointerdown', outside);
+    };
+  }, [mode, openSeg]);
+
   const openFile = async (mode: 'tab' | 'merge') => {
     const file = await pickFile(`${FILE_EXTENSION},.json,application/json`);
     if (!file) return;
@@ -595,6 +673,80 @@ export function Toolbar({ editor }: { editor: Editor }) {
       <ComponentIcon kind={kind} theme={theme} />
     </button>
   );
+
+  const navigation = (
+    <>
+      <Btn title="Select" active={editor.tool === 'select'} onClick={() => editor.setTool('select')}>
+        {Icons.select}
+      </Btn>
+      <Btn title="Pan" active={editor.tool === 'pan'} onClick={() => editor.setTool('pan')}>
+        {Icons.pan}
+      </Btn>
+    </>
+  );
+  const gates = <>{PLACE_GROUPS[0].map(placeButton)}</>;
+  const io = <>{PLACE_GROUPS[1].map(placeButton)}</>;
+  const comments = <>{PLACE_GROUPS[2].map(placeButton)}</>;
+  const components = <>{PLACE_GROUPS[3].map(placeButton)}</>;
+  const time = (
+    <>
+      <Btn title="Undo" disabled={!editor.canUndo} onClick={() => editor.undo()}>
+        {Icons.undo}
+      </Btn>
+      <Btn title="Redo" disabled={!editor.canRedo} onClick={() => editor.redo()}>
+        {Icons.redo}
+      </Btn>
+      <Btn title="Fit to view" onClick={() => editor.fitView()}>
+        {Icons.fit}
+      </Btn>
+    </>
+  );
+  const menu = (
+    <>
+      <Btn title="Open" active={panel === 'open'} onClick={() => toggle('open')}>
+        {Icons.open}
+      </Btn>
+      <Btn title="Save (Ctrl+S)" active={panel === 'save'} onClick={() => toggle('save')}>
+        {Icons.save}
+      </Btn>
+      <Btn title="Theme" active={panel === 'theme'} onClick={() => toggle('theme')}>
+        {Icons.theme}
+      </Btn>
+      <Btn title="Multiplayer" active={panel === 'live'} onClick={() => toggle('live')}>
+        {Icons.people}
+      </Btn>
+      <Btn title="Help" active={panel === 'help'} onClick={() => toggle('help')}>
+        {Icons.help}
+      </Btn>
+    </>
+  );
+  const toolbarBody = (
+    <>
+      {navigation}
+      <Sep />
+      {gates}
+      <Sep />
+      {io}
+      <Sep />
+      {comments}
+      <Sep />
+      {components}
+      <Sep />
+      {time}
+      <Sep />
+      {menu}
+    </>
+  );
+  const placing = editor.placing;
+  const SEGMENTS: { id: string; title: string; icon: ReactNode; active: boolean; body: ReactNode }[] = [
+    { id: 'navigation', title: 'Navigation', icon: Icons.navigation, active: false, body: navigation },
+    { id: 'gates', title: 'Gates', icon: Icons.gates, active: !!placing && PLACE_GROUPS[0].includes(placing), body: gates },
+    { id: 'io', title: 'I/O', icon: Icons.io, active: !!placing && PLACE_GROUPS[1].includes(placing), body: io },
+    { id: 'comments', title: 'Comments', icon: Icons.comments, active: !!placing && PLACE_GROUPS[2].includes(placing), body: comments },
+    { id: 'components', title: 'Components', icon: Icons.components, active: !!placing && PLACE_GROUPS[3].includes(placing), body: components },
+    { id: 'time', title: 'Time', icon: Icons.time, active: false, body: time },
+    { id: 'menu', title: 'Menu', icon: Icons.menu, active: panel !== null, body: menu },
+  ];
 
   return (
     <div className="dock" ref={dockRef}>
@@ -787,52 +939,76 @@ export function Toolbar({ editor }: { editor: Editor }) {
 
       <PropsBar editor={editor} />
 
-      <div className="tb-row">
+      <div className="tb-row" ref={rowRef}>
+        <div className="toolbar tb-measure" ref={measureRef} aria-hidden="true">
+          {toolbarBody}
+        </div>
+        <div className="toolbar tb-measure" ref={thinRef} aria-hidden="true">
+          {SEGMENTS.map((seg, i) => (
+            <Fragment key={seg.id}>
+              {i > 0 && <Sep />}
+              <Btn title={seg.title}>{seg.icon}</Btn>
+            </Fragment>
+          ))}
+        </div>
+        {SEGMENTS.map((seg) => (
+          <div className="tb-body-probe" data-seg={seg.id} key={seg.id} aria-hidden="true">
+            {seg.body}
+          </div>
+        ))}
         <SideList
           editor={editor}
           which="inputs"
           open={lists.inputs}
           onToggle={() => setLists((l) => ({ ...l, inputs: !l.inputs }))}
         />
-        <div className="toolbar" role="toolbar" aria-label="Circuit Maker tools">
-          <Btn title="Select" active={editor.tool === 'select'} onClick={() => editor.setTool('select')}>
-            {Icons.select}
-          </Btn>
-          <Btn title="Pan" active={editor.tool === 'pan'} onClick={() => editor.setTool('pan')}>
-            {Icons.pan}
-          </Btn>
-          {PLACE_GROUPS.map((group, i) => (
-            <div className="tb-group" key={i}>
-              <Sep />
-              {group.map(placeButton)}
-            </div>
-          ))}
-          <Sep />
-          <Btn title="Undo" disabled={!editor.canUndo} onClick={() => editor.undo()}>
-            {Icons.undo}
-          </Btn>
-          <Btn title="Redo" disabled={!editor.canRedo} onClick={() => editor.redo()}>
-            {Icons.redo}
-          </Btn>
-          <Btn title="Fit to view" onClick={() => editor.fitView()}>
-            {Icons.fit}
-          </Btn>
-          <Sep />
-          <Btn title="Open" active={panel === 'open'} onClick={() => toggle('open')}>
-            {Icons.open}
-          </Btn>
-          <Btn title="Save (Ctrl+S)" active={panel === 'save'} onClick={() => toggle('save')}>
-            {Icons.save}
-          </Btn>
-          <Btn title="Theme" active={panel === 'theme'} onClick={() => toggle('theme')}>
-            {Icons.theme}
-          </Btn>
-          <Btn title="Multiplayer" active={panel === 'live'} onClick={() => toggle('live')}>
-            {Icons.people}
-          </Btn>
-          <Btn title="Help" active={panel === 'help'} onClick={() => toggle('help')}>
-            {Icons.help}
-          </Btn>
+        <div
+          className={`toolbar${mode === 'full' ? '' : ` ${mode}`}`}
+          role="toolbar"
+          aria-label="Circuit Maker tools"
+          style={{ ['--slide' as string]: slide }}
+        >
+          {mode === 'full'
+            ? toolbarBody
+            : SEGMENTS.map((seg, i) => {
+                const open = mode === 'inline' && openSeg === seg.id;
+                return (
+                  <Fragment key={seg.id}>
+                  {i > 0 && <Sep />}
+                  <div
+                    className={`tb-slot${open ? ' open' : ''} ${mode === 'thin' ? 'tb-seg' : ''}`}
+                    data-seg={seg.id}
+                    style={{ ['--slot-w' as string]: `${slotW[seg.id] ?? 240}px` }}
+                    onPointerDown={mode === 'thin' ? (e) => e.stopPropagation() : undefined}
+                  >
+                    <Btn
+                      title={seg.title}
+                      className={mode === 'inline' ? 'tb-slot-icon' : undefined}
+                      active={mode === 'thin' && (openSeg === seg.id || seg.active)}
+                      onClick={() => {
+                        if (mode === 'thin') {
+                          setOpenSeg((cur) => (cur === seg.id ? null : seg.id));
+                          return;
+                        }
+                        if (openSeg === seg.id) return;
+                        const next = SEGMENTS.findIndex((s) => s.id === seg.id);
+                        const prev = SEGMENTS.findIndex((s) => s.id === openSeg);
+                        setSlide(next >= prev ? 1 : -1);
+                        setOpenSeg(seg.id);
+                      }}
+                    >
+                      {seg.icon}
+                    </Btn>
+                    {mode === 'inline' && (
+                      <div className="tb-reveal">
+                        <div className="tb-reveal-inner">{seg.body}</div>
+                      </div>
+                    )}
+                    {mode === 'thin' && openSeg === seg.id && <div className="surface tb-pop">{seg.body}</div>}
+                  </div>
+                  </Fragment>
+                );
+              })}
         </div>
         <SideList
           editor={editor}

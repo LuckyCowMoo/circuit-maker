@@ -22,7 +22,7 @@ import {
 import { floatsAboveBoxes, partInfo, partLabel } from '../model/parts';
 import { avoidMap, bendAround, blockRects, routeSeed, routedWire, squareWire } from '../model/route';
 import { placePort } from '../model/ports';
-import { componentOps, textRect, type DrawOp, type TextOp } from '../model/shapes';
+import { componentOps, noteHole, textRect, type DrawOp, type TextOp } from '../model/shapes';
 import { contrastText, wireColors, type Theme, type WireColors } from '../model/themes';
 import type { Box, Component, Point, Rect } from '../model/types';
 import { bundleSource, laneCount } from '../model/types';
@@ -401,6 +401,48 @@ function drawHandles(ctx: CanvasRenderingContext2D, r: Rect, theme: Theme, px: n
   }
 }
 
+const WELL_FAR = 560;
+
+/** Soft inner shadow of a text-box hole. Blur is scaled into the box's units so zoom does not change it. */
+function drawNoteWells(ctx: CanvasRenderingContext2D, list: Component[], ed: Editor): void {
+  const light = ed.pointerWorld();
+  const z = ed.cam.zoom;
+  // Canvas shadow offsets ignore the camera transform, so convert box units into device pixels.
+  const px = ed.dpr * z;
+  for (const c of list) {
+    if (c.kind !== 'note') continue;
+    const r = bodyRect(c);
+    const dx = Math.max(Math.abs(light.x - (r.x + r.w / 2)) - r.w / 2, 0);
+    const dy = Math.max(Math.abs(light.y - (r.y + r.h / 2)) - r.h / 2, 0);
+    if (Math.hypot(dx, dy) * z >= WELL_FAR) continue;
+    const m = xformOf(c);
+    const det = m.a * m.d - m.b * m.c || 1;
+    const lx = light.x - m.e;
+    const ly = light.y - m.f;
+    const localX = (m.d * lx - m.c * ly) / det;
+    const localY = (-m.b * lx + m.a * ly) / det;
+    const vx = localX - c.w / 2;
+    const vy = localY - c.h / 2;
+    const len = Math.hypot(vx, vy) || 1;
+    const band = Math.min(c.w, c.h) * 0.05;
+    const blur = Math.min(c.w, c.h) * 0.08;
+    const hole = new Path2D(noteHole(c.w, c.h, c.id));
+    const outside = new Path2D(noteHole(c.w, c.h, c.id));
+    const pad = band + blur + 12;
+    outside.rect(-pad, -pad, c.w + pad * 2, c.h + pad * 2);
+    ctx.save();
+    ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f);
+    ctx.clip(hole);
+    ctx.shadowColor = 'rgba(28, 16, 4, 0.62)';
+    ctx.shadowBlur = blur * px;
+    ctx.shadowOffsetX = (-vx / len) * band * px;
+    ctx.shadowOffsetY = (-vy / len) * band * px;
+    ctx.fillStyle = '#000';
+    ctx.fill(outside, 'evenodd');
+    ctx.restore();
+  }
+}
+
 export function renderScene(ed: Editor): void {
   const ctx = ed.ctx;
   if (!ctx) return;
@@ -574,7 +616,8 @@ export function renderScene(ed: Editor): void {
       info.lanes?.forEach((lane, i) => {
         lane.on = ed.sim.value(c.id, i);
       });
-      batch.add(componentOps(c, theme, info), xformOf(c));
+      const ops = componentOps(c, theme, info);
+      batch.add(c.id === ed.editingId ? ops.filter((op) => op.t !== 'text') : ops, xformOf(c));
     }
     batch.flush(ctx, dp);
   };
@@ -587,6 +630,7 @@ export function renderScene(ed: Editor): void {
     } else if (!(covered.length && componentCoveredBy(ed, c, covered))) lower.push(c);
   }
   drawParts(lower);
+  drawNoteWells(ctx, lower, ed);
 
   // Box overlays, innermost first so outer boxes cover inner ones.
   const labels: TextOp[] = [];
@@ -602,6 +646,7 @@ export function renderScene(ed: Editor): void {
   for (let i = visible.length - 1; i >= 0; i--) drawBoxOverlay(ctx, ed, visible[i], px, obstacles);
 
   drawParts(floating);
+  drawNoteWells(ctx, floating, ed);
   for (const l of labels) if (l.size * z >= 5) drawText(ctx, l);
 
   // Selection outlines for components.
@@ -627,6 +672,23 @@ export function renderScene(ed: Editor): void {
     ctx.stroke();
     ctx.setLineDash([]);
     drawHandles(ctx, b, theme, px);
+  }
+
+  // Text box or bulb edge under the pointer, which can be dragged to resize.
+  const noteEdge = ed.drag?.kind === 'note' ? null : ed.hoverNote;
+  if (noteEdge) {
+    const note = doc.components.get(noteEdge.id);
+    if (note) {
+      const r = bodyRect(note);
+      ctx.strokeStyle = theme.selection;
+      ctx.lineWidth = 3 * px;
+      ctx.beginPath();
+      if (noteEdge.l) (ctx.moveTo(r.x, r.y), ctx.lineTo(r.x, r.y + r.h));
+      if (noteEdge.r) (ctx.moveTo(r.x + r.w, r.y), ctx.lineTo(r.x + r.w, r.y + r.h));
+      if (noteEdge.t) (ctx.moveTo(r.x, r.y), ctx.lineTo(r.x + r.w, r.y));
+      if (noteEdge.b) (ctx.moveTo(r.x, r.y + r.h), ctx.lineTo(r.x + r.w, r.y + r.h));
+      ctx.stroke();
+    }
   }
 
   // Box edge under the pointer, which can be dragged to resize.

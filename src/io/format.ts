@@ -102,7 +102,7 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
       fc.pulse = c.pulse ?? 1;
     }
     if (c.kind === 'marker' || (c.name && !isGate(c.kind))) fc.name = c.name;
-    if (c.color && (c.kind === 'marker' || c.kind === 'bulb')) fc.color = c.color;
+    if (c.color && (c.kind === 'marker' || c.kind === 'bulb' || c.kind === 'note')) fc.color = c.color;
     if (c.stroke && c.kind !== 'marker' && c.kind !== 'port') fc.stroke = c.stroke;
     if (c.fill && c.kind !== 'marker' && c.kind !== 'port') fc.fill = c.fill;
     if (canRotate(c.kind)) {
@@ -112,6 +112,10 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
     if (isIO(c.kind)) {
       if (c.w !== IO_SIZE) fc.w = c.w;
       if (c.h !== IO_SIZE) fc.h = c.h;
+    }
+    if (c.kind === 'note') {
+      fc.w = c.w;
+      fc.h = c.h;
     }
     if (c.kind === 'port') {
       if (portBox) {
@@ -208,6 +212,9 @@ const TYPE_ALIASES: Record<string, { kind: ComponentKind; not?: boolean }> = {
   marker: { kind: 'marker' },
   label: { kind: 'marker' },
   flag: { kind: 'marker' },
+  note: { kind: 'note' },
+  textbox: { kind: 'note' },
+  text: { kind: 'note' },
   port: { kind: 'port' },
   connector: { kind: 'port' },
 };
@@ -285,7 +292,7 @@ export function parseCircuit(text: string): ParseResult {
     }
     const c: Component = makeComponent(alias.kind, num(o.x, 0), num(o.y, 0), id);
     if (isGate(c.kind)) {
-      c.inputs = Math.max(1, Math.min(MAX_INPUTS, Math.round(num(o.inputs, 2))));
+      c.inputs = c.kind === 'buffer' ? 1 : Math.max(1, Math.min(MAX_INPUTS, Math.round(num(o.inputs, 2))));
       c.negate = Boolean(alias.not) !== Boolean(o.not);
     }
     if (c.kind === 'port' && o.inputs != null) c.inputs = Math.max(1, Math.min(MAX_INPUTS, Math.round(num(o.inputs, 1))));
@@ -313,6 +320,12 @@ export function parseCircuit(text: string): ParseResult {
     }
     if (c.kind === 'rgb') c.inputBundle = o.inputSide === 'cable';
     if (c.kind === 'marker') c.name = str(o.name) ?? 'Marker';
+    if (c.kind === 'note') {
+      c.name = str(o.name) ?? 'Text';
+      const size = (v: unknown, fallback: number) => Math.max(IO_MIN, Math.min(IO_MAX, snap(num(v, fallback)) || fallback));
+      c.w = size(o.w, 180);
+      c.h = size(o.h, 80);
+    }
     else if (!isGate(c.kind)) c.name = str(o.name) ?? '';
     c.color = color(o.color);
     c.stroke = color(o.stroke);
@@ -381,7 +394,7 @@ export function parseCircuit(text: string): ParseResult {
     if (!hasOutput(src.kind)) return warnings.push(`wires[${i}]: "${from}" (${src.kind}) has no output.`);
     const input = Math.round(num(o.input, to.pin ?? 0));
     if (input < 0) return warnings.push(`wires[${i}]: negative input index.`);
-    if (isGate(dst.kind) && input >= dst.inputs) {
+    if (isGate(dst.kind) && dst.kind !== 'buffer' && input >= dst.inputs) {
       if (input >= MAX_INPUTS) return warnings.push(`wires[${i}]: input ${input} is too large.`);
       warnings.push(`"${dst.id}" grown to ${input + 1} inputs to fit a wire.`);
       dst.inputs = input + 1;

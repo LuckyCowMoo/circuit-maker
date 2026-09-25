@@ -308,7 +308,7 @@ export function normalizePorts(doc: Doc): boolean {
       dirty = true;
       if (t.kind === 'port') {
         const pi = info.get(t.id);
-        if (pi) {
+        if (pi && !(t.placed && !w.cable)) {
           const fromInside = tree.within(S, pi.box);
           if (pi.inward === fromInside) {
             dissolveInto(doc, w, t);

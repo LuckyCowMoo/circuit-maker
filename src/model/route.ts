@@ -9,9 +9,9 @@ import {
   pointInRect,
   rectsOverlap,
   wireCurve,
+  wireEndPin,
   type WireCurve,
 } from './geometry';
-import { bundleDest, bundleSource } from './types';
 
 const CELL = 220;
 const CORNER_OUT = 14;
@@ -497,10 +497,11 @@ function squareLanes(doc: Doc): Map<string, number> {
     if (!src || !dst || w.cable) continue;
     const lane = w.lane ?? 0;
     const input = w.input;
-    const a = attachPos(src, bundleSource(src) ? -1 : -1 - lane);
-    const b = attachPos(dst, bundleDest(dst) ? 0 : input);
+    const a = attachPos(src, wireEndPin(src, -1 - lane, !!w.cable));
+    const b = attachPos(dst, wireEndPin(dst, input, !!w.cable));
     if (!a || !b) continue;
-    const trunk = trunkOf(a, pinDir(src, -1), b, pinDir(dst, input));
+    const end = wireEndPin(dst, input, !!w.cable);
+    const trunk = trunkOf(a, pinDir(src, -1), b, pinDir(dst, end));
     const item = { key: wireKey(w.from, w.to, input, lane), pos: trunk.pos, lo: trunk.lo, hi: trunk.hi };
     (trunk.horizontal ? rows : cols).push(item);
   }
@@ -587,14 +588,14 @@ export function squareWire(a: Point, da: Point, b: Point, db: Point, lane = 0): 
 /** Wire or cable curve in the chosen style. Cached until the layout changes. */
 export function routedWire(map: AvoidMap, src: Component, dst: Component, input: number, lane: number, pad: number, style: WireStyle = 'avoid', cable = false): WireCurve | null {
   if (cable && style === 'square') style = 'avoid';
-  const a = attachPos(src, bundleSource(src) ? -1 : -1 - lane);
-  const b = attachPos(dst, bundleDest(dst) ? 0 : input);
+  const a = attachPos(src, wireEndPin(src, cable ? -1 : -1 - lane, cable));
+  const b = attachPos(dst, wireEndPin(dst, input, cable));
   if (!a || !b) return null;
   const key = `${wireKey(src.id, dst.id, input, lane)}\0${pad}\0${style}`;
   const cached = map.curves.get(key);
   if (cached) return cached;
   const da = pinDir(src, -1);
-  const db = pinDir(dst, input);
+  const db = pinDir(dst, wireEndPin(dst, input, cable));
   const direct = wireCurve(a, b, da, db);
   let curve = direct;
   if (style === 'square') curve = squareWire(a, da, b, db, map.squareLanes.get(wireKey(src.id, dst.id, input, lane)) ?? 0);

@@ -52,6 +52,7 @@ import {
   wallPoint,
   type Side,
 } from '../model/ports';
+import { noteAmp } from '../model/shapes';
 import { getTheme, type Theme } from '../model/themes';
 import { isModifierOnly } from '../model/keys';
 import type { Box, Component, ComponentKind, Doc, Point, Rect, Rotation, Wire } from '../model/types';
@@ -169,6 +170,7 @@ export type Drag =
       ports: { id: string; box: string; side: Side; at: Point; inward: boolean }[];
     }
   | { kind: 'size'; comp: string; corner: number; orig: Rect; start: Point; sx: number; sy: number; moved: boolean }
+  | { kind: 'note'; comp: string; l: boolean; t: boolean; r: boolean; b: boolean; orig: Rect; start: Point; sx: number; sy: number; moved: boolean }
   | { kind: 'port'; comp: string; inward: boolean; sx: number; sy: number; moved: boolean }
   | { kind: 'pinch'; dist: number; world: Point; zoom: number };
 
@@ -210,6 +212,7 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   bulb: 'Light bulb',
   rgb: 'RGB bulb',
   marker: 'Marker',
+  note: 'Text box',
   box: 'Box',
   not: 'NOT bubble',
   port: 'Wire port',
@@ -332,6 +335,14 @@ export class Editor {
   hoverPin: PinRef | null = null;
   /** Box edge under the pointer, which a drag would resize. */
   hoverEdge: BoxEdges | null = null;
+  /** Edge of a text box under the pointer, which a drag would move. */
+  hoverNote: { id: string; l: boolean; t: boolean; r: boolean; b: boolean } | null = null;
+  /** A text box is close enough to the pointer to draw its inner shadow. */
+  private noteLit = false;
+  /** Note or marker whose label is being typed on the canvas. */
+  editingId: string | null = null;
+  /** Viewport point of the click that opened a text box, so the caret can land there. */
+  editClick: { x: number; y: number } | null = null;
   /** Innermost box under the pointer. It stays open however far out or near the edge it is. */
   hoverBox: string | null = null;
   toastMessage: string | null = null;
@@ -718,6 +729,11 @@ export class Editor {
     return { x: (w.x - this.cam.x) * this.cam.zoom, y: (w.y - this.cam.y) * this.cam.zoom };
   }
 
+  /** Pointer in world coordinates. The text-box well treats this as the light. */
+  pointerWorld(): Point {
+    return this.toWorld(this.mouse);
+  }
+
   get viewRect(): Rect {
     const z = this.cam.zoom;
     return { x: this.cam.x, y: this.cam.y, w: this.width / z, h: this.height / z };
@@ -826,6 +842,7 @@ export class Editor {
 
   setSelection(ids: Iterable<string>): void {
     this.selection = new Set(ids);
+    if (this.editingId && !this.selection.has(this.editingId)) this.editingId = null;
     this.needsRender = true;
     this.emit();
   }
@@ -1081,10 +1098,24 @@ export class Editor {
   private connect(a: PinRef, b: PinRef): boolean {
     const out = a.pin < 0 ? a : b.pin < 0 ? b : null;
     const inp = out === a ? b : a;
-    if (!out || inp.pin < 0) return false;
+    if (!out || !inp) return false;
     const src = this.doc.components.get(out.comp);
     const dst = this.doc.components.get(inp.comp);
-    if (!src || !dst || !hasOutput(src.kind) || inp.pin >= inputCount(dst)) return false;
+    if (!src || !dst || !hasOutput(src.kind)) return false;
+    // A gate output dropped on a cable port's wire pins (the side opposite the cable socket).
+    if (inp.pin < 0 && isRibbonPort(dst) && !bundleOutput(dst)) {
+      const lane = -inp.pin - 1;
+      if (lane < 0 || lane >= laneCount(dst)) return false;
+      for (const w of this.doc.wires.values()) {
+        if (w.to === dst.id && w.input === lane && !w.cable) this.doc.wires.delete(w.id);
+      }
+      const wire: Wire = { id: uid(this.doc, 'w_'), from: src.id, to: dst.id, input: lane, separatePort: true };
+      const srcLane = -out.pin - 1;
+      if (srcLane > 0) wire.lane = srcLane;
+      this.doc.wires.set(wire.id, wire);
+      return true;
+    }
+    if (inp.pin < 0 || inp.pin >= inputCount(dst)) return false;
 
     // Ribbon cable: source plug → destination plug. Empty dest ports resize to match.
     if (bundleSource(src) && bundleDest(dst) && out.pin === -1 && inp.pin === 0) {
@@ -1178,7 +1209,7 @@ export class Editor {
   setInputs(n: number): void {
     const count = clamp(Math.round(n), 1, MAX_INPUTS);
     const selected = this.selectedComponents();
-    const gates = selected.filter((c) => isGate(c.kind));
+    const gates = selected.filter((c) => isGate(c.kind) && c.kind !== 'buffer');
     const ports = selected.filter((c) => c.kind === 'port');
     if (!gates.length && !ports.length) return;
     const peers = new Set<string>();
@@ -1195,7 +1226,7 @@ export class Editor {
   }
 
   changeInputs(delta: number): void {
-    const parts = this.selectedComponents().filter((c) => isGate(c.kind) || c.kind === 'port');
+    const parts = this.selectedComponents().filter((c) => (isGate(c.kind) && c.kind !== 'buffer') || c.kind === 'port');
     if (!parts.length) return;
     const port = parts.find((c) => c.kind === 'port');
     if (port) {
@@ -1206,7 +1237,7 @@ export class Editor {
       'inputs',
       (it) => {
         if (!('kind' in it)) return;
-        if (isGate(it.kind)) it.inputs = clamp(it.inputs + delta, 1, MAX_INPUTS);
+        if (isGate(it.kind) && it.kind !== 'buffer') it.inputs = clamp(it.inputs + delta, 1, MAX_INPUTS);
       },
       true,
     );
@@ -1275,19 +1306,19 @@ export class Editor {
 
   setStroke(color: string | null): void {
     this.editSelection('stroke', (it) => {
-      if ('kind' in it && it.kind !== 'marker') it.stroke = color;
+      if ('kind' in it && it.kind !== 'marker' && it.kind !== 'note') it.stroke = color;
     });
   }
 
   setFill(color: string | null): void {
     this.editSelection('fill', (it) => {
-      if ('kind' in it && it.kind !== 'marker') it.fill = color;
+      if ('kind' in it && it.kind !== 'marker' && it.kind !== 'note') it.fill = color;
     });
   }
 
   setColor(color: string | null): void {
     this.editSelection('color', (it) => {
-      if (!('kind' in it) || it.kind === 'marker' || it.kind === 'bulb') it.color = color;
+      if (!('kind' in it) || it.kind === 'marker' || it.kind === 'bulb' || it.kind === 'note') it.color = color;
     });
   }
 
@@ -1295,6 +1326,14 @@ export class Editor {
     this.editSelection('name', (it) => {
       if (!('kind' in it) || !isGate(it.kind)) it.name = name;
     });
+  }
+
+  stopEditing(): void {
+    if (!this.editingId) return;
+    this.editingId = null;
+    this.editClick = null;
+    this.needsRender = true;
+    this.emit();
   }
 
   /** Renames one component (used by the inputs and outputs lists). */
@@ -1324,7 +1363,7 @@ export class Editor {
   resizeTarget(): Component | null {
     if (this.selection.size !== 1) return null;
     const c = this.doc.components.get([...this.selection][0]);
-    return c && isIO(c.kind) ? c : null;
+    return c && (isIO(c.kind) || c.kind === 'note') ? c : null;
   }
 
   toggleSwitch(id: string): void {
@@ -1540,6 +1579,7 @@ export class Editor {
         { label: 'Light bulb', kind: 'bulb' },
         { label: 'RGB bulb', kind: 'rgb' },
         { label: 'Marker', kind: 'marker' },
+        { label: 'Text box', kind: 'note' },
         { label: 'Box', kind: 'box' },
       ];
     }
@@ -1676,7 +1716,7 @@ export class Editor {
     let best: PinRef | null = null;
     let bestD = r;
     for (const c of this.doc.components.values()) {
-      if (c.kind === 'marker') continue;
+      if (c.kind === 'marker' || c.kind === 'note') continue;
       if (!pointInRect(w, componentBounds(c), r)) continue;
       if (closed.length && this.hiddenIn(c, closed)) continue;
       const g = geomOf(c);
@@ -1688,6 +1728,7 @@ export class Editor {
       if (want !== 'out') for (let i = 0; i < g.inputs.length; i++) pins.push(i);
       for (const pin of pins) {
         const p = pinPos(c, pin)!;
+        if (c.kind === 'port' && pointInRect(w, bodyRect(c))) continue;
         const d = Math.hypot(w.x - p.x, w.y - p.y);
         if (d < bestD) {
           bestD = d;
@@ -1737,6 +1778,29 @@ export class Editor {
       if (e.l || e.r || e.t || e.b) return e;
     }
     return null;
+  }
+
+  /** An edge of a text box, bulb, or RGB bulb. Text boxes use a wider band so the wave can be grabbed. */
+  private hitNoteEdge(w: Point): { id: string; l: boolean; t: boolean; r: boolean; b: boolean } | null {
+    const tol = 6 / this.cam.zoom;
+    let hit: { id: string; l: boolean; t: boolean; r: boolean; b: boolean } | null = null;
+    for (const c of this.doc.components.values()) {
+      if (c.kind !== 'note' && c.kind !== 'bulb' && c.kind !== 'rgb') continue;
+      const r = bodyRect(c);
+      const band = c.kind === 'note' ? noteAmp(r.w, r.h) + tol : tol;
+      if (!pointInRect(w, r, tol)) continue;
+      const e = {
+        id: c.id,
+        l: Math.abs(w.x - r.x) < band,
+        r: Math.abs(w.x - r.x - r.w) < band,
+        t: Math.abs(w.y - r.y) < band,
+        b: Math.abs(w.y - r.y - r.h) < band,
+      };
+      if (e.l && e.r) e.r = false;
+      if (e.t && e.b) e.b = false;
+      if (e.l || e.r || e.t || e.b) hit = e;
+    }
+    return hit;
   }
 
   /** The innermost box under the pointer, open or closed. */
@@ -1831,11 +1895,23 @@ export class Editor {
 
   /** Best pin to connect to while dragging a wire from `from`. */
   private wireTarget(from: PinRef, w: Point): PinRef | null {
+    const src = this.doc.components.get(from.comp);
+    const cableDrag = !!src && this.isCablePlug(from, src);
     const want = from.pin < 0 ? 'in' : 'out';
     const pin = this.hitPin(w, want, clamp(14 / this.cam.zoom, 10, 30));
-    if (pin) return pin;
+    if (pin) {
+      const hit = this.doc.components.get(pin.comp);
+      if (hit && !cableDrag && this.isCablePlug(pin, hit)) {
+        const lane = this.ribbonLanePin(hit, w);
+        if (lane) return lane;
+      } else return pin;
+    }
     const c = this.hitComponent(w);
     if (!c || c.kind === 'marker') return null;
+    if (!cableDrag && isRibbonPort(c)) {
+      const lane = this.ribbonLanePin(c, w);
+      if (lane) return lane;
+    }
     const g = geomOf(c);
     if (want === 'out') return g.output ? { comp: c.id, pin: -1 } : null;
     let best: PinRef | null = null;
@@ -1846,6 +1922,26 @@ export class Editor {
       if (score < bestScore) {
         bestScore = score;
         best = { comp: c.id, pin: i };
+      }
+    }
+    return best;
+  }
+
+  /** Nearest individual wire pin on a ribbon port, for a single wire rather than the cable socket. */
+  private ribbonLanePin(c: Component, w: Point): PinRef | null {
+    if (!isRibbonPort(c) || (bundleInput(c) && bundleOutput(c))) return null;
+    const g = geomOf(c);
+    const pins = !bundleInput(c) ? g.inputs.map((_, i) => i) : (g.outputs ?? []).map((_, i) => -1 - i);
+    const r = clamp(18 / this.cam.zoom, 12, 36);
+    let best: PinRef | null = null;
+    let bestD = r;
+    for (const pin of pins) {
+      const p = pinPos(c, pin);
+      if (!p) continue;
+      const d = Math.hypot(w.x - p.x, w.y - p.y);
+      if (d < bestD) {
+        bestD = d;
+        best = { comp: c.id, pin };
       }
     }
     return best;
@@ -1910,6 +2006,26 @@ export class Editor {
     if (corner !== null && sized) {
       this.drag = { kind: 'size', comp: sized.id, corner, orig: bodyRect(sized), start: w, sx: s.x, sy: s.y, moved: false };
       return;
+    }
+    const noteEdge = this.hitNoteEdge(w);
+    if (noteEdge) {
+      const note = this.doc.components.get(noteEdge.id);
+      if (note) {
+        this.drag = {
+          kind: 'note',
+          comp: note.id,
+          l: noteEdge.l,
+          t: noteEdge.t,
+          r: noteEdge.r,
+          b: noteEdge.b,
+          orig: bodyRect(note),
+          start: w,
+          sx: s.x,
+          sy: s.y,
+          moved: false,
+        };
+        return;
+      }
     }
     const pin = this.hitPin(w, null);
     if (pin) {
@@ -2017,6 +2133,7 @@ export class Editor {
     this.mouse = s;
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, s);
     const w = this.toWorld(s);
+    this.trackNoteLight(w);
     if (this.placing) {
       this.updateGhost(w);
     }
@@ -2048,6 +2165,10 @@ export class Editor {
         if (!d.moved) {
           if (!far(d.sx, d.sy)) return;
           d.moved = true;
+          if (this.editingId) {
+            this.editingId = null;
+            this.emit();
+          }
           if (d.press) {
             this.notePress(d.press, false);
             d.press = null;
@@ -2177,6 +2298,39 @@ export class Editor {
         this.needsRender = true;
         break;
       }
+      case 'note': {
+        if (!d.moved) {
+          if (!far(d.sx, d.sy)) return;
+          d.moved = true;
+          this.pushUndo(this.snapshot());
+        }
+        const c = this.doc.components.get(d.comp);
+        if (!c) return;
+        const o = d.orig;
+        const dx = w.x - d.start.x;
+        const dy = w.y - d.start.y;
+        let x0 = o.x;
+        let y0 = o.y;
+        let x1 = o.x + o.w;
+        let y1 = o.y + o.h;
+        if (d.l) x0 = Math.min(snap(o.x + dx), x1 - IO_MIN);
+        if (d.r) x1 = Math.max(snap(o.x + o.w + dx), x0 + IO_MIN);
+        if (d.t) y0 = Math.min(snap(o.y + dy), y1 - IO_MIN);
+        if (d.b) y1 = Math.max(snap(o.y + o.h + dy), y0 + IO_MIN);
+        const ww = clamp(x1 - x0, IO_MIN, IO_MAX);
+        const hh = clamp(y1 - y0, IO_MIN, IO_MAX);
+        c.x = ww !== x1 - x0 && d.l ? x1 - ww : x0;
+        c.y = hh !== y1 - y0 && d.t ? y1 - hh : y0;
+        if (c.rot % 2) {
+          c.w = hh;
+          c.h = ww;
+        } else {
+          c.w = ww;
+          c.h = hh;
+        }
+        this.needsRender = true;
+        break;
+      }
       case 'port': {
         if (!d.moved) {
           if (!far(d.sx, d.sy)) return;
@@ -2226,6 +2380,10 @@ export class Editor {
             if (d.shift) this.selection.delete(d.target);
             else if (this.selection.size > 1) this.selection = new Set([d.target]);
           }
+          const typed = this.doc.components.get(d.target);
+          this.editingId =
+            !d.shift && typed && (typed.kind === 'note' || typed.kind === 'marker') ? typed.id : null;
+          this.editClick = this.editingId && typed?.kind === 'note' ? { x: e.clientX, y: e.clientY } : null;
           this.emit();
         }
         break;
@@ -2255,6 +2413,7 @@ export class Editor {
       }
       case 'resize':
       case 'size':
+      case 'note':
       case 'port':
         if (d.moved) this.changed(false);
         else this.emit();
@@ -2262,6 +2421,24 @@ export class Editor {
     }
     this.needsRender = true;
     this.updateCursor();
+  }
+
+  /** Redraw while a text box is near the pointer, and once more when the light falls out of range. */
+  private trackNoteLight(w: Point): void {
+    const far = 560 / this.cam.zoom;
+    let near = false;
+    for (const c of this.doc.components.values()) {
+      if (c.kind !== 'note') continue;
+      const r = bodyRect(c);
+      const dx = Math.max(Math.abs(w.x - (r.x + r.w / 2)) - r.w / 2, 0);
+      const dy = Math.max(Math.abs(w.y - (r.y + r.h / 2)) - r.h / 2, 0);
+      if (dx * dx + dy * dy < far * far) {
+        near = true;
+        break;
+      }
+    }
+    if (near || this.noteLit) this.needsRender = true;
+    this.noteLit = near;
   }
 
   private updateHover(w: Point, s: Point): void {
@@ -2273,6 +2450,7 @@ export class Editor {
     }
     let cursor = this.tool === 'pan' || this.spaceHeld ? 'grab' : 'default';
     let edge: BoxEdges | null = null;
+    let noteEdge: { id: string; l: boolean; t: boolean; r: boolean; b: boolean } | null = null;
     const corner = this.hitSizeHandle(s);
     const selecting = this.tool === 'select' && !this.spaceHeld;
     if (this.placing) cursor = 'copy';
@@ -2281,7 +2459,10 @@ export class Editor {
     else if (pin) cursor = 'crosshair';
     else if (selecting) {
       const c = this.hitComponent(w);
-      if (c) cursor = c.kind === 'switch' || c.kind === 'button' ? 'pointer' : 'move';
+      if ((noteEdge = this.hitNoteEdge(w))) {
+        const e = noteEdge;
+        cursor = (e.l || e.r) && (e.t || e.b) ? ((e.l && e.t) || (e.r && e.b) ? 'nwse-resize' : 'nesw-resize') : e.l || e.r ? 'ew-resize' : 'ns-resize';
+      } else if (c) cursor = c.kind === 'switch' || c.kind === 'button' ? 'pointer' : 'move';
       else if ((edge = this.hitBoxEdge(w))) {
         const e = edge;
         cursor = (e.l || e.r) && (e.t || e.b) ? ((e.l && e.t) || (e.r && e.b) ? 'nwse-resize' : 'nesw-resize') : e.l || e.r ? 'ew-resize' : 'ns-resize';
@@ -2290,6 +2471,11 @@ export class Editor {
     const under = this.boxUnder(w);
     if (under !== this.hoverBox) {
       this.hoverBox = under;
+      this.needsRender = true;
+    }
+    const prevNote = this.hoverNote;
+    if (noteEdge?.id !== prevNote?.id || noteEdge?.l !== prevNote?.l || noteEdge?.t !== prevNote?.t || noteEdge?.r !== prevNote?.r || noteEdge?.b !== prevNote?.b) {
+      this.hoverNote = noteEdge;
       this.needsRender = true;
     }
     const prevEdge = this.hoverEdge;
