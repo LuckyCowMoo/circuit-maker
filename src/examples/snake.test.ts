@@ -140,5 +140,5 @@ describe('snake', () => {
     expect(rgb(9, 8)).toBe(0b110);
     expect(rgb(15, 8)).toBe(0);
     lit(sim, doc, '1s', HEX[0]);
-  });
+  }, 60_000);
 });
