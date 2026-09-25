@@ -13,7 +13,7 @@ import { ComponentIcon, Icons } from './icons';
 import { SideList } from './SideLists';
 import { useEditor } from './useEditor';
 
-type Panel = 'save' | 'open' | 'theme' | 'help' | null;
+type Panel = 'save' | 'open' | 'theme' | 'help' | 'live' | null;
 
 const PLACE_GROUPS: PlaceKind[][] = [
   ['and', 'or', 'xor', 'buffer', 'not'],
@@ -407,6 +407,130 @@ function PropsBar({ editor }: { editor: Editor }) {
   );
 }
 
+function phaseText(phase: string): string {
+  if (phase === 'gathering') return 'Building a code…';
+  if (phase === 'waiting') return 'Waiting for the other person';
+  if (phase === 'connecting') return 'Connecting…';
+  if (phase === 'connected') return 'Connected';
+  if (phase === 'failed') return 'Could not connect. This network may be blocking a direct link.';
+  return 'Not connected';
+}
+
+function LivePanel({ editor }: { editor: Editor }) {
+  const session = editor.session;
+  const [joinCode, setJoinCode] = useState('');
+  const [replies, setReplies] = useState<Record<string, string>>({});
+  const [error, setError] = useState('');
+  const copy = async (text: string) => {
+    await navigator.clipboard.writeText(text);
+    editor.toast('Code copied.');
+  };
+  const run = async (work: () => Promise<void>) => {
+    setError('');
+    try {
+      await work();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong');
+      if (session.role === 'guest' && session.phase !== 'connected') session.leave();
+    }
+  };
+  return (
+    <div className="panel">
+      <div className="panel-title">Multiplayer</div>
+      {session.role === 'idle' && (
+        <>
+          <p className="live-status">Host this circuit, or paste a host code to join it. No server is used.</p>
+          <div className="panel-actions">
+            <button type="button" onClick={() => run(() => session.startHost())}>
+              Host
+            </button>
+          </div>
+          <textarea
+            className="live-code"
+            value={joinCode}
+            placeholder="Paste a host code"
+            aria-label="Host code"
+            onChange={(e) => setJoinCode(e.target.value)}
+          />
+          <div className="panel-actions">
+            <button type="button" disabled={!joinCode.trim()} onClick={() => run(() => session.join(joinCode))}>
+              Join
+            </button>
+          </div>
+        </>
+      )}
+      {session.role === 'host' && (
+        <>
+          <p className="live-status">
+            {session.peers.filter((p) => p.phase === 'connected').length} connected. Each guest needs their own code.
+          </p>
+          {session.peers.map((peer) => (
+            <div className="live-peer" key={peer.id}>
+              <p className={`live-status ${peer.phase === 'failed' ? 'failed' : ''}`}>{phaseText(peer.phase)}</p>
+              {peer.offerCode && peer.phase !== 'connected' && peer.phase !== 'failed' && (
+                <>
+                  <textarea className="live-code" readOnly value={peer.offerCode} aria-label="Host code" />
+                  <div className="panel-actions">
+                    <button type="button" onClick={() => copy(peer.offerCode)}>
+                      {Icons.copy} Copy code
+                    </button>
+                  </div>
+                  <textarea
+                    className="live-code"
+                    value={replies[peer.id] ?? ''}
+                    placeholder="Paste their reply code"
+                    aria-label="Reply code"
+                    onChange={(e) => setReplies((cur) => ({ ...cur, [peer.id]: e.target.value }))}
+                  />
+                  <div className="panel-actions">
+                    <button
+                      type="button"
+                      disabled={!replies[peer.id]?.trim()}
+                      onClick={() => run(() => session.acceptReply(peer.id, replies[peer.id] ?? ''))}
+                    >
+                      Connect
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+          <div className="panel-actions">
+            <button type="button" onClick={() => run(() => session.addGuest())}>
+              New guest
+            </button>
+            <button type="button" onClick={() => session.leave()}>
+              Leave
+            </button>
+          </div>
+        </>
+      )}
+      {session.role === 'guest' && (
+        <>
+          <p className={`live-status ${session.phase === 'failed' ? 'failed' : ''}`}>{phaseText(session.phase)}</p>
+          {session.answerCode && session.phase !== 'connected' && session.phase !== 'failed' && (
+            <>
+              <p className="live-status">Send this reply code back to the host.</p>
+              <textarea className="live-code" readOnly value={session.answerCode} aria-label="Reply code" />
+              <div className="panel-actions">
+                <button type="button" onClick={() => copy(session.answerCode)}>
+                  {Icons.copy} Copy reply
+                </button>
+              </div>
+            </>
+          )}
+          <div className="panel-actions">
+            <button type="button" onClick={() => session.leave()}>
+              Leave
+            </button>
+          </div>
+        </>
+      )}
+      {error && <p className="live-status failed">{error}</p>}
+    </div>
+  );
+}
+
 export function Toolbar({ editor }: { editor: Editor }) {
   useEditor(editor);
   const [panel, setPanel] = useState<Panel>(null);
@@ -575,6 +699,8 @@ export function Toolbar({ editor }: { editor: Editor }) {
         </div>
       )}
 
+      {panel === 'live' && <LivePanel editor={editor} />}
+
       {panel === 'help' && (
         <div className="panel help">
           <div className="panel-title">Controls</div>
@@ -675,6 +801,9 @@ export function Toolbar({ editor }: { editor: Editor }) {
           </Btn>
           <Btn title="Theme" active={panel === 'theme'} onClick={() => toggle('theme')}>
             {Icons.theme}
+          </Btn>
+          <Btn title="Multiplayer" active={panel === 'live'} onClick={() => toggle('live')}>
+            {Icons.people}
           </Btn>
           <Btn title="Help" active={panel === 'help'} onClick={() => toggle('help')}>
             {Icons.help}

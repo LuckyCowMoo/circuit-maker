@@ -149,6 +149,11 @@ export function avoidMap(doc: Doc): AvoidMap {
   return map;
 }
 
+/** Drop cached wire curves so the next draw matches a fresh load. */
+export function invalidateRoutes(): void {
+  built = null;
+}
+
 function livesInside(box: Rect, p: Point, dir: Point): boolean {
   const inset = inflate(box, -2);
   if (inset.w > 0 && inset.h > 0 && pointInRect(p, inset)) return true;

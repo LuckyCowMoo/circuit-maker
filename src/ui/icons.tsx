@@ -86,6 +86,14 @@ export const Icons = {
       <path d="M12 4a8 8 0 000 16z" fill="currentColor" />
     </Svg>
   ),
+  people: (
+    <Svg>
+      <circle cx="9" cy="8" r="3" />
+      <path d="M3.5 19c.6-2.8 2.7-4 5.5-4s4.9 1.2 5.5 4" />
+      <circle cx="17" cy="9" r="2.2" />
+      <path d="M16 15c1.8.2 3.2 1.2 3.8 3" />
+    </Svg>
+  ),
   help: (
     <Svg>
       <circle cx="12" cy="12" r="9" />

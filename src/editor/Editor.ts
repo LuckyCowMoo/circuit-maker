@@ -36,7 +36,7 @@ import {
   rotatedSize,
   snap,
 } from '../model/geometry';
-import { avoidMap, routedWire, wireStyleOf, type WireStyle } from '../model/route';
+import { avoidMap, invalidateRoutes, routedWire, wireStyleOf, type WireStyle } from '../model/route';
 import { floatsAboveBoxes, type PartContext } from '../model/parts';
 import {
   buildBoxTree,
@@ -70,10 +70,11 @@ import {
   laneCount,
 } from '../model/types';
 import { Simulator } from '../sim/simulator';
-import { docToText, FILE_EXTENSION, parseCircuit, serialize, type FileView } from '../io/format';
+import { docToText, FILE_EXTENSION, parseCircuit, serialize, type CircuitFile, type FileView } from '../io/format';
 import { buildSvg, svgToPng } from '../io/export';
 import { downloadBlob, downloadText, safeFilename } from '../io/download';
 import { colorsFor, renderScene, TOOLBAR_SPACE } from './renderer';
+import { acceptEdit, CircuitSession, type NetMessage } from '../net/session';
 import halfAdderExample from '../../examples/half-adder.cmk.json?raw';
 
 export type Tool = 'select' | 'pan';
@@ -270,6 +271,10 @@ export class Editor {
   tool: Tool = 'select';
   selection = new Set<string>();
   sim = new Simulator();
+  session = new CircuitSession();
+  private netRev = 0;
+  private netQuiet = false;
+  private netTimer: ReturnType<typeof setTimeout> | undefined;
   menu: PlaceMenu | null = null;
   placing: PlaceKind | null = null;
   /** World position of the placement preview. */
@@ -324,6 +329,14 @@ export class Editor {
   private rect: DOMRect | null = null;
   /** View to apply once the canvas has a size. */
   private pendingView: FileView | 'fit' | null = null;
+
+  constructor() {
+    this.session.onMessage = (msg) => this.onNetMessage(msg);
+    this.session.onOpen = () => {
+      if (this.session.role === 'host') this.sendSnap();
+    };
+    this.session.onChange = () => this.emit();
+  }
 
   // ---------------------------------------------------------------- lifecycle
 
@@ -448,6 +461,7 @@ export class Editor {
     this.needsRender = true;
     this.scheduleAutosave();
     this.emit();
+    this.scheduleNetDoc();
   }
 
   toast(message: string, action: { label: string; run: () => void } | null = null): void {
@@ -732,6 +746,7 @@ export class Editor {
   setWireStyle(style: WireStyle): void {
     this.wireStyle = style;
     storage.set(BEND_KEY, style);
+    invalidateRoutes();
     this.needsRender = true;
     this.emit();
   }
@@ -1255,6 +1270,7 @@ export class Editor {
     this.needsRender = true;
     this.scheduleAutosave();
     this.emit();
+    this.publishInput({ t: 'input', kind: 'switch', id, on: c.on });
   }
 
   /** Sets or clears the keyboard binding on selected switches and buttons. */
@@ -1906,7 +1922,7 @@ export class Editor {
     let press: string | null = null;
     if (comp?.kind === 'button') {
       press = comp.id;
-      this.sim.setPressed(comp.id, true);
+      this.notePress(comp.id, true);
     }
     this.drag = {
       kind: 'move',
@@ -1927,7 +1943,7 @@ export class Editor {
   private startPinch(): void {
     const [a, b] = [...this.pointers.values()];
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    if (this.drag?.kind === 'move' && this.drag.press) this.sim.setPressed(this.drag.press, false);
+    if (this.drag?.kind === 'move' && this.drag.press) this.notePress(this.drag.press, false);
     this.drag = { kind: 'pinch', dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), world: this.toWorld(mid), zoom: this.cam.zoom };
   }
 
@@ -1968,7 +1984,7 @@ export class Editor {
           if (!far(d.sx, d.sy)) return;
           d.moved = true;
           if (d.press) {
-            this.sim.setPressed(d.press, false);
+            this.notePress(d.press, false);
             d.press = null;
           }
           d.toggle = null;
@@ -2137,7 +2153,7 @@ export class Editor {
         this.scheduleAutosave();
         break;
       case 'move':
-        if (d.press) this.sim.setPressed(d.press, false);
+        if (d.press) this.notePress(d.press, false);
         if (d.moved) this.changed(false);
         else if (!cancelled) {
           if (d.toggle) this.toggleSwitch(d.toggle);
@@ -2379,10 +2395,10 @@ export class Editor {
         if (down) {
           if (this.keyHeldButtons.has(c.id)) continue;
           this.keyHeldButtons.add(c.id);
-          this.sim.setPressed(c.id, true);
+          this.notePress(c.id, true);
           this.needsRender = true;
         } else if (this.keyHeldButtons.delete(c.id)) {
-          this.sim.setPressed(c.id, false);
+          this.notePress(c.id, false);
           this.needsRender = true;
         }
       }
@@ -2392,7 +2408,7 @@ export class Editor {
 
   private releaseKeyHeldButtons(): void {
     if (!this.keyHeldButtons.size) return;
-    for (const id of this.keyHeldButtons) this.sim.setPressed(id, false);
+    for (const id of this.keyHeldButtons) this.notePress(id, false);
     this.keyHeldButtons.clear();
     this.needsRender = true;
   }
@@ -2400,7 +2416,7 @@ export class Editor {
   private onBlur = (): void => {
     this.spaceHeld = false;
     this.releaseKeyHeldButtons();
-    if (this.drag?.kind === 'move' && this.drag.press) this.sim.setPressed(this.drag.press, false);
+    if (this.drag?.kind === 'move' && this.drag.press) this.notePress(this.drag.press, false);
   };
 
   /** The selection as project-file text (used for the clipboard). */
@@ -2455,8 +2471,82 @@ export class Editor {
 
   /** Presses or releases a button from outside the canvas (the inputs list). */
   setPressed(id: string, pressed: boolean): void {
+    this.notePress(id, pressed);
+  }
+
+  private notePress(id: string, pressed: boolean): void {
     this.sim.setPressed(id, pressed);
     this.needsRender = true;
+    this.publishInput({ t: 'input', kind: 'button', id, pressed });
+  }
+
+  private publishInput(msg: NetMessage): void {
+    if (this.netQuiet || !this.session.live) return;
+    this.session.send(msg);
+  }
+
+  private scheduleNetDoc(): void {
+    if (this.netQuiet || !this.session.live) return;
+    clearTimeout(this.netTimer);
+    this.netTimer = setTimeout(() => {
+      if (this.netQuiet || !this.session.live) return;
+      if (this.session.role === 'host') {
+        this.netRev++;
+        this.sendSnap();
+      } else if (this.session.role === 'guest') {
+        this.session.send({ t: 'edit', rev: this.netRev, doc: serialize(this.doc) });
+      }
+    }, 50);
+  }
+
+  private sendSnap(): void {
+    this.session.send({ t: 'snap', rev: this.netRev, doc: serialize(this.doc) });
+  }
+
+  private replaceNetDoc(file: CircuitFile): void {
+    this.doc = parseCircuit(JSON.stringify(file)).doc;
+    for (const id of [...this.selection]) if (!this.itemExists(id)) this.selection.delete(id);
+    this.changed(true);
+  }
+
+  private onNetMessage(msg: NetMessage): void {
+    clearTimeout(this.netTimer);
+    if (msg.t === 'snap' && this.session.role === 'guest') {
+      this.netQuiet = true;
+      this.netRev = msg.rev;
+      this.replaceNetDoc(msg.doc);
+      this.netQuiet = false;
+      return;
+    }
+    if (msg.t === 'edit' && this.session.role === 'host') {
+      if (!acceptEdit(this.netRev, msg.rev)) {
+        this.sendSnap();
+        return;
+      }
+      this.netRev++;
+      this.netQuiet = true;
+      this.replaceNetDoc(msg.doc);
+      this.netQuiet = false;
+      this.sendSnap();
+      return;
+    }
+    if (msg.t !== 'input') return;
+    this.netQuiet = true;
+    if (msg.kind === 'switch') {
+      const c = this.doc.components.get(msg.id);
+      if (c?.kind === 'switch' && c.on !== msg.on) {
+        c.on = msg.on;
+        this.sim.setSwitch(msg.id, msg.on);
+        this.needsRender = true;
+        this.scheduleAutosave();
+        this.emit();
+      }
+    } else {
+      this.sim.setPressed(msg.id, msg.pressed);
+      this.needsRender = true;
+    }
+    this.netQuiet = false;
+    if (this.session.role === 'host') this.session.send(msg);
   }
 
   /** Inputs and output indicators, sorted by label, for the side lists. */

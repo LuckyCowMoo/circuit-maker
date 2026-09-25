@@ -424,6 +424,24 @@ export function wireCurve(a: Point, b: Point, da: Point = RIGHT, db: Point = LEF
   return { a, c1: { x: a.x + da.x * k, y: a.y + da.y * k }, c2: { x: b.x + db.x * k, y: b.y + db.y * k }, b };
 }
 
+/** Pull both ends of a curve back along their tangents, so a thick stroke stops at the pin. */
+export function insetCurve(c: WireCurve, dist: number): WireCurve {
+  const pull = (p: Point, toward: Point): Point => {
+    const dx = toward.x - p.x;
+    const dy = toward.y - p.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.5) return p;
+    const s = Math.min(dist, len * 0.45);
+    return { x: p.x + (dx / len) * s, y: p.y + (dy / len) * s };
+  };
+  const a = pull(c.a, c.c1);
+  if (!c.tail?.length) return { ...c, a, b: pull(c.b, c.c2) };
+  const tail = c.tail.map((s) => ({ c1: s.c1, c2: s.c2, b: s.b }));
+  const last = tail[tail.length - 1];
+  last.b = pull(last.b, last.c2);
+  return { ...c, a, tail };
+}
+
 /** The curve of a wire from `src`'s output to input `input` of `dst`. */
 export function wireBetween(src: Component, dst: Component, input: number, lane = 0): WireCurve | null {
   const a = attachPos(src, bundleSource(src) ? -1 : -1 - lane);
