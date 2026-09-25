@@ -345,6 +345,8 @@ export class Editor {
   boxT = new Map<string, number>();
   drag: Drag | null = null;
 
+  /** Opens the save panel. The toolbar sets this; Ctrl/Cmd+S calls it. */
+  openSave: (() => void) | null = null;
   canvas: HTMLCanvasElement | null = null;
   ctx: CanvasRenderingContext2D | null = null;
   width = 0;
@@ -2354,8 +2356,13 @@ export class Editor {
   // ---------------------------------------------------------------- keyboard & clipboard
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (isTyping(e.target)) return;
     const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      this.openSave?.();
+      return;
+    }
+    if (isTyping(e.target)) return;
     const key = e.key.toLowerCase();
     if (!mod && !e.altKey && this.handleBoundKey(e, true)) {
       e.preventDefault();
@@ -2388,11 +2395,6 @@ export class Editor {
     if (mod && key === 'd') {
       e.preventDefault();
       this.duplicateSelection();
-      return;
-    }
-    if (mod && key === 's') {
-      e.preventDefault();
-      void this.exportAs('project', 'all');
       return;
     }
     if (mod) return;

@@ -543,6 +543,13 @@ export function Toolbar({ editor }: { editor: Editor }) {
   const hasSelection = editor.selection.size > 0;
 
   useEffect(() => {
+    editor.openSave = () => setPanel('save');
+    return () => {
+      editor.openSave = null;
+    };
+  }, [editor]);
+
+  useEffect(() => {
     if (!panel) return;
     const close = (e: PointerEvent) => {
       if (!dockRef.current?.contains(e.target as Node)) setPanel(null);
@@ -762,7 +769,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
             <li><b>Box</b> with items selected wraps them in a box; wires through its walls get connectors you can label and slide</li>
             <li><b>Shift</b>+click / drag to add to the selection</li>
             <li><kbd>R</kbd> rotate, <kbd>M</kbd> flip, <kbd>+</kbd>/<kbd>-</kbd> inputs, <kbd>N</kbd> NOT, <kbd>F</kbd> fit view</li>
-            <li><kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Y</kbd> undo/redo, <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>V</kbd>/<kbd>D</kbd> copy/paste/duplicate</li>
+            <li><kbd>Ctrl</kbd>+<kbd>Z</kbd>/<kbd>Y</kbd> undo/redo, <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>V</kbd>/<kbd>D</kbd> copy/paste/duplicate, <kbd>Ctrl</kbd>+<kbd>S</kbd> save</li>
           </ul>
           <div className="panel-actions">
             <button
@@ -814,7 +821,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
           <Btn title="Open" active={panel === 'open'} onClick={() => toggle('open')}>
             {Icons.open}
           </Btn>
-          <Btn title="Save" active={panel === 'save'} onClick={() => toggle('save')}>
+          <Btn title="Save (Ctrl+S)" active={panel === 'save'} onClick={() => toggle('save')}>
             {Icons.save}
           </Btn>
           <Btn title="Theme" active={panel === 'theme'} onClick={() => toggle('theme')}>
