@@ -15,6 +15,7 @@ import {
   snap,
   STROKE_W,
   wireCurve,
+  wireEndPin,
   xformOf,
   type WireCurve,
   type Xf,
@@ -727,7 +728,7 @@ export function renderScene(ed: Editor): void {
     const from = src && attachPos(src, drag.from.pin);
     if (src && from) {
       const tc = drag.target && doc.components.get(drag.target.comp);
-      const to = (tc && attachPos(tc, drag.target!.pin)) || drag.cur;
+      const to = (tc && attachPos(tc, wireEndPin(tc, drag.target!.pin))) || drag.cur;
       const dFrom = pinDir(src, drag.from.pin);
       const dTo = tc ? pinDir(tc, drag.target!.pin) : { x: -dFrom.x, y: -dFrom.y };
       const outward = drag.from.pin < 0;

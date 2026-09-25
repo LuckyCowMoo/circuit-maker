@@ -1901,17 +1901,13 @@ export class Editor {
     const pin = this.hitPin(w, want, clamp(14 / this.cam.zoom, 10, 30));
     if (pin) {
       const hit = this.doc.components.get(pin.comp);
-      if (hit && !cableDrag && this.isCablePlug(pin, hit)) {
-        const lane = this.ribbonLanePin(hit, w);
-        if (lane) return lane;
-      } else return pin;
+      // A plain wire never previews the cable socket. It snaps to a wire pin, or to nothing.
+      if (hit && !cableDrag && isRibbonPort(hit) && bundleInput(hit) !== bundleOutput(hit)) return this.ribbonLanePin(hit, w);
+      return pin;
     }
     const c = this.hitComponent(w);
     if (!c || c.kind === 'marker') return null;
-    if (!cableDrag && isRibbonPort(c)) {
-      const lane = this.ribbonLanePin(c, w);
-      if (lane) return lane;
-    }
+    if (!cableDrag && isRibbonPort(c) && bundleInput(c) !== bundleOutput(c)) return this.ribbonLanePin(c, w);
     const g = geomOf(c);
     if (want === 'out') return g.output ? { comp: c.id, pin: -1 } : null;
     let best: PinRef | null = null;
@@ -1932,9 +1928,9 @@ export class Editor {
     if (!isRibbonPort(c) || (bundleInput(c) && bundleOutput(c))) return null;
     const g = geomOf(c);
     const pins = !bundleInput(c) ? g.inputs.map((_, i) => i) : (g.outputs ?? []).map((_, i) => -1 - i);
-    const r = clamp(18 / this.cam.zoom, 12, 36);
+    const reach = Math.hypot(g.w, g.h) / 2 + 28;
     let best: PinRef | null = null;
-    let bestD = r;
+    let bestD = reach;
     for (const pin of pins) {
       const p = pinPos(c, pin);
       if (!p) continue;

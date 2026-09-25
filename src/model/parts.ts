@@ -3,7 +3,7 @@ import { outwardNormal, portSide } from './ports';
 import { labelBeside, portLabel, type DrawInfo, type TextOp } from './shapes';
 import type { Theme, WireColors } from './themes';
 import type { Component, Doc } from './types';
-import { bundleInput, isIO, laneCount } from './types';
+import { bundleInput, isIO, isRibbonPort, laneCount } from './types';
 
 /** Per-document data needed to draw parts, recomputed when the wiring changes. */
 export interface PartContext {
@@ -21,6 +21,17 @@ export function partInfo(pc: PartContext, c: Component, theme: Theme, active: bo
     info.netOn = pc.colors(pc.roots.get(c.id) ?? c.id, theme).on;
   }
   if (c.kind === 'port') info.accent = (c.box && pc.doc.boxes.get(c.box)?.color) || theme.box;
+  if (isRibbonPort(c)) {
+    let cableIn = false;
+    let cableOut = false;
+    for (const w of pc.doc.wires.values()) {
+      if (!w.cable) continue;
+      if (w.to === c.id) cableIn = true;
+      if (w.from === c.id) cableOut = true;
+    }
+    info.cableIn = cableIn;
+    info.cableOut = cableOut;
+  }
   if (laneCount(c) > 1) {
     info.lanes = [];
     for (let i = 0; i < laneCount(c); i++) {

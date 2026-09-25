@@ -31,6 +31,9 @@ export interface DrawInfo {
   accent?: string;
   /** Ribbon lanes, in order. */
   lanes?: { on: boolean; color: string }[];
+  /** A ribbon cable is plugged into that face. Lane wires do not count. */
+  cableIn?: boolean;
+  cableOut?: boolean;
   /** Switch pip position, 0 off to 1 on. Logic ignores this and uses `active`. */
   switchT?: number;
   /** Bulb glow, 0–1. Colour crossfades separately via `bulbColor`. */
@@ -443,7 +446,7 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
     };
     // Each face independently exposes either one cable socket or one pin per lane.
     if (cableIn) {
-      const cableWired = mask[lanesN] === '1';
+      const cableWired = info.cableIn ?? mask[lanesN] === '1';
       const pin = g.inputs[0];
       if (!cableWired) {
         stub(pin.x, 0, pin.y);
@@ -456,7 +459,7 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
       });
     }
     if (cableOut) {
-      const cableWired = mask[0] === '1';
+      const cableWired = info.cableOut ?? mask[0] === '1';
       const pin = g.outputs![0];
       if (!cableWired) {
         stub(g.w, pin.x, pin.y);
@@ -464,7 +467,7 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
       }
     } else {
       (g.outputs ?? []).forEach((p, i) => {
-        if (mask[i] === '1') return;
+        if (mask[i] === '1' || mask[lanesN + i] === '1') return;
         stub(g.w, p.x, p.y, info.lanes?.[i]?.color);
       });
     }
