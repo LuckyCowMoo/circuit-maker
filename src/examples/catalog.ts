@@ -18,6 +18,7 @@ import {
   srDoc,
   sub8Doc,
 } from './circuits';
+import { snakeDoc } from './snake';
 import { emptyDoc, makeComponent } from '../model/doc';
 
 export interface Example {
@@ -116,6 +117,10 @@ export const EXAMPLES: ExampleGroup[] = [
       { id: 'mux4', name: '4-to-1 multiplexer', build: mux4Doc },
       { id: 'dec2', name: '2-to-4 decoder', build: dec2Doc },
     ],
+  },
+  {
+    name: 'Games',
+    items: [{ id: 'snake', name: 'Snake', build: snakeDoc }],
   },
   {
     name: 'Tests',

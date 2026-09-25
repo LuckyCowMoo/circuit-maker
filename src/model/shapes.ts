@@ -31,12 +31,35 @@ export interface DrawInfo {
   accent?: string;
   /** Ribbon lanes, in order. */
   lanes?: { on: boolean; color: string }[];
+  /** Switch pip position, 0 off to 1 on. Logic ignores this and uses `active`. */
+  switchT?: number;
+  /** Bulb glow, 0–1. Colour crossfades separately via `bulbColor`. */
+  bulbPower?: number;
+  bulbColor?: string;
 }
 
 const f = (n: number) => Math.round(n * 100) / 100;
 
 export function circlePath(cx: number, cy: number, r: number): string {
   return `M${f(cx + r)} ${f(cy)}A${f(r)} ${f(r)} 0 1 1 ${f(cx - r)} ${f(cy)}A${f(r)} ${f(r)} 0 1 1 ${f(cx + r)} ${f(cy)}Z`;
+}
+
+/** Glow around a bulb. A square bulb at the default size gets a circle, not a rounded square. */
+function bulbGlow(g: Geom, power: number): string {
+  const pad = 7 * power;
+  const w = g.w + 2 * pad;
+  const h = g.h + 2 * pad;
+  return roundRectD(-pad, -pad, w, h, Math.min(w, h) / 2);
+}
+
+/** Horizontal capsule. Equal ends collapse to a circle, so a resting pip hides it completely. */
+function capsuleH(x0: number, x1: number, cy: number, rad: number): string {
+  if (x1 - x0 < 0.01) return circlePath(x0, cy, rad);
+  return (
+    `M${f(x0)} ${f(cy - rad)}H${f(x1)}` +
+    `A${f(rad)} ${f(rad)} 0 0 1 ${f(x1)} ${f(cy + rad)}` +
+    `H${f(x0)}A${f(rad)} ${f(rad)} 0 0 1 ${f(x0)} ${f(cy - rad)}Z`
+  );
 }
 
 export function roundRectD(x: number, y: number, w: number, h: number, r: number): string {
@@ -244,15 +267,11 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
         if (mask[3 + i] !== '1') stub(pin.x, g.back[i] ?? 3, pin.y, ['#ef4444', '#22c55e', '#3b82f6'][i]);
       });
     }
-    if (lit) {
-      ops.push({
-        t: 'path',
-        d: roundRectD(-7, -7, g.w + 14, g.h + 14, Math.min(g.w, g.h) / 2),
-        fill: mixed,
-        alpha: 0.3,
-      });
-    }
-    ops.push({ t: 'path', d: shapes(g).body, fill: lit ? mixed : c.fill ?? undefined, stroke });
+    const power = info.bulbPower ?? (lit ? 1 : 0);
+    const shown = info.bulbColor ?? mixed;
+    if (power > 0.01) ops.push({ t: 'path', d: bulbGlow(g, power), fill: shown, alpha: 0.3 * power });
+    ops.push({ t: 'path', d: shapes(g).body, fill: c.fill ?? undefined, stroke });
+    if (power > 0.01) ops.push({ t: 'path', d: shapes(g).body, fill: shown, alpha: power });
     const labels = ['R', 'G', 'B'];
     if (!cable) {
       g.inputs.forEach((pin, i) =>
@@ -278,11 +297,15 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
       if (stubs) ops.push({ t: 'path', d: stubs, stroke });
       const half = 6 * s + Math.max(0, g.w - g.h) * 0.25;
       const r = 7 * s;
-      ops.push(
-        { t: 'path', d: shapes(g).body, fill, stroke },
-        { t: 'path', d: roundRectD(cx - half - r, cy - r, 2 * (half + r), 2 * r, r), fill: active ? onColor : theme.trackOff, stroke, width: 1.8 },
-        { t: 'path', d: circlePath(active ? cx + half : cx - half, cy, 5 * s), fill, stroke, width: 1.8 },
-      );
+      const t = info.switchT ?? (active ? 1 : 0);
+      const cap = cx - half;
+      const trackL = cap - r;
+      const pipX = cap + 2 * half * t;
+      ops.push({ t: 'path', d: shapes(g).body, fill, stroke });
+      ops.push({ t: 'path', d: roundRectD(trackL, cy - r, 2 * (half + r), 2 * r, r), fill: theme.trackOff });
+      ops.push({ t: 'path', d: capsuleH(cap, pipX, cy, r - 1.2), fill: onColor });
+      ops.push({ t: 'path', d: roundRectD(trackL, cy - r, 2 * (half + r), 2 * r, r), stroke, width: 1.8 });
+      ops.push({ t: 'path', d: circlePath(pipX, cy, r - 0.8), fill, stroke, width: 1.6 });
       return ops;
     }
     case 'button': {
@@ -319,17 +342,16 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
       return ops;
     }
     case 'bulb': {
-      const lit = c.color ?? theme.bulb;
-      // Unlit bulbs are hollow unless the user set a fill colour.
-      const bodyFill = active ? lit : c.fill ?? undefined;
+      const litColor = c.color ?? theme.bulb;
+      const power = info.bulbPower ?? (active ? 1 : 0);
+      const shown = info.bulbColor ?? litColor;
+      const bodyFill = c.fill;
       if (stubs) ops.push({ t: 'path', d: stubs, stroke });
-      if (active) {
-        const w = g.w + 14;
-        const h = g.h + 14;
-        ops.push({ t: 'path', d: roundRectD(-7, -7, w, h, Math.min(w, h) / 2), fill: lit, alpha: 0.3 });
-      }
-      ops.push({ t: 'path', d: shapes(g).body, fill: bodyFill, stroke });
-      if (Math.min(g.w, g.h) >= 30) ops.push({ t: 'path', d: filament(g), stroke: active ? '#6b3f00' : stroke, width: 1.6 });
+      if (power > 0.01) ops.push({ t: 'path', d: bulbGlow(g, power), fill: shown, alpha: 0.3 * power });
+      ops.push({ t: 'path', d: shapes(g).body, fill: bodyFill ?? undefined, stroke });
+      if (power > 0.01 && power < 1) ops.push({ t: 'path', d: shapes(g).body, fill: shown, alpha: power });
+      else if (power >= 1) ops.push({ t: 'path', d: shapes(g).body, fill: shown });
+      if (Math.min(g.w, g.h) >= 30) ops.push({ t: 'path', d: filament(g), stroke: power > 0.5 ? '#6b3f00' : stroke, width: 1.6 });
       return ops;
     }
     case 'port': {

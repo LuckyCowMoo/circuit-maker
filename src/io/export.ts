@@ -6,7 +6,6 @@ import {
   curveBounds,
   curveSvgPath,
   inflate,
-  insetCurve,
   pinDir,
   STROKE_W,
   unionRects,
@@ -109,7 +108,7 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
     const cols = wireColors(pc.roots.get(srcKey) ?? w.from, theme);
     const d = curveSvgPath(curve);
     if (sim.value(w.from, w.lane ?? 0)) {
-      out.push(`<path d="${curveSvgPath(insetCurve(curve, 4.5))}" fill="none" stroke="${cols.glow}" stroke-width="9"/>`);
+      out.push(`<path d="${d}" fill="none" stroke="${cols.glow}" stroke-width="9"/>`);
       out.push(`<path d="${d}" fill="none" stroke="${cols.on}" stroke-width="3"/>`);
     } else {
       out.push(`<path d="${d}" fill="none" stroke="${cols.off}" stroke-width="${STROKE_W}"/>`);

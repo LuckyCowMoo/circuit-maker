@@ -15,7 +15,6 @@ import {
   snap,
   STROKE_W,
   wireCurve,
-  insetCurve,
   xformOf,
   type WireCurve,
   type Xf,
@@ -454,7 +453,7 @@ export function renderScene(ed: Editor): void {
   // Wires, batched by colour: unpowered first, then glowing powered wires on top. A wire takes
   // the colour of the part that really drives it, so it keeps its hue through box ports.
   const offPaths = new Map<string, Path2D>();
-  const onPaths = new Map<string, { cols: WireColors; path: Path2D; glow: Path2D }>();
+  const onPaths = new Map<string, { cols: WireColors; path: Path2D }>();
   const signals = signalKeys(doc);
   const laneKey = (id: string, lane = 0) => (lane ? `${id}#${lane}` : id);
   const picked = new Set<string>();
@@ -484,9 +483,8 @@ export function renderScene(ed: Editor): void {
     if (onNet(w.from, w.lane ?? 0)) selectedCurves.push(curve);
     if (sim.value(w.from, w.lane ?? 0)) {
       let entry = onPaths.get(cols.on);
-      if (!entry) onPaths.set(cols.on, (entry = { cols, path: new Path2D(), glow: new Path2D() }));
+      if (!entry) onPaths.set(cols.on, (entry = { cols, path: new Path2D() }));
       addCurve(entry.path, curve);
-      addCurve(entry.glow, insetCurve(curve, Math.max(9, 5 * px) / 2));
     } else {
       let p = offPaths.get(cols.off);
       if (!p) offPaths.set(cols.off, (p = new Path2D()));
@@ -507,9 +505,9 @@ export function renderScene(ed: Editor): void {
   }
   if (!far) {
     ctx.lineWidth = Math.max(9, 5 * px);
-    for (const { cols, glow } of onPaths.values()) {
+    for (const { cols, path } of onPaths.values()) {
       ctx.strokeStyle = cols.glow;
-      ctx.stroke(glow);
+      ctx.stroke(path);
     }
   }
   ctx.lineWidth = far ? dp : Math.max(3, 1.5 * px);
@@ -565,6 +563,14 @@ export function renderScene(ed: Editor): void {
   const drawParts = (list: Iterable<Component>) => {
     for (const c of list) {
       const info = partInfo(pc, c, theme, ed.isActive(c));
+      if (c.kind === 'switch') info.switchT = ed.switchBlend(c.id);
+      if (c.kind === 'bulb' || c.kind === 'rgb') {
+        const look = ed.bulbLook(c.id);
+        if (look) {
+          info.bulbPower = look.power;
+          info.bulbColor = look.color;
+        }
+      }
       info.lanes?.forEach((lane, i) => {
         lane.on = ed.sim.value(c.id, i);
       });

@@ -88,12 +88,46 @@ describe('examples', () => {
         if (e.id === 'stress') continue;
         const doc = e.build();
         const tree = buildBoxTree(doc);
-        const parts = [...doc.components.values()].filter((c) => c.kind !== 'port');
-        for (let i = 0; i < parts.length; i++) {
-          for (let j = i + 1; j < parts.length; j++) {
-            if (tree.scope(parts[i]) !== tree.scope(parts[j])) continue;
-            const overlap = rectsOverlap(bodyRect(parts[i]), bodyRect(parts[j]));
-            expect(overlap, `${e.id}: ${parts[i].id} overlaps ${parts[j].id}`).toBe(false);
+        const byScope = new Map<string, { id: string; rect: ReturnType<typeof bodyRect> }[]>();
+        for (const c of doc.components.values()) {
+          if (c.kind === 'port') continue;
+          const key = tree.scope(c) ?? '';
+          const list = byScope.get(key);
+          const item = { id: c.id, rect: bodyRect(c) };
+          if (list) list.push(item);
+          else byScope.set(key, [item]);
+        }
+        // A spatial hash keeps this honest for large boxes. A 200-unit cell is
+        // bigger than a gate, so only nearby parts are compared.
+        const cell = 200;
+        for (const parts of byScope.values()) {
+          const bins = new Map<number, number[]>();
+          parts.forEach((p, i) => {
+            const x0 = Math.floor(p.rect.x / cell);
+            const y0 = Math.floor(p.rect.y / cell);
+            const x1 = Math.floor((p.rect.x + p.rect.w) / cell);
+            const y1 = Math.floor((p.rect.y + p.rect.h) / cell);
+            for (let x = x0; x <= x1; x++) {
+              for (let y = y0; y <= y1; y++) {
+                const k = x * 73856093 + y * 19349663;
+                const bin = bins.get(k);
+                if (bin) bin.push(i);
+                else bins.set(k, [i]);
+              }
+            }
+          });
+          const seen = new Set<string>();
+          for (const bin of bins.values()) {
+            for (let a = 0; a < bin.length; a++) {
+              for (let b = a + 1; b < bin.length; b++) {
+                const i = bin[a] < bin[b] ? bin[a] : bin[b];
+                const j = bin[a] < bin[b] ? bin[b] : bin[a];
+                const pair = `${i}:${j}`;
+                if (seen.has(pair)) continue;
+                seen.add(pair);
+                expect(rectsOverlap(parts[i].rect, parts[j].rect), `${e.id}: ${parts[i].id} overlaps ${parts[j].id}`).toBe(false);
+              }
+            }
           }
         }
       }

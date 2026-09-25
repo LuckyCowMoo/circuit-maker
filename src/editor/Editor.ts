@@ -262,6 +262,52 @@ const isTyping = (t: EventTarget | null) =>
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+const VIS_MS = 100;
+const SWITCH_MS = 100;
+
+type Rgb = [number, number, number];
+interface BulbVis {
+  pFrom: number;
+  pTo: number;
+  pT0: number;
+  cFrom: Rgb;
+  cTo: Rgb;
+  cT0: number;
+}
+
+function lerpAnim(from: number, to: number, t0: number, now: number, ms = VIS_MS): number {
+  const u = Math.min(1, Math.max(0, (now - t0) / ms));
+  const e = u * u * (3 - 2 * u);
+  return from + (to - from) * e;
+}
+
+function lerpRgb(from: Rgb, to: Rgb, t0: number, now: number): Rgb {
+  const u = Math.min(1, Math.max(0, (now - t0) / VIS_MS));
+  const e = u * u * (3 - 2 * u);
+  return [Math.round(from[0] + (to[0] - from[0]) * e), Math.round(from[1] + (to[1] - from[1]) * e), Math.round(from[2] + (to[2] - from[2]) * e)];
+}
+
+function parseCss(color: string): Rgb {
+  const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(color.trim());
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  const rgb = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i.exec(color);
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+  return [255, 207, 51];
+}
+
+function bulbRgb(c: Component, fallback: string, sim: { value(id: string, lane?: number): boolean }): Rgb | null {
+  if (c.kind === 'rgb') {
+    const on = [0, 1, 2].map((i) => sim.value(c.id, i));
+    if (!on.some(Boolean)) return null;
+    return [on[0] ? 255 : 0, on[1] ? 255 : 0, on[2] ? 255 : 0];
+  }
+  return parseCss(c.color ?? fallback);
+}
+
 export class Editor {
   doc: Doc = emptyDoc();
   cam: Camera = { x: -400, y: -300, zoom: 1 };
@@ -318,6 +364,9 @@ export class Editor {
   private keyHeldButtons = new Set<string>();
   private needsRender = true;
   private topologyDirty = true;
+  private visNow = 0;
+  private switchVis = new Map<string, { from: number; to: number; t0: number }>();
+  private bulbVis = new Map<string, BulbVis>();
   private raf = 0;
   private pointers = new Map<number, Point>();
   private mouse: Point = { x: 0, y: 0 };
@@ -422,6 +471,7 @@ export class Editor {
       this.simVersion++;
       for (const fn of this.simListeners) fn();
     }
+    this.syncVisuals(now);
     if (this.needsRender) {
       this.needsRender = false;
       renderScene(this);
@@ -2459,6 +2509,67 @@ export class Editor {
   };
 
   // ---------------------------------------------------------------- misc queries
+
+  /** Pip position for a switch, 0 (off) to 1 (on), eased over a tenth of a second. */
+  switchBlend(id: string): number {
+    const s = this.switchVis.get(id);
+    if (!s) return 0;
+    return lerpAnim(s.from, s.to, s.t0, this.visNow, SWITCH_MS);
+  }
+
+  /** Glow amount and the colour a bulb is currently showing. */
+  bulbLook(id: string): { power: number; color: string } | null {
+    const b = this.bulbVis.get(id);
+    if (!b) return null;
+    const rgb = lerpRgb(b.cFrom, b.cTo, b.cT0, this.visNow);
+    return { power: lerpAnim(b.pFrom, b.pTo, b.pT0, this.visNow), color: `rgb(${rgb[0]},${rgb[1]},${rgb[2]})` };
+  }
+
+  /** Moves switch pips and bulb glows. The simulator has already settled. */
+  private syncVisuals(now: number): void {
+    this.visNow = now;
+    let busy = false;
+    const alive = new Set<string>();
+    for (const c of this.doc.components.values()) {
+      if (c.kind === 'switch') {
+        alive.add(c.id);
+        const goal = c.on ? 1 : 0;
+        let s = this.switchVis.get(c.id);
+        if (!s) this.switchVis.set(c.id, (s = { from: goal, to: goal, t0: now }));
+        else if (s.to !== goal) {
+          s.from = lerpAnim(s.from, s.to, s.t0, now, SWITCH_MS);
+          s.to = goal;
+          s.t0 = now;
+        }
+        if (s.from !== s.to && now - s.t0 < SWITCH_MS) busy = true;
+      } else if (c.kind === 'bulb' || c.kind === 'rgb') {
+        alive.add(c.id);
+        const on = c.kind === 'rgb' ? this.sim.value(c.id) || this.sim.value(c.id, 1) || this.sim.value(c.id, 2) : this.sim.value(c.id);
+        const power = on ? 1 : 0;
+        const next = on ? bulbRgb(c, this.theme.bulb, this.sim) : null;
+        let b = this.bulbVis.get(c.id);
+        if (!b) {
+          const start = next ?? parseCss(c.color ?? this.theme.bulb);
+          this.bulbVis.set(c.id, (b = { pFrom: power, pTo: power, pT0: now, cFrom: start, cTo: start, cT0: now }));
+        } else {
+          if (b.pTo !== power) {
+            b.pFrom = lerpAnim(b.pFrom, b.pTo, b.pT0, now);
+            b.pTo = power;
+            b.pT0 = now;
+          }
+          if (next && (next[0] !== b.cTo[0] || next[1] !== b.cTo[1] || next[2] !== b.cTo[2])) {
+            b.cFrom = lerpRgb(b.cFrom, b.cTo, b.cT0, now);
+            b.cTo = next;
+            b.cT0 = now;
+          }
+        }
+        if ((b.pFrom !== b.pTo && now - b.pT0 < VIS_MS) || ((b.cFrom[0] !== b.cTo[0] || b.cFrom[1] !== b.cTo[1] || b.cFrom[2] !== b.cTo[2]) && now - b.cT0 < VIS_MS)) busy = true;
+      }
+    }
+    for (const id of this.switchVis.keys()) if (!alive.has(id)) this.switchVis.delete(id);
+    for (const id of this.bulbVis.keys()) if (!alive.has(id)) this.bulbVis.delete(id);
+    if (busy) this.needsRender = true;
+  }
 
   /** Signal state used to draw a component: switch on, button pressed or bulb lit. */
   isActive(c: Component): boolean {
