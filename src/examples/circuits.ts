@@ -526,10 +526,11 @@ export function seg3Doc(): Doc {
   const bottom = topBox.y + topBox.h + 70;
   const c6 = add3(b, b.bounds([c3.box]).x, bottom, [c3.outs[3], c2.outs[3], c1.outs[3], null]);
   const c7 = add3(b, b.bounds([c5.box]).x, bottom, [c4.outs[3], c6.outs[0], c6.outs[1], c6.outs[2]]);
-  const ones = [value[0], c5.outs[0], c5.outs[1], c5.outs[2]];
+  const b0 = b.gate('buffer', rightOf(b, [c5.box], 40), y, [value[0]]);
+  const ones = [b0, c5.outs[0], c5.outs[1], c5.outs[2]];
   const tens = [c5.outs[3], c7.outs[0], c7.outs[1], c7.outs[2]];
   const hundreds = [c7.outs[3], c6.outs[3], null, null];
-  const adds = b.box('Binary to decimal', [c1.box, c2.box, c3.box, c4.box, c5.box, c6.box, c7.box], 30, COL.outer);
+  const adds = b.box('Binary to decimal', [c1.box, c2.box, c3.box, c4.box, c5.box, c6.box, c7.box, b0], 30, COL.outer);
   const dx = rightOf(b, [adds], 140);
   const h = segDecoder(b, dx, y, hundreds);
   const t = segDecoder(b, rightOf(b, [h.box], 40), y, tens);

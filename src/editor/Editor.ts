@@ -468,8 +468,9 @@ export class Editor {
   // ---------------------------------------------------------------- persistence
 
   /**
-   * Starts the tab: `?new` opens a blank project, `?open=<id>` a file handed over by another
-   * tab; otherwise the tab's own autosave, the most recently used project, or an example.
+   * Starts the tab: `?new` opens a fresh project on the starter circuit, `?open=<id>` a file
+   * handed over by another tab; otherwise the tab's own autosave, the most recently used
+   * project, or the starter circuit.
    */
   loadInitial(): void {
     const params = new URLSearchParams(location.search);
@@ -480,9 +481,7 @@ export class Editor {
       this.tab = tabId(true);
     }
     if (blank) {
-      this.doc = emptyDoc();
-      this.setView({ x: 0, y: 0, zoom: 1 });
-      this.changed(true);
+      this.openStarter();
       return;
     }
     if (handoff !== null) {
@@ -506,7 +505,13 @@ export class Editor {
         // Try the next one.
       }
     }
+    this.openStarter();
+  }
+
+  /** The circuit a new project opens on: the half adder and its Start here marker, framed to fit. */
+  private openStarter(): void {
     this.doc = parseCircuit(halfAdderExample).doc;
+    this.selection = new Set();
     this.changed(true);
     this.fitView(false);
   }
