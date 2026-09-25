@@ -481,6 +481,44 @@ button {
   border-color: var(--ui-accent);
 }
 
+.wire-style {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.part-counts {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.part-counts > div {
+  display: contents;
+}
+
+.part-counts b {
+  text-align: right;
+}
+
+.part-total {
+  font-weight: 700;
+}
+
+.part-total span,
+.part-total b {
+  border-top: 1px solid var(--ui-border);
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+.placed-empty {
+  margin: 0;
+  opacity: 0.7;
+}
+
 .keys {
   margin: 0;
   padding-left: 18px;

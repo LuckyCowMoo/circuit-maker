@@ -139,6 +139,41 @@ function Stepper({ value, mixed, onChange }: { value: number; mixed: boolean; on
   );
 }
 
+const COUNT_ORDER = [
+  'AND',
+  'NAND',
+  'OR',
+  'NOR',
+  'XOR',
+  'XNOR',
+  'Buffer',
+  'NOT',
+  'Switch',
+  'Button',
+  'Timer',
+  'Light bulb',
+  'RGB bulb',
+  'Wire port',
+  'Ribbon port',
+  'Marker',
+  'Box',
+];
+
+function placedCounts(editor: Editor): { label: string; n: number }[] {
+  const counts = new Map<string, number>();
+  const add = (label: string) => counts.set(label, (counts.get(label) ?? 0) + 1);
+  for (const c of editor.doc.components.values()) add(partTitle(c));
+  if (editor.doc.boxes.size) counts.set('Box', (counts.get('Box') ?? 0) + editor.doc.boxes.size);
+  const rows: { label: string; n: number }[] = [];
+  for (const label of COUNT_ORDER) {
+    const n = counts.get(label);
+    if (n) rows.push({ label, n });
+    counts.delete(label);
+  }
+  for (const [label, n] of counts) if (n) rows.push({ label, n });
+  return rows;
+}
+
 function partTitle(c: Component): string {
   if (isGate(c.kind)) {
     if (c.kind === 'buffer') return c.negate ? 'NOT' : 'Buffer';
@@ -543,6 +578,34 @@ export function Toolbar({ editor }: { editor: Editor }) {
       {panel === 'help' && (
         <div className="panel help">
           <div className="panel-title">Controls</div>
+          <div className="wire-style">
+            <span>Wires</span>
+            <div className="seg">
+              <button type="button" className={editor.wireStyle === 'curve' ? 'active' : ''} onClick={() => editor.setWireStyle('curve')}>Bendy</button>
+              <button type="button" className={editor.wireStyle === 'avoid' ? 'active' : ''} onClick={() => editor.setWireStyle('avoid')}>Bendy + avoid</button>
+              <button type="button" className={editor.wireStyle === 'square' ? 'active' : ''} onClick={() => editor.setWireStyle('square')}>Square</button>
+            </div>
+          </div>
+          <div className="panel-sub">Placed</div>
+          {(() => {
+            const rows = placedCounts(editor);
+            const total = rows.reduce((sum, row) => sum + row.n, 0);
+            if (!total) return <p className="placed-empty">Nothing placed yet.</p>;
+            return (
+              <div className="part-counts">
+                {rows.map((row) => (
+                  <div key={row.label}>
+                    <span>{row.label}</span>
+                    <b>{row.n}</b>
+                  </div>
+                ))}
+                <div className="part-total">
+                  <span>Total</span>
+                  <b>{total}</b>
+                </div>
+              </div>
+            );
+          })()}
           <ul className="keys">
             <li><b>Drag</b> a part from the toolbar, or click it then click the canvas</li>
             <li><b>Drag from a pin</b> to wire it; drop on empty space to add a connected part</li>

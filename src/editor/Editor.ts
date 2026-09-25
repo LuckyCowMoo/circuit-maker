@@ -35,8 +35,8 @@ import {
   reorient,
   rotatedSize,
   snap,
-  wireBetween,
 } from '../model/geometry';
+import { avoidMap, routedWire, wireStyleOf, type WireStyle } from '../model/route';
 import { floatsAboveBoxes, type PartContext } from '../model/parts';
 import {
   buildBoxTree,
@@ -182,6 +182,7 @@ const TAB_KEY = 'circuit-maker:tab';
 const HANDOFF_KEY = 'circuit-maker:handoff:';
 const KEEP_TABS = 6;
 const THEME_KEY = 'circuit-maker:theme';
+const BEND_KEY = 'circuit-maker:bend-wires';
 const DEFAULT_BOX = { w: 240, h: 160 };
 /** Space kept between a resized box and the walls of the boxes around it. */
 const BOX_GAP = 20;
@@ -264,6 +265,8 @@ export class Editor {
   doc: Doc = emptyDoc();
   cam: Camera = { x: -400, y: -300, zoom: 1 };
   theme: Theme = getTheme(storage.get(THEME_KEY));
+  /** Curve, curve that dodges objects, or orthogonal runs. */
+  wireStyle: WireStyle = wireStyleOf(storage.get(BEND_KEY));
   tool: Tool = 'select';
   selection = new Set<string>();
   sim = new Simulator();
@@ -717,6 +720,13 @@ export class Editor {
   setTheme(id: string): void {
     this.theme = getTheme(id);
     storage.set(THEME_KEY, this.theme.id);
+    this.needsRender = true;
+    this.emit();
+  }
+
+  setWireStyle(style: WireStyle): void {
+    this.wireStyle = style;
+    storage.set(BEND_KEY, style);
     this.needsRender = true;
     this.emit();
   }
@@ -1407,7 +1417,7 @@ export class Editor {
       downloadText(text, base + FILE_EXTENSION, 'application/json');
       return;
     }
-    const { svg, width, height } = buildSvg(this.doc, this.theme, this.sim, ids);
+    const { svg, width, height } = buildSvg(this.doc, this.theme, this.sim, ids, this.wireStyle);
     if (format === 'svg') {
       downloadText(svg, base + '.svg', 'image/svg+xml');
       return;
@@ -1685,11 +1695,13 @@ export class Editor {
     const baseTol = Math.max(4, 6 / this.cam.zoom);
     let hit: Wire | null = null;
     let best = Infinity;
+    const avoid = avoidMap(this.doc);
     for (const wire of this.doc.wires.values()) {
       const a = this.doc.components.get(wire.from);
       const b = this.doc.components.get(wire.to);
       if (!a || !b) continue;
-      const curve = wireBetween(a, b, wire.input, wire.lane ?? 0);
+      const pad = wire.cable ? Math.max(laneCount(a), laneCount(b)) * CABLE_PITCH * 0.5 + 8 : 10;
+      const curve = routedWire(avoid, a, b, wire.cable ? 0 : wire.input, wire.cable ? 0 : (wire.lane ?? 0), pad, this.wireStyle, !!wire.cable);
       if (!curve) continue;
       const width = wire.cable ? Math.max(laneCount(a), laneCount(b)) * CABLE_PITCH : 0;
       const tol = Math.max(baseTol, width / 2 + 2);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findFreeSpot } from './doc';
+import { emptyDoc, findFreeSpot, makeComponent, signalKeys } from './doc';
 import { rectInside, rectsOverlap } from './geometry';
 
 describe('findFreeSpot', () => {
@@ -30,5 +30,27 @@ describe('findFreeSpot', () => {
     const original = { x: 40, y: 40, w: 150, h: 150 };
     const spot = findFreeSpot(original, [original], 30, [parent]);
     expect(rectInside(spot, parent)).toBe(true);
+  });
+});
+
+describe('signalKeys', () => {
+  it('groups every wire leaving the same output, including through a port', () => {
+    const doc = emptyDoc();
+    const and = makeComponent('and', 0, 0, 'and');
+    const a = makeComponent('or', 200, -40, 'a');
+    const b = makeComponent('or', 200, 40, 'b');
+    const port = makeComponent('port', 80, 0, 'p');
+    const c = makeComponent('or', 200, 120, 'c');
+    const other = makeComponent('switch', 0, 200, 's');
+    for (const part of [and, a, b, port, c, other]) doc.components.set(part.id, part);
+    doc.wires.set('w1', { id: 'w1', from: and.id, to: a.id, input: 0 });
+    doc.wires.set('w2', { id: 'w2', from: and.id, to: b.id, input: 0 });
+    doc.wires.set('w3', { id: 'w3', from: and.id, to: port.id, input: 0 });
+    doc.wires.set('w4', { id: 'w4', from: port.id, to: c.id, input: 0 });
+    doc.wires.set('w5', { id: 'w5', from: other.id, to: c.id, input: 1 });
+    const keys = signalKeys(doc);
+    expect(keys.get(and.id)).toBe(and.id);
+    expect(keys.get(port.id)).toBe(and.id);
+    expect(keys.get(other.id)).toBe(other.id);
   });
 });

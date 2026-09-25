@@ -11,7 +11,7 @@ Build and simulate Boolean logic circuits in the browser. Drag in gates, wire th
 - **Markers:** named, coloured pins. When a marker is off-screen an arrow at the edge points to it; click the arrow to fly there. If nothing is on screen, an arrow points to the nearest part.
 - **Boxes:** named, coloured groups that can be nested. Click inside one to select it; drag any edge or corner to resize it (boxes around it grow to fit). Moving a box moves everything inside it. Zoomed in, a box becomes a light background with its name in the corner; zoomed out or near the edge of the screen, it turns into a solid block with a large centred name that avoids the parts shown on top. Duplicating a box places the copy in the nearest free space.
 - **Box connectors:** every wire through a box wall passes through a connector in the wall that you can label and slide along it, so a box reads like a chip with named pins. Copy a box and its connectors come with it, ready to be wired up; delete the wire on one side of a connector and the other side stays attached.
-- **Examples:** grouped, with previews: logic gates, adders, an 8-bit adder and subtractor, 4-bit multiplier, divider, modulus and comparator, latches, a memory cell, D flip-flop, 8-bit register, 4-bit counter, 7-segment and 3-digit displays, a multiplexer and a decoder. Picking one adds it to the current project.
+- **Examples:** grouped circuits with previews (being remade for ribbon cables). Picking one adds it to the current project.
 - **Infinite canvas:** pan in any direction; zoom is limited to a sensible range.
 - **Themes:** Solar (default), Paper, Midnight and Blueprint.
 - **Files:**

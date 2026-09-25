@@ -60,7 +60,7 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `id`     | all                      | Unique string. Use short, readable ids such as `a`, `sum`, `fa0_x1`.     |
 | `type`   | all                      | See the table below.                                                    |
 | `x`, `y` | all                      | Top-left of the body.                                                   |
-| `inputs` | gates                    | Number of input pins, 1 or more (default 2, maximum 256).               |
+| `inputs` | gates, ribbon port   | Gates: input pin count, 1 or more (default 2, maximum 256). Ribbon port: lane count. |
 | `not`    | gates                    | `true` adds a NOT bubble to the output (inverts it).                    |
 | `on`     | switch                   | `true` if the switch starts switched on.                                |
 | `key`    | switch, button           | Keyboard binding as a `KeyboardEvent.code` (e.g. `"KeyA"`, `"Space"`). Switches toggle on press; buttons stay on while held. |
@@ -72,7 +72,7 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `fill`   | gates, switch, button, timer, bulb, rgb | Interior colour. Bulbs are transparent when omitted.        |
 | `rotate` | gates, switch, button, timer, bulb, rgb | Clockwise rotation in degrees: `0`, `90`, `180` or `270`.    |
 | `flip`   | gates, switch, button, timer, bulb, rgb | `true` mirrors the part left to right before rotating.       |
-| `w`, `h` | switch, button, timer, bulb, rgb | Body size, 20 to 400 (default 40 x 40).                          |
+| `w`, `h` | switch, button, timer, bulb, rgb | Body size, 20 to 400 (default 40 x 40). Switches and buttons in a circuit should be 120 x 120. |
 | `box`    | port                     | Id of the box whose wall the port sits in.                             |
 | `dir`    | port                     | `"in"` if the signal enters the box, `"out"` if it leaves.              |
 | `inputSide`, `outputSide` | ribbon port | `"cable"` for one ribbon socket or `"wires"` for one pin per lane. |
@@ -148,7 +148,9 @@ General rule: `and` w = 50 if h = 40, else 60. `or` w = min(90, 60 + 10 * floor(
 |---------|--------------------------------------------------------------------------|
 | `from`  | Id of the component whose **output** drives the wire (a gate, switch, button, timer or port). |
 | `to`    | Id of the component receiving the signal (a gate, bulb, RGB bulb or port). |
-| `input` | Which input pin of `to`, counting from 0. RGB uses 0=red, 1=green, 2=blue. |
+| `input` | Which input pin of `to`, counting from 0 at the top. RGB uses 0=red, 1=green, 2=blue. |
+| `lane`  | Which output lane of `from`, counting from 0 at the top. Omit for lane 0. Use this when a ribbon port's face is `"wires"`. |
+| `cable` | `true` for one ribbon cable between two ribbon ports. Lane i of `from` drives lane i of `to`. `input` is 0. |
 
 Rules:
 
@@ -156,11 +158,19 @@ Rules:
 - A gate's `inputs` must be greater than every `input` index wired to it.
 - Feedback loops are allowed (for latches and flip-flops). A loop with an odd number of
   inversions oscillates.
-- Wires are drawn automatically as curves; there is nothing to route.
+- Do not specify a wire path. Wires are drawn as curves and bend around parts and boxes
+  on their own. Still place boxes and ports so a wire is not forced to weave through a crowd.
 - Wire colour comes from the driving component, so every wire from the same output
   shares a colour, including after it passes through ports. Powered wires glow.
-- Wires may go straight from a part outside a box to a part inside it. The app splits
-  them at the box wall with a port (section 5).
+- Four or more signals crossing one box wall should be a ribbon cable, not separate wires.
+  Fewer than four stay as ordinary wires. See ports in section 5.
+- A multi-bit number is always **8 bits**, even when the value would fit in fewer.
+  **Bit 0 is the top lane** (lane 0, and input 0). An extra bit such as a carry is its own
+  wire or its own port. Do not add it as a 9th lane on an 8-bit cable.
+
+```json
+{"from":"a_out","to":"sum_in","input":0,"cable":true}
+```
 
 ---
 
@@ -190,26 +200,44 @@ Guidelines:
 
 - Leave at least **30 units** between the box edge and any body inside it, and about
   **40 units** free along the top edge for the name.
-- Keep the box's input switches and output bulbs **outside** it, so it reads like a
-  chip with wires going in and coming out.
+- Switches and buttons live together in an **input box**. Do not leave them floating on their own.
+  Make each one **120 x 120** (`"w":120,"h":120`).
 - Nested boxes must be fully inside their parent box.
 - Sibling boxes must not overlap.
+- Take extra care that parts inside a box do not overlap. Bodies need at least 20 units between them.
+- Copied blocks share a colour. Every half adder uses one colour; every full adder uses another.
+  The same rule applies to any other block you repeat.
+- Place boxes and ports so wires do not have to cross a tangle of other boxes and parts.
+  Wires will bend around objects, but a short, open path is better than a long dodge.
 
 ### Ports (connectors in box walls)
 
-Every wire that crosses a box wall passes through a **port**: a small connector in the
-wall, pointing in or out, that can be labelled and slid along the wall. They make a
-box behave like a chip with named pins.
+Every wire that crosses a box wall passes through a **port** in that wall. A port can be
+labelled. It makes a box read like a chip with named pins.
 
-- **You don't need to write ports.** Wire parts directly across walls and the app adds
-  them when the file is opened, one per signal per wall (a signal used by several
-  parts inside a box enters through a single port).
-- If the source of a wire is a named switch or button, the port takes its name.
-- Saved files include the ports. A port is written as
-  `{"id":"p1","type":"port","x":90,"y":10,"box":"ha1","dir":"in","name":"A"}`
-  and is snapped onto the nearest point of its box's wall. Wires then run to and from
-  the port (`input` `0`), not directly across the wall.
+- **One to three signals** may cross as ordinary wires. You can wire straight across the
+  wall and the app will add a port per signal. A named switch or button lends its name to that port.
+- **Four or more signals** on one wall are a **ribbon port**: one cable socket on the outside
+  of the box, and one pin per lane on the inside. Write the port yourself.
+
+```json
+{"id":"a_in","type":"port","x":200,"y":80,"inputs":8,"box":"adder","dir":"in","name":"A","inputSide":"cable","outputSide":"wires"}
+```
+
+| `dir` | Outside face | Inside face | Typical `inputSide` / `outputSide` |
+|-------|----------------|-------------|-------------------------------------|
+| `"in"`  | signal enters the box | fans out to the circuit inside | `"cable"` / `"wires"` |
+| `"out"` | signal leaves the box | collects lanes from inside | `"wires"` / `"cable"` |
+
+- `inputs` is the lane count. Lane 0 is the **top** pin and is bit 0 of a number.
+- An 8-bit value uses `"inputs":8`. A carry or other extra bit gets its own port, not a 9th lane.
+- The ribbon is about `inputs * 16` units tall along the wall. Put it on an edge long enough
+  for that, clear of the corners and of every other port. Ports must not overlap.
+- Join two ribbon sockets with one cable (`"cable":true`). Inside the box, wire each lane
+  with `"lane":0` … `"lane":7` from or to the pin face.
 - A port whose outside is unconnected (for example in a copied box) outputs off.
+- Saved files include ports. A single-wire port looks like
+  `{"id":"p1","type":"port","x":90,"y":10,"box":"ha1","dir":"in","name":"A"}`.
 
 ---
 
@@ -225,6 +253,10 @@ box behave like a chip with named pins.
 - Add a `marker` near the main inputs (e.g. "Inputs") so users can find their way back.
 - Give every switch, button and bulb a `name`. They are listed by name in the app's
   inputs and outputs panels.
+
+The half-adder and full-adder examples below are only there to show nesting and wires.
+When a circuit has switches, repeated blocks, or four or more signals on a wall, follow
+the rules in this section and in section 5 instead of copying those examples' layout.
 
 ---
 
@@ -309,10 +341,14 @@ belongs only to "Full adder".
 
 1. `format` is `"circuit-maker"` and `version` is `1`.
 2. Every id is unique across components **and** boxes.
-3. Every wire's `from` is a gate, switch, button or port; every `to` is a gate, bulb or port.
+3. Every wire's `from` is a gate, switch, button, timer or port; every `to` is a gate, bulb, RGB bulb or port.
 4. No input pin has two wires; every gate's `inputs` covers its highest wired index.
-5. Coordinates are multiples of 10; no two component bodies overlap.
-6. Each box fully contains its members (with margin) and its nested boxes; sibling
-   boxes don't overlap.
-7. The circuit actually computes what was asked. Trace a few input combinations.
-8. Output only the JSON.
+   A ribbon cable uses `"cable":true` and does not also have a separate wire per lane.
+5. Coordinates are multiples of 10; no two component bodies overlap, especially inside a box.
+6. Switches and buttons are 120 x 120 and sit in an input box. Four or more signals on one
+   wall use an 8-bit ribbon when they are a number (bit 0 on top; carry is not a 9th lane).
+   Ribbon ports sit on edges long enough for them and do not overlap each other.
+7. Each box fully contains its members (with margin) and its nested boxes; sibling
+   boxes don't overlap. Repeated blocks share a colour.
+8. The circuit actually computes what was asked. Trace a few input combinations.
+9. Output only the JSON.

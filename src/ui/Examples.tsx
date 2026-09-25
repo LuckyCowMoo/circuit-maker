@@ -19,10 +19,19 @@ function thumbnail(id: string, doc: Doc, theme: Theme): string {
   const key = `${theme.id}:${id}`;
   let url = thumbs.get(key);
   if (!url) {
-    const sim = new Simulator();
-    sim.compile(doc);
-    sim.settle(2000);
-    url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(buildSvg(doc, theme, sim).svg);
+    // Large stress circuits skip a full SVG settle; a blank card is enough to pick them.
+    if (doc.components.size > 120) {
+      url =
+        'data:image/svg+xml;charset=utf-8,' +
+        encodeURIComponent(
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 100"><rect width="160" height="100" fill="${theme.bg}"/><text x="80" y="54" text-anchor="middle" fill="${theme.text}" font-size="14" font-family="system-ui">${doc.components.size} parts</text></svg>`,
+        );
+    } else {
+      const sim = new Simulator();
+      sim.compile(doc);
+      sim.settle(2000);
+      url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(buildSvg(doc, theme, sim).svg);
+    }
     thumbs.set(key, url);
   }
   return url;

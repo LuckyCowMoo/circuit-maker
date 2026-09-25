@@ -216,8 +216,7 @@ export function pinMasks(doc: Doc): Map<string, string> {
 
 const netKey = (id: string, lane = 0) => (lane ? `${id}#${lane}` : id);
 
-/** The component that really drives each output lane, looking back through ports and ribbons. */
-export function netRoots(doc: Doc): Map<string, string> {
+function portDrivers(doc: Doc): Map<string, { id: string; lane: number }> {
   const driver = new Map<string, { id: string; lane: number }>();
   for (const w of doc.wires.values()) {
     const t = doc.components.get(w.to);
@@ -229,23 +228,45 @@ export function netRoots(doc: Doc): Map<string, string> {
       } else driver.set(netKey(t.id, w.input), { id: w.from, lane: w.lane ?? 0 });
     }
   }
-  const follow = (id: string, lane: number): string => {
-    let cur = id;
-    let ln = lane;
-    for (let i = 0; i < 64; i++) {
-      const c = doc.components.get(cur);
-      if (!c || c.kind !== 'port') return cur;
-      const d = driver.get(netKey(cur, ln));
-      if (!d) return cur;
-      cur = d.id;
-      ln = d.lane;
-    }
-    return cur;
-  };
+  return driver;
+}
+
+/** The output that really drives this lane, following ports and ribbons. */
+function followSignal(doc: Doc, driver: Map<string, { id: string; lane: number }>, id: string, lane: number): { id: string; lane: number } {
+  let cur = id;
+  let ln = lane;
+  for (let i = 0; i < 64; i++) {
+    const c = doc.components.get(cur);
+    if (!c || c.kind !== 'port') return { id: cur, lane: ln };
+    const d = driver.get(netKey(cur, ln));
+    if (!d) return { id: cur, lane: ln };
+    cur = d.id;
+    ln = d.lane;
+  }
+  return { id: cur, lane: ln };
+}
+
+/** The component that really drives each output lane, looking back through ports and ribbons. */
+export function netRoots(doc: Doc): Map<string, string> {
+  const driver = portDrivers(doc);
   const roots = new Map<string, string>();
   for (const c of doc.components.values()) {
     const lanes = laneCount(c);
-    for (let i = 0; i < lanes; i++) roots.set(netKey(c.id, i), follow(c.id, i));
+    for (let i = 0; i < lanes; i++) roots.set(netKey(c.id, i), followSignal(doc, driver, c.id, i).id);
   }
   return roots;
+}
+
+/** One key per output lane for the signal it carries, so fan-out wires share a key. */
+export function signalKeys(doc: Doc): Map<string, string> {
+  const driver = portDrivers(doc);
+  const keys = new Map<string, string>();
+  for (const c of doc.components.values()) {
+    const lanes = laneCount(c);
+    for (let i = 0; i < lanes; i++) {
+      const s = followSignal(doc, driver, c.id, i);
+      keys.set(netKey(c.id, i), netKey(s.id, s.lane));
+    }
+  }
+  return keys;
 }

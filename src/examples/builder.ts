@@ -55,11 +55,11 @@ export class Builder {
   }
 
   sw(x: number, y: number, name: string, on = false): string {
-    return this.add('switch', x, y, { name, on });
+    return this.add('switch', x, y, { name, on, w: 120, h: 120 });
   }
 
   btn(x: number, y: number, name: string): string {
-    return this.add('button', x, y, { name });
+    return this.add('button', x, y, { name, w: 120, h: 120 });
   }
 
   bulb(x: number, y: number, name: string, o: PartOptions = {}): string {
@@ -104,10 +104,27 @@ export class Builder {
 
   /** Wraps components and boxes in a new box, with room at the top for its name. */
   box(name: string, ids: string[], pad = 30, color: string | null = null): string {
-    const r = this.bounds(ids);
-    const x = snap(r.x - pad);
-    const y = snap(r.y - pad - 20);
-    const b: Box = { id: this.id('box'), name, x, y, w: snap(r.x + r.w + pad) - x, h: snap(r.y + r.h + pad) - y, color };
+    const wall = pad + 64;
+    const partMargin = wall * 0.25;
+    const boxMargin = wall * 0.33;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const id of ids) {
+      const comp = this.doc.components.get(id);
+      const inner = this.doc.boxes.get(id);
+      const r = comp ? componentBounds(comp) : inner;
+      if (!r) continue;
+      const m = comp ? partMargin : boxMargin;
+      x0 = Math.min(x0, r.x - m);
+      y0 = Math.min(y0, r.y - m);
+      x1 = Math.max(x1, r.x + r.w + m);
+      y1 = Math.max(y1, r.y + r.h + m);
+    }
+    const x = snap(x0);
+    const y = snap(y0 - 40);
+    const b: Box = { id: this.id('box'), name, x, y, w: snap(x1) - x, h: snap(y1) - y, color };
     this.doc.boxes.set(b.id, b);
     return b.id;
   }
@@ -220,7 +237,7 @@ export function sop(b: Builder, x: number, y: number, inputs: Src[], outputs: So
     if (value) return inputs[i];
     let g = nots.get(i);
     if (!g) {
-      g = b.gate('buffer', x, y + i * 60, [inputs[i]], true);
+      g = b.gate('buffer', x, y + i * 110, [inputs[i]], true);
       nots.set(i, g);
       ids.push(g);
     }
@@ -236,9 +253,9 @@ export function sop(b: Builder, x: number, y: number, inputs: Src[], outputs: So
     let src: Src;
     if (lits.length === 1) src = lits[0];
     else {
-      src = b.gate('and', x + 130, ty, lits);
+      src = b.gate('and', x + 180, ty, lits);
       ids.push(src);
-      ty += Math.max(2, lits.length) * 20 + 20;
+      ty += Math.max(2, lits.length) * 20 + 48;
     }
     termGates.set(key, src);
     return src;
@@ -256,10 +273,10 @@ export function sop(b: Builder, x: number, y: number, inputs: Src[], outputs: So
       outs.push(null);
       continue;
     }
-    const g = b.gate('or', x + 290, oy, srcs);
+    const g = b.gate('or', x + 390, oy, srcs);
     ids.push(g);
     outs.push(g);
-    oy += Math.max(2, srcs.length) * 20 + 30;
+    oy += Math.max(2, srcs.length) * 20 + 56;
   }
   return { outs, ids };
 }

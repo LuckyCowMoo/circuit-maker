@@ -404,6 +404,8 @@ export interface WireCurve {
   c1: Point;
   c2: Point;
   b: Point;
+  /** Extra cubics after the first, each starting where the previous one ended. */
+  tail?: { c1: Point; c2: Point; b: Point }[];
 }
 
 const RIGHT: Point = { x: 1, y: 0 };
@@ -431,10 +433,16 @@ export function wireBetween(src: Component, dst: Component, input: number, lane 
 }
 
 export function curveBounds(c: WireCurve): Rect {
-  const x0 = Math.min(c.a.x, c.b.x, c.c1.x, c.c2.x);
-  const x1 = Math.max(c.a.x, c.b.x, c.c1.x, c.c2.x);
-  const y0 = Math.min(c.a.y, c.b.y, c.c1.y, c.c2.y);
-  const y1 = Math.max(c.a.y, c.b.y, c.c1.y, c.c2.y);
+  let x0 = Math.min(c.a.x, c.b.x, c.c1.x, c.c2.x);
+  let x1 = Math.max(c.a.x, c.b.x, c.c1.x, c.c2.x);
+  let y0 = Math.min(c.a.y, c.b.y, c.c1.y, c.c2.y);
+  let y1 = Math.max(c.a.y, c.b.y, c.c1.y, c.c2.y);
+  for (const s of c.tail ?? []) {
+    x0 = Math.min(x0, s.c1.x, s.c2.x, s.b.x);
+    x1 = Math.max(x1, s.c1.x, s.c2.x, s.b.x);
+    y0 = Math.min(y0, s.c1.y, s.c2.y, s.b.y);
+    y1 = Math.max(y1, s.c1.y, s.c2.y, s.b.y);
+  }
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
@@ -446,8 +454,53 @@ export const CABLE_PITCH = 4;
  * a cable that runs to the right). Offsets stay at full width through both ends; the tip no
  * longer collapses onto the plug.
  */
+function curveCorners(c: WireCurve): Point[] {
+  const pts = [c.a, c.b];
+  for (const s of c.tail ?? []) pts.push(s.b);
+  return pts;
+}
+
+function orthoCorners(pts: Point[]): boolean {
+  for (let i = 1; i < pts.length; i++) {
+    const dx = Math.abs(pts[i].x - pts[i - 1].x);
+    const dy = Math.abs(pts[i].y - pts[i - 1].y);
+    if (dx > 0.5 && dy > 0.5) return false;
+  }
+  return pts.length >= 2;
+}
+
+/** Offset an orthogonal polyline so each corner stays a sharp 90 degrees. */
+function miterOffset(pts: Point[], off: number): Point[] {
+  const dir = (i: number) => {
+    const dx = pts[i + 1].x - pts[i].x;
+    const dy = pts[i + 1].y - pts[i].y;
+    const len = Math.hypot(dx, dy) || 1;
+    return { x: dx / len, y: dy / len };
+  };
+  const normal = (d: Point) => ({ x: -d.y, y: d.x });
+  const out: Point[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    if (i === 0 || i === pts.length - 1) {
+      const d = dir(i === 0 ? 0 : pts.length - 2);
+      const n = normal(d);
+      out.push({ x: pts[i].x + n.x * off, y: pts[i].y + n.y * off });
+      continue;
+    }
+    const n0 = normal(dir(i - 1));
+    const n1 = normal(dir(i));
+    const mx = n0.x + n1.x;
+    const my = n0.y + n1.y;
+    const denom = n0.x * mx + n0.y * my;
+    const scale = Math.abs(denom) < 1e-6 ? 0 : off / denom;
+    out.push({ x: pts[i].x + mx * scale, y: pts[i].y + my * scale });
+  }
+  return out;
+}
+
 export function cableStripe(curve: WireCurve, index: number, count: number, da?: Point, db?: Point): Point[] {
   const off = (index - (count - 1) / 2) * CABLE_PITCH;
+  const corners = curveCorners(curve);
+  if (orthoCorners(corners)) return miterOffset(corners, off);
   const startN = da ? { x: -da.y, y: da.x } : null;
   const endN = db ? { x: db.y, y: -db.x } : null;
   const pts: Point[] = [];
@@ -478,16 +531,32 @@ export function cableStripe(curve: WireCurve, index: number, count: number, da?:
   return pts;
 }
 
-export function curvePoint(c: WireCurve, t: number): Point {
+function cubicAt(a: Point, c1: Point, c2: Point, b: Point, t: number): Point {
   const u = 1 - t;
-  const a = u * u * u;
-  const b = 3 * u * u * t;
-  const d = 3 * u * t * t;
-  const e = t * t * t;
-  return {
-    x: a * c.a.x + b * c.c1.x + d * c.c2.x + e * c.b.x,
-    y: a * c.a.y + b * c.c1.y + d * c.c2.y + e * c.b.y,
-  };
+  const A = u * u * u;
+  const B = 3 * u * u * t;
+  const D = 3 * u * t * t;
+  const E = t * t * t;
+  return { x: A * a.x + B * c1.x + D * c2.x + E * b.x, y: A * a.y + B * c1.y + D * c2.y + E * b.y };
+}
+
+/** Cubic pieces of a wire, in order. */
+export function curveSegments(c: WireCurve): { a: Point; c1: Point; c2: Point; b: Point }[] {
+  const segs = [{ a: c.a, c1: c.c1, c2: c.c2, b: c.b }];
+  let prev = c.b;
+  for (const s of c.tail ?? []) {
+    segs.push({ a: prev, c1: s.c1, c2: s.c2, b: s.b });
+    prev = s.b;
+  }
+  return segs;
+}
+
+export function curvePoint(c: WireCurve, t: number): Point {
+  const segs = curveSegments(c);
+  const u = Math.max(0, Math.min(1, t)) * segs.length;
+  const i = Math.min(segs.length - 1, Math.floor(u));
+  const s = segs[i];
+  return cubicAt(s.a, s.c1, s.c2, s.b, segs.length === 1 ? t : u - i);
 }
 
 export function distToSegment(p: Point, a: Point, b: Point): number {
@@ -501,5 +570,7 @@ export function distToSegment(p: Point, a: Point, b: Point): number {
 
 export function curveSvgPath(c: WireCurve): string {
   const f = (n: number) => Math.round(n * 100) / 100;
-  return `M${f(c.a.x)} ${f(c.a.y)}C${f(c.c1.x)} ${f(c.c1.y)} ${f(c.c2.x)} ${f(c.c2.y)} ${f(c.b.x)} ${f(c.b.y)}`;
+  let d = `M${f(c.a.x)} ${f(c.a.y)}C${f(c.c1.x)} ${f(c.c1.y)} ${f(c.c2.x)} ${f(c.c2.y)} ${f(c.b.x)} ${f(c.b.y)}`;
+  for (const s of c.tail ?? []) d += `C${f(s.c1.x)} ${f(s.c1.y)} ${f(s.c2.x)} ${f(s.c2.y)} ${f(s.b.x)} ${f(s.b.y)}`;
+  return d;
 }

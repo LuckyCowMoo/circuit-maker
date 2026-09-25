@@ -1,4 +1,4 @@
-﻿import { boxesOuterFirst, boxInBox, componentInBox, makeComponent } from '../model/doc';
+﻿import { boxesOuterFirst, boxInBox, componentInBox, makeComponent, signalKeys } from '../model/doc';
 import {
   attachPos,
   bodyRect,
@@ -14,18 +14,18 @@ import {
   rotatedSize,
   snap,
   STROKE_W,
-  wireBetween,
   wireCurve,
   xformOf,
   type WireCurve,
   type Xf,
 } from '../model/geometry';
 import { floatsAboveBoxes, partInfo, partLabel } from '../model/parts';
+import { avoidMap, bendAround, blockRects, routeSeed, routedWire, squareWire } from '../model/route';
 import { placePort } from '../model/ports';
 import { componentOps, textRect, type DrawOp, type TextOp } from '../model/shapes';
 import { contrastText, wireColors, type Theme, type WireColors } from '../model/themes';
 import type { Box, Component, Point, Rect } from '../model/types';
-import { laneCount } from '../model/types';
+import { bundleSource, laneCount } from '../model/types';
 import { FONT_STACK } from '../io/export';
 import type { Arrow, Camera, Editor } from './Editor';
 
@@ -173,15 +173,15 @@ class OpBatcher {
 }
 
 
-function addCurve(p: Path2D, c: WireCurve): void {
+function addCurve(p: { moveTo(x: number, y: number): void; bezierCurveTo(c1x: number, c1y: number, c2x: number, c2y: number, x: number, y: number): void }, c: WireCurve): void {
   p.moveTo(c.a.x, c.a.y);
   p.bezierCurveTo(c.c1.x, c.c1.y, c.c2.x, c.c2.y, c.b.x, c.b.y);
+  for (const s of c.tail ?? []) p.bezierCurveTo(s.c1.x, s.c1.y, s.c2.x, s.c2.y, s.b.x, s.b.y);
 }
 
 function strokeCurve(ctx: CanvasRenderingContext2D, c: WireCurve): void {
   ctx.beginPath();
-  ctx.moveTo(c.a.x, c.a.y);
-  ctx.bezierCurveTo(c.c1.x, c.c1.y, c.c2.x, c.c2.y, c.b.x, c.b.y);
+  addCurve(ctx, c);
   ctx.stroke();
 }
 
@@ -448,25 +448,40 @@ export function renderScene(ed: Editor): void {
     ctx.globalAlpha = 1;
   }
   const covered = visible.filter((b) => (ed.boxT.get(b.id) ?? 1) < 0.02);
+  const avoid = avoidMap(doc);
 
   // Wires, batched by colour: unpowered first, then glowing powered wires on top. A wire takes
   // the colour of the part that really drives it, so it keeps its hue through box ports.
   const offPaths = new Map<string, Path2D>();
   const onPaths = new Map<string, { cols: WireColors; path: Path2D }>();
+  const signals = signalKeys(doc);
+  const laneKey = (id: string, lane = 0) => (lane ? `${id}#${lane}` : id);
+  const picked = new Set<string>();
+  for (const id of ed.selection) {
+    const w = doc.wires.get(id);
+    const src = w && doc.components.get(w.from);
+    if (!w || !src) continue;
+    const n = w.cable ? laneCount(src) : 1;
+    for (let i = 0; i < n; i++) {
+      const lane = w.cable ? i : (w.lane ?? 0);
+      picked.add(signals.get(laneKey(w.from, lane)) ?? laneKey(w.from, lane));
+    }
+  }
+  const onNet = (from: string, lane: number) => picked.has(signals.get(laneKey(from, lane)) ?? laneKey(from, lane));
   const selectedCurves: WireCurve[] = [];
   for (const w of doc.wires.values()) {
     if (w.cable) continue;
     const a = doc.components.get(w.from);
     const b = doc.components.get(w.to);
     if (!a || !b) continue;
-    const curve = wireBetween(a, b, w.input, w.lane ?? 0);
+    const curve = routedWire(avoid, a, b, w.input, w.lane ?? 0, 10, ed.wireStyle);
     if (!curve) continue;
     if (!rectsOverlap(inflate(curveBounds(curve), 8), view)) continue;
     if (covered.length && covered.some((bx) => pointInRect(curve.a, bx) && pointInRect(curve.b, bx))) continue;
     const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
     const cols = colorsFor(pc.roots.get(srcKey) ?? w.from, theme);
-    if (ed.selection.has(w.id)) selectedCurves.push(curve);
-    if (sim.value(w.from)) {
+    if (onNet(w.from, w.lane ?? 0)) selectedCurves.push(curve);
+    if (sim.value(w.from, w.lane ?? 0)) {
       let entry = onPaths.get(cols.on);
       if (!entry) onPaths.set(cols.on, (entry = { cols, path: new Path2D() }));
       addCurve(entry.path, curve);
@@ -503,16 +518,18 @@ export function renderScene(ed: Editor): void {
 
   // Ribbon cables: one stripe per lane, packed with no gap, no glow. Stripe 0 matches lane 0.
   ctx.lineCap = 'butt';
-  ctx.lineJoin = 'round';
+  ctx.lineJoin = 'miter';
+  ctx.miterLimit = 2;
   ctx.lineWidth = CABLE_PITCH + 0.8;
   for (const w of doc.wires.values()) {
     if (!w.cable) continue;
     const a = doc.components.get(w.from);
     const b = doc.components.get(w.to);
     if (!a || !b) continue;
-    const curve = wireBetween(a, b, 0, 0);
+    const lanes = Math.min(laneCount(a), laneCount(b));
+    const curve = routedWire(avoid, a, b, 0, 0, lanes * CABLE_PITCH * 0.5 + 8, ed.wireStyle, true);
     if (!curve) continue;
-    const n = Math.min(laneCount(a), laneCount(b));
+    const n = lanes;
     if (!rectsOverlap(inflate(curveBounds(curve), n * CABLE_PITCH), view)) continue;
     const da = pinDir(a, -1);
     const db = pinDir(b, 0);
@@ -526,19 +543,19 @@ export function renderScene(ed: Editor): void {
       ctx.strokeStyle = sim.value(w.from, i) ? cols.on : cols.off;
       ctx.stroke();
     }
-    if (ed.selection.has(w.id)) {
+    let cableHit = false;
+    for (let i = 0; i < n; i++) if (onNet(w.from, i)) cableHit = true;
+    if (cableHit) {
       ctx.strokeStyle = theme.selection;
       ctx.globalAlpha = 0.35;
       ctx.lineWidth = n * CABLE_PITCH + 4;
-      ctx.beginPath();
-      ctx.moveTo(curve.a.x, curve.a.y);
-      ctx.bezierCurveTo(curve.c1.x, curve.c1.y, curve.c2.x, curve.c2.y, curve.b.x, curve.b.y);
-      ctx.stroke();
+      strokeCurve(ctx, curve);
       ctx.globalAlpha = 1;
       ctx.lineWidth = CABLE_PITCH + 0.8;
     }
   }
   ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
 
   // Components, batched into a few canvas calls. Switches, buttons, bulbs and ports are
   // drawn later, above the box covers, so they stay visible.
@@ -643,7 +660,31 @@ export function renderScene(ed: Editor): void {
       const to = (tc && attachPos(tc, drag.target!.pin)) || drag.cur;
       const dFrom = pinDir(src, drag.from.pin);
       const dTo = tc ? pinDir(tc, drag.target!.pin) : { x: -dFrom.x, y: -dFrom.y };
-      const curve = drag.from.pin < 0 ? wireCurve(from, to, dFrom, dTo) : wireCurve(to, from, dTo, dFrom);
+      const outward = drag.from.pin < 0;
+      const start = outward ? from : to;
+      const end = outward ? to : from;
+      const da = outward ? dFrom : dTo;
+      const db = outward ? dTo : dFrom;
+      const span = {
+        x: Math.min(start.x, end.x),
+        y: Math.min(start.y, end.y),
+        w: Math.abs(end.x - start.x),
+        h: Math.abs(end.y - start.y),
+      };
+      const cable = bundleSource(src) && drag.from.pin === -1;
+      let curve;
+      if (ed.wireStyle === 'avoid' || (cable && ed.wireStyle === 'square')) {
+        const srcId = outward ? src.id : (tc?.id ?? '');
+        const dstId = outward ? (tc?.id ?? '') : src.id;
+        const input = outward ? (drag.target?.pin ?? 0) : drag.from.pin;
+        const lane = Math.max(0, -(outward ? drag.from.pin : (drag.target?.pin ?? -1)) - 1);
+        const blocks = blockRects(avoid, srcId, dstId, start, da, end, db, 10, span);
+        curve = bendAround(start, da, end, db, blocks, routeSeed(srcId, dstId, input, lane));
+      } else if (ed.wireStyle === 'square' && !cable) {
+        curve = squareWire(start, da, end, db, 0);
+      } else {
+        curve = wireCurve(start, end, da, db);
+      }
       ctx.strokeStyle = theme.selection;
       ctx.lineWidth = Math.max(STROKE_W, 1.5 * px);
       ctx.setLineDash([8 * px, 6 * px]);

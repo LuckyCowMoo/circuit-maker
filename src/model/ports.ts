@@ -396,7 +396,29 @@ function spliceRibbons(doc: Doc): boolean {
   return changed;
 }
 
-/** Gathers one-signal ports that share a wall and all lead to the same neighbouring box. */
+/** The wall of `box` that faces the centre of `peer`. */
+function sideFacing(box: Box, peer: Box): Side {
+  const dx = peer.x + peer.w / 2 - (box.x + box.w / 2);
+  const dy = peer.y + peer.h / 2 - (box.y + box.h / 2);
+  const hx = box.w / 2 || 1;
+  const hy = box.h / 2 || 1;
+  if (Math.abs(dx) / hx >= Math.abs(dy) / hy) return dx >= 0 ? 2 : 0;
+  return dy >= 0 ? 3 : 1;
+}
+
+/** A point just outside `side`, so a port placed toward it sits on that wall. */
+function outsidePoint(box: Box, side: Side, along: number): Point {
+  if (side === 0) return { x: box.x - 80, y: along };
+  if (side === 2) return { x: box.x + box.w + 80, y: along };
+  if (side === 1) return { x: along, y: box.y - 80 };
+  return { x: along, y: box.y + box.h + 80 };
+}
+
+/**
+ * Gathers one-signal ports that lead to the same neighbouring box.
+ * Ports on different walls still become one ribbon, seated on the wall that faces that box,
+ * so a bus is a single cable instead of a short cable plus stray wires.
+ */
 function bundlePorts(doc: Doc): boolean {
   const tree = buildBoxTree(doc);
   const peerOf = (port: Component): string => {
@@ -415,18 +437,56 @@ function bundlePorts(doc: Doc): boolean {
     if (c.kind !== 'port' || !c.box || c.inputs > 1) continue;
     const box = doc.boxes.get(c.box);
     if (!box) continue;
-    const key = `${c.box}|${portSide(c, box)}|${portInward(c, box) ? 1 : 0}|${peerOf(c)}`;
+    const peer = peerOf(c);
+    const sameBox = peer !== '' && doc.boxes.has(peer);
+    const key = sameBox
+      ? `${c.box}|${portInward(c, box) ? 1 : 0}|${peer}`
+      : `${c.box}|${portSide(c, box)}|${portInward(c, box) ? 1 : 0}|${peer}`;
     const list = groups.get(key);
     if (list) list.push(c);
     else groups.set(key, [c]);
   }
+  const groupOf = new Map<string, string>();
+  for (const [key, list] of groups) for (const p of list) groupOf.set(p.id, key);
+  const partner = (port: Component, incoming: boolean): Component | undefined => {
+    for (const w of doc.wires.values()) {
+      if (incoming ? w.to !== port.id : w.from !== port.id) continue;
+      return doc.components.get(incoming ? w.from : w.to);
+    }
+    return undefined;
+  };
+  // A face is a cable only when the ports on the other end are one ribbon of the same width.
+  const faceIsCable = (list: Component[], incoming: boolean): boolean => {
+    const keys = new Set<string>();
+    for (const p of list) {
+      const other = partner(p, incoming);
+      const key = other && other.kind === 'port' ? groupOf.get(other.id) : undefined;
+      if (!key) return false;
+      keys.add(key);
+    }
+    if (keys.size !== 1) return false;
+    return groups.get([...keys][0])!.length === list.length;
+  };
+  const cableFace = new Map<string, { input: boolean; output: boolean }>();
+  for (const [key, list] of groups) {
+    if (list.length < CABLE_MIN) continue;
+    cableFace.set(key, { input: faceIsCable(list, true), output: faceIsCable(list, false) });
+  }
   let changed = false;
-  for (const list of groups.values()) {
+  for (const [key, list] of groups) {
     if (list.length < 2 || list.length < CABLE_MIN) continue;
     const box = doc.boxes.get(list[0].box!)!;
     const side = portSide(list[0], box);
     const vertical = side === 0 || side === 2;
+    const bitOf = (name: string) => /^(.*?)(\d+)$/.exec(name);
+    const byBit = list.every((p) => bitOf(p.name));
     list.sort((a, b) => {
+      if (byBit) {
+        const ka = bitOf(a.name)!;
+        const kb = bitOf(b.name)!;
+        if (ka[1] !== kb[1]) return ka[1] < kb[1] ? -1 : 1;
+        return Number(ka[2]) - Number(kb[2]);
+      }
       const ca = componentCenter(a);
       const cb = componentCenter(b);
       return vertical ? ca.y - cb.y : ca.x - cb.x;
@@ -437,10 +497,20 @@ function bundlePorts(doc: Doc): boolean {
     port.box = box.id;
     port.name = list.map((p) => p.name).filter(Boolean).join(' ');
     doc.components.set(port.id, port);
+    const faces = cableFace.get(key)!;
     port.plug = inward ? 'in' : 'out';
-    port.inputBundle = inward;
-    port.outputBundle = !inward;
-    placePort(doc, port, box, componentCenter(list[Math.floor(list.length / 2)]), inward);
+    port.inputBundle = faces.input;
+    port.outputBundle = faces.output;
+    const peerBox = doc.boxes.get(peerOf(list[0]));
+    const contained = !!peerBox && (tree.within(box.id, peerBox.id) || tree.within(peerBox.id, box.id));
+    const centers = list.map((p) => componentCenter(p));
+    const avg = {
+      x: centers.reduce((s, p) => s + p.x, 0) / centers.length,
+      y: centers.reduce((s, p) => s + p.y, 0) / centers.length,
+    };
+    const face = peerBox && !contained ? sideFacing(box, peerBox) : side;
+    const target = peerBox ? outsidePoint(box, face, face === 0 || face === 2 ? avg.y : avg.x) : avg;
+    placePort(doc, port, box, target, inward);
     list.forEach((old, i) => {
       for (const w of doc.wires.values()) {
         if (w.to === old.id) {
