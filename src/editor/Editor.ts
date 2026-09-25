@@ -71,7 +71,7 @@ import {
 } from '../model/types';
 import { Simulator } from '../sim/simulator';
 import { docToText, FILE_EXTENSION, parseCircuit, serialize, type CircuitFile, type FileView } from '../io/format';
-import { buildSvg, svgToPng } from '../io/export';
+import { buildSvg, svgToPng, type ImageExportOptions } from '../io/export';
 import { downloadBlob, downloadText, safeFilename } from '../io/download';
 import { colorsFor, renderScene, TOOLBAR_SPACE } from './renderer';
 import { acceptEdit, CircuitSession, type NetMessage } from '../net/session';
@@ -455,16 +455,29 @@ export class Editor {
     }
   }
 
+  private frameBusy = false;
+  private latestNow = 0;
+
   private frame = (now: number): void => {
     this.raf = requestAnimationFrame(this.frame);
+    this.latestNow = now;
     if (this.camAnim) this.tickCamAnim(now);
+    if (this.frameBusy) return;
+    this.frameBusy = true;
+    void this.advanceFrame().finally(() => {
+      this.frameBusy = false;
+    });
+  };
+
+  private async advanceFrame(): Promise<void> {
+    const now = this.latestNow;
     if (this.topologyDirty) {
       this.sim.compile(this.doc);
       this.parts = { doc: this.doc, masks: pinMasks(this.doc), roots: netRoots(this.doc), colors: colorsFor };
       this.topologyDirty = false;
     }
     this.sim.tickTime(now);
-    if (this.sim.pending) this.sim.step();
+    if (this.sim.pending) await this.sim.stepLive();
     if (this.sim.changed) {
       this.sim.changed = false;
       this.needsRender = true;
@@ -1469,7 +1482,7 @@ export class Editor {
     return true;
   }
 
-  async exportAs(format: ExportFormat, scope: ExportScope): Promise<void> {
+  async exportAs(format: ExportFormat, scope: ExportScope, image: ImageExportOptions = {}): Promise<void> {
     let ids: Set<string> | undefined;
     if (scope === 'selection') {
       ids = expandWithContents(this.doc, this.selection);
@@ -1488,7 +1501,7 @@ export class Editor {
       downloadText(text, base + FILE_EXTENSION, 'application/json');
       return;
     }
-    const { svg, width, height } = buildSvg(this.doc, this.theme, this.sim, ids, this.wireStyle);
+    const { svg, width, height } = buildSvg(this.doc, this.theme, this.sim, ids, this.wireStyle, image);
     if (format === 'svg') {
       downloadText(svg, base + '.svg', 'image/svg+xml');
       return;

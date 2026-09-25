@@ -124,6 +124,39 @@ export function fullAdderDoc(): Doc {
   return b.finish();
 }
 
+export function adder4Doc(): Doc {
+  const b = new Builder('4-bit adder');
+  // Bit 0 is on the right. Gates sit to the left of that bit's switches and face left.
+  const col = 480;
+  const xOf = (bit: number) => 400 + (3 - bit) * col;
+  const a = Array.from({ length: 4 }, (_, i) => b.sw(xOf(i), 0, `A${i}`));
+  const bb = Array.from({ length: 4 }, (_, i) => b.sw(xOf(i), 180, `B${i}`));
+  const ids = [...a, ...bb];
+  const faceLeft = (id: string) => {
+    b.doc.components.get(id)!.rot = 2;
+  };
+  let cin: Src = null;
+  const gateY = 400;
+  for (let i = 0; i < 4; i++) {
+    const x = xOf(i) - 200;
+    const x1 = b.gate('xor', x, gateY, [a[i], bb[i]]);
+    const a1 = b.gate('and', x, gateY + 100, [a[i], bb[i]]);
+    const x2 = b.gate('xor', x, gateY + 200, [x1, cin]);
+    const a2 = b.gate('and', x, gateY + 300, [x1, cin]);
+    const carry = b.gate('or', x, gateY + 400, [a1, a2]);
+    for (const id of [x1, a1, x2, a2, carry]) faceLeft(id);
+    const sum = b.bulb(xOf(i) + 40, gateY + 560, `S${i}`);
+    b.wire(x2, sum);
+    ids.push(x1, a1, x2, a2, carry, sum);
+    cin = carry;
+  }
+  const cout = b.bulb(xOf(3) - 380, gateY + 560, 'Cout');
+  b.wire(cin, cout);
+  ids.push(cout);
+  b.box('4-bit adder', ids, 36, COL.outer);
+  return b.finish();
+}
+
 export function adder8Doc(): Doc {
   const b = new Builder('8-bit adder');
   const a = bus(b, 0, 0, 'A', 'A', COL.inA);

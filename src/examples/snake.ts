@@ -384,30 +384,40 @@ function paint(b: Builder, x: number, y: number, name: string, key: string, bag:
   return id;
 }
 
+/** Orange navigation pin so players can jump between the huge layout regions. */
+function mark(b: Builder, x: number, y: number, name: string, bag: string[]): void {
+  const id = b.add('marker', x, y, { name });
+  b.doc.components.get(id)!.color = '#e5932a';
+  bag.push(id);
+}
+
 export function snakeDoc(): Doc {
   const b = new Builder('Snake');
   const inputIds: string[] = [];
-  const ix = -8000;
-  const marker = b.add('marker', ix, -200, { name: 'Start here' });
-  b.doc.components.get(marker)!.color = '#e5932a';
-  inputIds.push(marker);
-  const right = paint(b, ix, 0, 'Right', 'K0', inputIds);
+  const screenX = 2000;
+  const screenY = 52000;
+  const cellSize = 120;
+  const cellPitch = 210;
+  const ix = screenX;
+  const iy = screenY + 15 * cellPitch + cellSize + 600;
+  mark(b, ix, iy - 200, 'Controls', inputIds);
+  const right = paint(b, ix, iy, 'Right', 'K0', inputIds);
   b.doc.components.get(right)!.key = 'ArrowRight';
-  const left = paint(b, ix, 200, 'Left', 'K1', inputIds);
+  const left = paint(b, ix, iy + 200, 'Left', 'K1', inputIds);
   b.doc.components.get(left)!.key = 'ArrowLeft';
-  const down = paint(b, ix, 400, 'Down', 'K2', inputIds);
+  const down = paint(b, ix, iy + 400, 'Down', 'K2', inputIds);
   b.doc.components.get(down)!.key = 'ArrowDown';
-  const up = paint(b, ix, 600, 'Up', 'K3', inputIds);
+  const up = paint(b, ix, iy + 600, 'Up', 'K3', inputIds);
   b.doc.components.get(up)!.key = 'ArrowUp';
-  const reset = paint(b, ix, 800, 'Reset', 'K4', inputIds);
+  const reset = paint(b, ix, iy + 800, 'Reset', 'K4', inputIds);
   b.doc.components.get(reset)!.key = 'KeyR';
-  const clock = paint(b, ix, 1100, 'Clock', 'K5', inputIds);
+  const clock = paint(b, ix, iy + 1100, 'Clock', 'K5', inputIds);
   const L = new Logic(b, 0, 0);
   const k6 = L.gate('buffer', [null]);
   const k7 = L.gate('buffer', [null]);
   // Keep the input cable 8 lanes wide. These two zeros live with the controls.
-  const z6 = b.add('buffer', ix, 1600, { name: 'K6' });
-  const z7 = b.add('buffer', ix, 1700, { name: 'K7' });
+  const z6 = b.add('buffer', ix, iy + 1600, { name: 'K6' });
+  const z7 = b.add('buffer', ix, iy + 1700, { name: 'K7' });
   b.signal(z6, 'K6');
   b.signal(z7, 'K7');
   inputIds.push(z6, z7);
@@ -423,6 +433,8 @@ export function snakeDoc(): Doc {
   const clk = recv(clock);
   const nclk = L.not(clk);
 
+  mark(b, 0, -200, 'Game logic', L.ids);
+  mark(b, 0, 7800, 'Game state', L.ids);
   const cell = ramGrid(0, 8000, 8, 280, 280);
   const alloc = () => {
     const p = cell();
@@ -624,6 +636,7 @@ export function snakeDoc(): Doc {
     L.driveBus(body[i], init, next, move, loadInit);
   }
 
+  mark(b, 0, 39800, 'Pixel memory', L.ids);
   const pixAt = ramGrid(0, 40000, 48, 280, 280);
   const pix: FF[][][] = [];
   for (let y = 0; y < 16; y++) {
@@ -674,7 +687,11 @@ export function snakeDoc(): Doc {
 
   for (let y = 0; y < 16; y++) {
     for (let x = 0; x < 16; x++) {
-      const id = b.add('rgb', 2000 + x * 70, 52000 + y * 70, { name: `c${x}_${y}`, w: 40, h: 40 });
+      const id = b.add('rgb', screenX + x * cellPitch, screenY + y * cellPitch, {
+        name: `c${x}_${y}`,
+        w: cellSize,
+        h: cellSize,
+      });
       L.ids.push(id);
       const qs = pix[y][x];
       b.wire(qs[0].q, id, 0);
@@ -682,17 +699,18 @@ export function snakeDoc(): Doc {
       b.wire(qs[2].q, id, 2);
     }
   }
-  const screenMark = b.add('marker', 2000, 51800, { name: 'Screen' });
-  b.doc.components.get(screenMark)!.color = '#e5932a';
-  L.ids.push(screenMark);
+  mark(b, screenX, screenY - 200, 'Screen', L.ids);
 
   score.forEach((ff, i) => b.signal(ff.q, `S${i}`));
   const s7 = L.gate('buffer', [null]);
   b.signal(s7, 'S7');
-  const edge = b.bounds(L.ids);
+  // Digits sit right of the RGB grid; BCD/segment decode continues further right.
   const scoreIds: string[] = [];
-  const sx = edge.x + edge.w + 3000;
-  const sy = 0;
+  const digX = screenX + 16 * cellPitch + 400;
+  const sy = screenY;
+  const digitW = 60 + 180 + 60;
+  const sx = digX + digitW + 400;
+  mark(b, digX, sy - 200, 'Score', scoreIds);
   const recvS = score.map((ff, i) => {
     const id = b.add('buffer', sx, sy + i * 80, {});
     scoreIds.push(id);
@@ -706,7 +724,6 @@ export function snakeDoc(): Doc {
   const decX = b.bounds(digits.ids).x + b.bounds(digits.ids).w + 400;
   const ones = segDecode(b, decX, sy, digits.ones);
   const tens = segDecode(b, decX, sy + 2400, digits.tens);
-  const digX = Math.max(b.bounds(ones.ids).x + b.bounds(ones.ids).w, b.bounds(tens.ids).x + b.bounds(tens.ids).w) + 400;
   scoreIds.push(...digits.ids, ...ones.ids, ...tens.ids);
   digit(b, digX, sy, ones.outs, '1s', scoreIds);
   digit(b, digX, sy + 800, tens.outs, '10s', scoreIds);
@@ -716,3 +733,4 @@ export function snakeDoc(): Doc {
   b.box('Score', scoreIds, 36, '#4c1d95');
   return b.finish();
 }
+

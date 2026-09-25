@@ -1,5 +1,6 @@
 import type { Component, ComponentKind, Doc } from '../model/types';
 import { bundleDest, bundleSource, hasOutput, inputCount, laneCount } from '../model/types';
+import { GpuSession, type GpuNet } from './gpu';
 
 const K_AND = 0;
 const K_OR = 1;
@@ -55,6 +56,15 @@ export class Simulator {
   private timers: { index: number; periodMs: number; pulseMs: number }[] = [];
   /** Set whenever an output changes; the owner clears it after redrawing. */
   changed = false;
+  /** `gpu` once a live step has proved the GPU matches the CPU and is faster. */
+  get backend(): 'cpu' | 'gpu' {
+    return this.accel === 'gpu' ? 'gpu' : 'cpu';
+  }
+  /** Why the live sim stayed on the CPU, when it did. */
+  gpuNote = '';
+  private layoutGen = 1;
+  private accel: 'unknown' | 'gpu' | 'cpu' = 'unknown';
+  private gpuPromise: Promise<GpuSession | null> | null = null;
 
   get pending(): boolean {
     return this.qLen > 0;
@@ -172,6 +182,7 @@ export class Simulator {
     if (fresh) this.presettle();
     for (let i = 0; i < n; i++) this.schedule(i);
     this.changed = true;
+    this.layoutGen++;
   }
 
   /**
@@ -277,9 +288,132 @@ export class Simulator {
     return this.qLen > 0;
   }
 
+  /**
+   * Live step used by the editor. Large circuits run on the GPU when WebGPU is available
+   * and a short comparison shows it matches the CPU and finishes sooner.
+   */
+  async stepLive(maxWaves = 400, maxEvals = 2_000_000): Promise<boolean> {
+    if (this.ids.length < 4096 || this.accel === 'cpu') {
+      if (this.ids.length < 4096) this.gpuNote = 'cpu (small circuit)';
+      return this.step(maxWaves, maxEvals);
+    }
+    const gpu = await this.gpuReady();
+    if (!gpu) {
+      this.accel = 'cpu';
+      this.gpuNote = this.gpuNote || 'no WebGPU device';
+      return this.step(maxWaves, maxEvals);
+    }
+    if (this.accel === 'unknown') {
+      const faster = await this.proveGpu(gpu);
+      this.accel = faster ? 'gpu' : 'cpu';
+      if (!this.qLen || maxWaves <= 8) return this.qLen > 0;
+      if (faster) return this.gpuStep(gpu, maxWaves - 8, maxEvals);
+      return this.step(maxWaves - 8, maxEvals);
+    }
+    try {
+      return await this.gpuStep(gpu, maxWaves, maxEvals);
+    } catch (err) {
+      this.accel = 'cpu';
+      this.gpuNote = err instanceof Error ? err.message : String(err);
+      return this.step(maxWaves, maxEvals);
+    }
+  }
+
   /** Runs until stable or the wave cap is hit. Mostly for tests. */
   settle(maxWaves = 100_000): boolean {
     return !this.step(maxWaves, Infinity);
+  }
+
+  private gpuReady(): Promise<GpuSession | null> {
+    if (typeof navigator === 'undefined' || !navigator.gpu) return Promise.resolve(null);
+    if (!this.gpuPromise) {
+      this.gpuPromise = GpuSession.probe().catch((err) => {
+        this.gpuNote = err instanceof Error ? err.message : String(err);
+        return null;
+      });
+    }
+    return this.gpuPromise;
+  }
+
+  private net(): GpuNet {
+    return {
+      layout: this.layoutGen,
+      n: this.ids.length,
+      kind: this.kind,
+      neg: this.neg,
+      inStart: this.inStart,
+      inSrc: this.inSrc,
+      foStart: this.foStart,
+      fo: this.fo,
+      src: this.src,
+      out: this.out,
+      inQ: this.inQ,
+      queue: this.queue,
+      qLen: this.qLen,
+    };
+  }
+
+  private async gpuStep(gpu: GpuSession, maxWaves: number, maxEvals: number): Promise<boolean> {
+    const result = await gpu.step(this.net(), maxWaves, maxEvals);
+    this.qLen = result.qLen;
+    if (result.changed) this.changed = true;
+    return this.qLen > 0;
+  }
+
+  /** Eight waves on each backend. Leaves the faster result in place when they agree. */
+  private async proveGpu(gpu: GpuSession): Promise<boolean> {
+    const snap = {
+      out: this.out.slice(),
+      src: this.src.slice(),
+      queue: this.queue.slice(),
+      spare: this.spare.slice(),
+      inQ: this.inQ.slice(),
+      qLen: this.qLen,
+      changed: this.changed,
+    };
+    const restore = () => {
+      this.out.set(snap.out);
+      this.src.set(snap.src);
+      this.queue.set(snap.queue);
+      this.spare.set(snap.spare);
+      this.inQ.set(snap.inQ);
+      this.qLen = snap.qLen;
+      this.changed = snap.changed;
+    };
+    try {
+      const t0 = performance.now();
+      await this.gpuStep(gpu, 8, 2_000_000);
+      const gpuMs = performance.now() - t0;
+      const gpuOut = this.out.slice();
+      const gpuInQ = this.inQ.slice();
+      const gpuQueue = this.queue.slice();
+      const gpuLen = this.qLen;
+      const gpuChanged = this.changed;
+      restore();
+      const t1 = performance.now();
+      this.step(8, 2_000_000);
+      const cpuMs = performance.now() - t1;
+      let same = gpuLen === this.qLen;
+      for (let i = 0; same && i < gpuOut.length; i++) {
+        if (gpuOut[i] !== this.out[i] || gpuInQ[i] !== this.inQ[i]) same = false;
+      }
+      if (!same || gpuMs >= cpuMs) {
+        this.gpuNote = `cpu kept (${gpuMs.toFixed(0)}ms gpu vs ${cpuMs.toFixed(0)}ms cpu, match ${same})`;
+        return false;
+      }
+      this.out.set(gpuOut);
+      this.inQ.set(gpuInQ);
+      this.queue.set(gpuQueue);
+      this.qLen = gpuLen;
+      this.changed = gpuChanged;
+      this.gpuNote = `gpu (${gpuMs.toFixed(0)}ms vs ${cpuMs.toFixed(0)}ms cpu)`;
+      return true;
+    } catch (err) {
+      restore();
+      this.step(8, 2_000_000);
+      this.gpuNote = err instanceof Error ? err.message : String(err);
+      return false;
+    }
   }
 
   setSwitch(id: string, on: boolean): void {

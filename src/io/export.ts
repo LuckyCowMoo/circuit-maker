@@ -41,8 +41,25 @@ export interface SvgResult {
   height: number;
 }
 
+export interface ImageExportOptions {
+  /** Leave out the theme background so the image can sit on anything. */
+  transparent?: boolean;
+  /**
+   * When false, wires and bulbs are drawn off. Switches keep their saved position
+   * and buttons stay released, which is how the circuit starts.
+   */
+  live?: boolean;
+}
+
 /** Renders the document (or the given ids) to a standalone SVG, showing the current signal state. */
-export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<string>, wireStyle: WireStyle = 'avoid'): SvgResult {
+export function buildSvg(
+  doc: Doc,
+  theme: Theme,
+  sim: Simulator,
+  ids?: Set<string>,
+  wireStyle: WireStyle = 'avoid',
+  opts: ImageExportOptions = {},
+): SvgResult {
   const comps = [...doc.components.values()].filter((c) => !ids || ids.has(c.id));
   const compIds = new Set(comps.map((c) => c.id));
   const boxes = boxesOuterFirst(doc).filter((b) => !ids || ids.has(b.id));
@@ -76,11 +93,15 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
   const width = Math.ceil(bounds.w);
   const height = Math.ceil(bounds.h);
 
+  const live = opts.live !== false;
+  const signal = (id: string, lane = 0) => live && sim.value(id, lane);
   const out: string[] = [];
   out.push(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${width} ${height}" width="${width}" height="${height}" font-family="${esc(FONT_STACK)}" stroke-linejoin="round" stroke-linecap="round">`,
-    `<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="${theme.bg}"/>`,
   );
+  if (!opts.transparent) {
+    out.push(`<rect x="${x}" y="${y}" width="${width}" height="${height}" fill="${theme.bg}"/>`);
+  }
   for (const b of boxes) {
     const col = esc(b.color ?? theme.box);
     out.push(
@@ -99,7 +120,7 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
         const cols = wireColors(pc.roots.get(key) ?? w.from, theme);
         const stripe = cableStripe(curve, i, n, da, db);
         const d = stripe.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(' ');
-        const on = sim.value(w.from, i);
+        const on = signal(w.from, i);
         out.push(`<path d="${d}" fill="none" stroke="${on ? cols.on : cols.off}" stroke-width="${CABLE_PITCH + 0.8}" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="2"/>`);
       }
       continue;
@@ -107,7 +128,7 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
     const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
     const cols = wireColors(pc.roots.get(srcKey) ?? w.from, theme);
     const d = curveSvgPath(curve);
-    if (sim.value(w.from, w.lane ?? 0)) {
+    if (signal(w.from, w.lane ?? 0)) {
       out.push(`<path d="${d}" fill="none" stroke="${cols.glow}" stroke-width="9"/>`);
       out.push(`<path d="${d}" fill="none" stroke="${cols.on}" stroke-width="3"/>`);
     } else {
@@ -115,17 +136,18 @@ export function buildSvg(doc: Doc, theme: Theme, sim: Simulator, ids?: Set<strin
     }
   }
   for (const c of comps) {
-    const active =
-      c.kind === 'switch'
+    const active = live
+      ? c.kind === 'switch'
         ? c.on
         : c.kind === 'button'
           ? sim.isPressed(c.id)
           : c.kind === 'rgb'
             ? sim.value(c.id) || sim.value(c.id, 1) || sim.value(c.id, 2)
-            : sim.value(c.id);
+            : sim.value(c.id)
+      : c.kind === 'switch' && c.on;
     const info = partInfo(pc, c, theme, active);
     info.lanes?.forEach((lane, i) => {
-      lane.on = sim.value(c.id, i);
+      lane.on = signal(c.id, i);
     });
     const m = xformOf(c);
     const t = `matrix(${[m.a, m.b, m.c, m.d, m.e, m.f].map((n) => Math.round(n * 100) / 100).join(' ')})`;

@@ -535,6 +535,8 @@ export function Toolbar({ editor }: { editor: Editor }) {
   useEditor(editor);
   const [panel, setPanel] = useState<Panel>(null);
   const [scope, setScope] = useState<ExportScope>('all');
+  const [transparent, setTransparent] = useState(false);
+  const [live, setLive] = useState(true);
   const [lists, setLists] = useState({ inputs: false, outputs: false });
   const dockRef = useRef<HTMLDivElement>(null);
   const theme = editor.theme;
@@ -627,14 +629,30 @@ export function Toolbar({ editor }: { editor: Editor }) {
               Selection only
             </button>
           </div>
+          <div className="seg">
+            <button type="button" className={transparent ? '' : 'active'} onClick={() => setTransparent(false)}>
+              Solid background
+            </button>
+            <button type="button" className={transparent ? 'active' : ''} onClick={() => setTransparent(true)}>
+              Transparent background
+            </button>
+          </div>
+          <div className="seg">
+            <button type="button" className={live ? 'active' : ''} onClick={() => setLive(true)}>
+              Simulation on
+            </button>
+            <button type="button" className={live ? '' : 'active'} onClick={() => setLive(false)}>
+              Simulation off
+            </button>
+          </div>
           <div className="panel-actions column">
             <button type="button" onClick={() => editor.exportAs('project', scope)}>
               Project file ({FILE_EXTENSION})
             </button>
-            <button type="button" onClick={() => editor.exportAs('svg', scope)}>
+            <button type="button" onClick={() => editor.exportAs('svg', scope, { transparent, live })}>
               SVG image
             </button>
-            <button type="button" onClick={() => editor.exportAs('png', scope)}>
+            <button type="button" onClick={() => editor.exportAs('png', scope, { transparent, live })}>
               PNG image
             </button>
           </div>

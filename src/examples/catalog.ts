@@ -1,5 +1,6 @@
 import type { Doc } from '../model/types';
 import {
+  adder4Doc,
   adder8Doc,
   cmp4Doc,
   count4Doc,
@@ -86,6 +87,7 @@ export const EXAMPLES: ExampleGroup[] = [
     items: [
       { id: 'half', name: 'Half adder', build: halfAdderDoc },
       { id: 'full', name: 'Full adder', build: fullAdderDoc },
+      { id: 'adder4', name: '4-bit adder', build: adder4Doc },
       { id: 'adder8', name: '8-bit adder', build: adder8Doc },
       { id: 'sub8', name: '8-bit subtractor', build: sub8Doc },
       { id: 'mul4', name: '4-bit multiplier', build: mul4Doc },

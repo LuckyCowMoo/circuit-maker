@@ -165,6 +165,17 @@ describe('example behaviour', () => {
         expect(sim.value(part(half, 'Carry'))).toBe(!!(a & b));
       }
     }
+    const small = halfOf('adder4');
+    expect(small.boxes.size).toBe(1);
+    const add4 = new Simulator();
+    add4.compile(small);
+    for (const [a, b] of [[0, 0], [1, 1], [15, 1], [7, 9], [15, 15]]) {
+      word(add4, small, 'A', 4, a);
+      word(add4, small, 'B', 4, b);
+      expect(add4.settle(), `${a}+${b}`).toBe(true);
+      expect(read(add4, small, 'S', 4)).toBe((a + b) & 15);
+      expect(add4.value(part(small, 'Cout'))).toBe(a + b > 15);
+    }
     const doc = halfOf('adder8');
     const add = new Simulator();
     add.compile(doc);
