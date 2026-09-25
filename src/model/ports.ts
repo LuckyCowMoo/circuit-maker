@@ -302,7 +302,9 @@ export function normalizePorts(doc: Doc): boolean {
       const t = doc.components.get(w.to);
       if (!s || !t) continue;
       const S = outScope(s);
-      const T = inScope(t);
+      // A lane wire lands on the wire pins. Those sit on the output face when the cable socket is the input.
+      const lanePinsOut = t.kind === 'port' && !w.cable && bundleInput(t) && !bundleOutput(t);
+      const T = lanePinsOut ? outScope(t) : inScope(t);
       if (S === T) continue;
       if (bundleSource(s) && bundleDest(t)) continue;
       dirty = true;
