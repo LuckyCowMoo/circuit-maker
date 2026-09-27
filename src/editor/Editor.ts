@@ -131,7 +131,7 @@ export interface BoxEdges {
 }
 
 export type Drag =
-  | { kind: 'pan'; sx: number; sy: number; camX: number; camY: number; moved: boolean; button: number }
+  | { kind: 'pan'; sx: number; sy: number; camX: number; camY: number; moved: boolean; button: number; touch?: boolean; held?: boolean; click?: string | null }
   | {
       kind: 'move';
       start: Point;
@@ -155,6 +155,8 @@ export type Drag =
       sy: number;
       moved: boolean;
       picked: string | null;
+      /** A finger held this pin long enough to start a wire instead of moving the part. */
+      held?: boolean;
     }
   | {
       kind: 'resize';
@@ -178,6 +180,8 @@ export const MIN_ZOOM = 0.12;
 export const MAX_ZOOM = 3;
 const BOX_COLORS = ['#6e56cf', '#0f9d8a', '#e5932a', '#3b82c4', '#e5484d', '#d4a017', '#0ea5e9', '#7c3aed'];
 const DRAG_PX = 4;
+/** How long a finger must rest before a hold action (menu, or a wire from a pin). */
+const HOLD_MS = 480;
 const UNDO_LIMIT = 80;
 const AUTOSAVE_KEY = 'circuit-maker:autosave';
 const TABS_KEY = 'circuit-maker:tabs';
@@ -186,6 +190,7 @@ const HANDOFF_KEY = 'circuit-maker:handoff:';
 const KEEP_TABS = 6;
 const THEME_KEY = 'circuit-maker:theme';
 const BEND_KEY = 'circuit-maker:bend-wires';
+const PROPS_KEY = 'circuit-maker:props-near';
 const DEFAULT_BOX = { w: 240, h: 160 };
 /** Space kept between a resized box and the walls of the boxes around it. */
 const BOX_GAP = 20;
@@ -317,6 +322,8 @@ export class Editor {
   theme: Theme = getTheme(storage.get(THEME_KEY));
   /** Curve, curve that dodges objects, or orthogonal runs. */
   wireStyle: WireStyle = wireStyleOf(storage.get(BEND_KEY));
+  /** When set, the selection menu sits beside the part instead of above the toolbar. */
+  propsNear = storage.get(PROPS_KEY) === '1';
   tool: Tool = 'select';
   selection = new Set<string>();
   sim = new Simulator();
@@ -382,6 +389,9 @@ export class Editor {
   private bulbVis = new Map<string, BulbVis>();
   private raf = 0;
   private pointers = new Map<number, Point>();
+  /** Pointer ids that are fingers. Hit targets grow while one is down. */
+  private touchIds = new Set<number>();
+  private holdTimer = 0;
   private mouse: Point = { x: 0, y: 0 };
   private spaceHeld = false;
   private camAnim: { from: FileView; to: FileView; start: number; dur: number } | null = null;
@@ -445,6 +455,7 @@ export class Editor {
     window.removeEventListener('paste', this.onPaste);
     window.removeEventListener('blur', this.onBlur);
     this.resizeObserver?.disconnect();
+    this.clearHold();
     cancelAnimationFrame(this.raf);
     this.canvas = null;
     this.ctx = null;
@@ -829,6 +840,12 @@ export class Editor {
     storage.set(BEND_KEY, style);
     invalidateRoutes();
     this.needsRender = true;
+    this.emit();
+  }
+
+  setPropsNear(near: boolean): void {
+    this.propsNear = near;
+    storage.set(PROPS_KEY, near ? '1' : '0');
     this.emit();
   }
 
@@ -1709,9 +1726,18 @@ export class Editor {
     return closed.some((o) => boxInBox(b, o));
   }
 
+  private get touching(): boolean {
+    return this.touchIds.size > 0;
+  }
+
+  /** Screen-pixel slop. Fingers get a wider grab than a mouse. */
+  private grab(px: number): number {
+    return this.touching ? px * 2 : px;
+  }
+
   hitPin(w: Point, want: 'in' | 'out' | null, radius?: number): PinRef | null {
     const z = this.cam.zoom;
-    const r = radius ?? clamp(9 / z, 7, 24);
+    const r = radius ?? clamp(this.grab(9) / z, this.touching ? 14 : 7, this.touching ? 44 : 24);
     const closed = this.closedBoxes();
     let best: PinRef | null = null;
     let bestD = r;
@@ -1760,7 +1786,7 @@ export class Editor {
 
   /** The edge or corner of a visible box under the pointer; inner boxes win. */
   private hitBoxEdge(w: Point): BoxEdges | null {
-    const tol = 6 / this.cam.zoom;
+    const tol = this.grab(6) / this.cam.zoom;
     const closed = this.closedBoxes();
     const boxes = boxesOuterFirst(this.doc);
     for (let i = boxes.length - 1; i >= 0; i--) {
@@ -1782,7 +1808,7 @@ export class Editor {
 
   /** An edge of a text box, bulb, or RGB bulb. Text boxes use a wider band so the wave can be grabbed. */
   private hitNoteEdge(w: Point): { id: string; l: boolean; t: boolean; r: boolean; b: boolean } | null {
-    const tol = 6 / this.cam.zoom;
+    const tol = this.grab(6) / this.cam.zoom;
     let hit: { id: string; l: boolean; t: boolean; r: boolean; b: boolean } | null = null;
     for (const c of this.doc.components.values()) {
       if (c.kind !== 'note' && c.kind !== 'bulb' && c.kind !== 'rgb') continue;
@@ -1883,8 +1909,9 @@ export class Editor {
       { x: p1.x, y: p1.y },
       { x: p0.x, y: p1.y },
     ];
+    const pad = this.grab(7);
     for (let i = 0; i < 4; i++) {
-      if (Math.abs(s.x - corners[i].x) <= 7 && Math.abs(s.y - corners[i].y) <= 7) return i;
+      if (Math.abs(s.x - corners[i].x) <= pad && Math.abs(s.y - corners[i].y) <= pad) return i;
     }
     return null;
   }
@@ -1898,7 +1925,7 @@ export class Editor {
     const src = this.doc.components.get(from.comp);
     const cableDrag = !!src && this.isCablePlug(from, src);
     const want = from.pin < 0 ? 'in' : 'out';
-    const pin = this.hitPin(w, want, clamp(14 / this.cam.zoom, 10, 30));
+    const pin = this.hitPin(w, want, clamp(this.grab(14) / this.cam.zoom, this.touching ? 16 : 10, this.touching ? 48 : 30));
     if (pin) {
       const hit = this.doc.components.get(pin.comp);
       // A plain wire never previews the cable socket. It snaps to a wire pin, or to nothing.
@@ -1928,7 +1955,7 @@ export class Editor {
     if (!isRibbonPort(c) || (bundleInput(c) && bundleOutput(c))) return null;
     const g = geomOf(c);
     const pins = !bundleInput(c) ? g.inputs.map((_, i) => i) : (g.outputs ?? []).map((_, i) => -1 - i);
-    const reach = Math.hypot(g.w, g.h) / 2 + 28;
+    const reach = Math.hypot(g.w, g.h) / 2 + (this.touching ? 44 : 28);
     let best: PinRef | null = null;
     let bestD = reach;
     for (const pin of pins) {
@@ -1958,6 +1985,7 @@ export class Editor {
     const s = this.screenPoint(e);
     this.mouse = s;
     this.pointers.set(e.pointerId, s);
+    if (e.pointerType === 'touch') this.touchIds.add(e.pointerId);
     try {
       this.canvas?.setPointerCapture(e.pointerId);
     } catch {
@@ -2024,18 +2052,37 @@ export class Editor {
       }
     }
     const pin = this.hitPin(w, null);
+    const touch = e.pointerType === 'touch';
     if (pin) {
+      if (touch) {
+        const owner = this.doc.components.get(pin.comp);
+        if (owner) this.startMove(owner.id, w, s, e.shiftKey, owner);
+        this.armHold(() => this.promoteHoldToWire(pin, w, s));
+        return;
+      }
       this.drag = { kind: 'wire', from: pin, cur: w, target: null, sx: s.x, sy: s.y, moved: false, picked: null };
       return;
     }
     const comp = this.hitComponent(w);
-    if (comp) return this.startMove(comp.id, w, s, e.shiftKey, comp);
+    if (comp) {
+      this.startMove(comp.id, w, s, e.shiftKey, comp);
+      if (touch) this.armHold(() => this.openHoldMenu(s));
+      return;
+    }
     const edges = this.hitBoxEdge(w);
     if (edges) return this.startResize(edges, w, s);
     const closed = this.hitClosedBox(w);
-    if (closed) return this.startMove(closed.id, w, s, e.shiftKey, null);
+    if (closed) {
+      this.startMove(closed.id, w, s, e.shiftKey, null);
+      if (touch) this.armHold(() => this.openHoldMenu(s));
+      return;
+    }
     const label = this.hitBoxLabel(w);
-    if (label) return this.startMove(label.id, w, s, e.shiftKey, null);
+    if (label) {
+      this.startMove(label.id, w, s, e.shiftKey, null);
+      if (touch) this.armHold(() => this.openHoldMenu(s));
+      return;
+    }
     const wire = this.hitWire(w);
     if (wire) {
       if (e.shiftKey) {
@@ -2047,8 +2094,20 @@ export class Editor {
       return;
     }
     const bg = this.hitBoxBackground(w);
-    if (bg && this.selection.has(bg.id)) return this.startMove(bg.id, w, s, e.shiftKey, null);
+    if (bg && this.selection.has(bg.id)) {
+      this.startMove(bg.id, w, s, e.shiftKey, null);
+      if (touch) this.armHold(() => this.openHoldMenu(s));
+      return;
+    }
     if (!e.shiftKey && this.selection.size) this.setSelection([]);
+    if (touch) {
+      this.drag = { kind: 'pan', sx: s.x, sy: s.y, camX: this.cam.x, camY: this.cam.y, moved: false, button: 0, touch: true, click: bg?.id ?? null };
+      this.armHold(() => {
+        const d = this.drag;
+        if (d?.kind === 'pan' && d.touch && !d.moved) d.held = true;
+      });
+      return;
+    }
     this.drag = {
       kind: 'marquee',
       start: w,
@@ -2120,8 +2179,66 @@ export class Editor {
   private startPinch(): void {
     const [a, b] = [...this.pointers.values()];
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-    if (this.drag?.kind === 'move' && this.drag.press) this.notePress(this.drag.press, false);
+    this.clearHold();
+    this.revertDrag();
     this.drag = { kind: 'pinch', dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), world: this.toWorld(mid), zoom: this.cam.zoom };
+  }
+
+  private clearHold(): void {
+    if (!this.holdTimer) return;
+    window.clearTimeout(this.holdTimer);
+    this.holdTimer = 0;
+  }
+
+  private armHold(run: () => void): void {
+    this.clearHold();
+    this.holdTimer = window.setTimeout(() => {
+      this.holdTimer = 0;
+      run();
+    }, HOLD_MS);
+  }
+
+  /** A finger rested on a pin: start a wire instead of moving the part. */
+  private promoteHoldToWire(pin: PinRef, w: Point, s: Point): void {
+    const d = this.drag;
+    if (!d || (d.kind !== 'move' && d.kind !== 'port') || d.moved) return;
+    if (d.kind === 'move' && d.press) this.notePress(d.press, false);
+    this.drag = { kind: 'wire', from: pin, cur: w, target: null, sx: s.x, sy: s.y, moved: false, picked: null, held: true };
+    this.needsRender = true;
+  }
+
+  /** A finger rested without dragging: open the same menu as a right-click. */
+  private openHoldMenu(s: Point): void {
+    const d = this.drag;
+    if (!d || ('moved' in d && d.moved)) return;
+    if (d.kind === 'move' && d.press) this.notePress(d.press, false);
+    this.drag = null;
+    this.openMenu(s, null);
+  }
+
+  /** Drop a one-finger drag so a second finger can pan and zoom instead. */
+  private revertDrag(): void {
+    const d = this.drag;
+    if (!d || d.kind === 'pinch') return;
+    if (d.kind === 'move' && d.press) this.notePress(d.press, false);
+    if (d.kind === 'wire' && d.picked) {
+      this.reloadDoc(d.picked);
+      return;
+    }
+    const edited =
+      (d.kind === 'move' || d.kind === 'resize' || d.kind === 'size' || d.kind === 'note' || d.kind === 'port') && d.moved;
+    if (edited) {
+      const prev = this.undoStack.pop();
+      if (prev) this.reloadDoc(prev);
+    }
+  }
+
+  private reloadDoc(text: string): void {
+    const name = this.doc.name;
+    this.doc = parseCircuit(text).doc;
+    this.doc.name = name;
+    this.topologyDirty = true;
+    this.needsRender = true;
   }
 
   private onPointerMove = (e: PointerEvent): void => {
@@ -2139,6 +2256,7 @@ export class Editor {
       return;
     }
     const far = (sx: number, sy: number) => Math.hypot(s.x - sx, s.y - sy) >= DRAG_PX;
+    if ('sx' in d && d.kind !== 'pan' && far(d.sx, d.sy)) this.clearHold();
     switch (d.kind) {
       case 'pinch': {
         if (this.pointers.size < 2) return;
@@ -2150,7 +2268,23 @@ export class Editor {
         break;
       }
       case 'pan': {
+        if (d.touch && d.held && !d.moved && far(d.sx, d.sy)) {
+          const start = this.toWorld({ x: d.sx, y: d.sy });
+          this.drag = {
+            kind: 'marquee',
+            start,
+            cur: w,
+            base: new Set(this.selection),
+            sx: d.sx,
+            sy: d.sy,
+            moved: false,
+            click: null,
+            shift: false,
+          };
+          return;
+        }
         if (!d.moved && !far(d.sx, d.sy)) return;
+        this.clearHold();
         d.moved = true;
         const z = this.cam.zoom;
         this.cam = { x: d.camX - (s.x - d.sx) / z, y: d.camY - (s.y - d.sy) / z, zoom: z };
@@ -2353,6 +2487,8 @@ export class Editor {
 
   private finishPointer(e: PointerEvent, cancelled: boolean): void {
     this.pointers.delete(e.pointerId);
+    this.touchIds.delete(e.pointerId);
+    if (!this.touchIds.size) this.clearHold();
     const d = this.drag;
     if (d?.kind === 'pinch') {
       if (this.pointers.size < 2) this.drag = null;
@@ -2364,7 +2500,8 @@ export class Editor {
     const s = this.screenPoint(e);
     switch (d.kind) {
       case 'pan':
-        if (!d.moved && d.button === 2 && !cancelled) this.openMenu(s, null);
+        if (!d.moved && !cancelled && (d.button === 2 || (d.touch && d.held))) this.openMenu(s, null);
+        else if (d.touch && !d.moved && d.click) this.setSelection([d.click]);
         this.scheduleAutosave();
         break;
       case 'move':
@@ -2393,7 +2530,10 @@ export class Editor {
         this.emit();
         break;
       case 'wire': {
-        if (!d.moved) break;
+        if (!d.moved) {
+          if (d.held && !cancelled) this.openMenu(s, d.from);
+          break;
+        }
         const target = cancelled ? null : d.target;
         if (d.picked) this.pushUndo(d.picked);
         if (target) {

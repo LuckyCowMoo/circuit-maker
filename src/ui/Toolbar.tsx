@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Editor, ExportScope, PlaceKind } from '../editor/Editor';
 import { KIND_LABEL } from '../editor/Editor';
-import { INPUT_WARN, MAX_INPUTS } from '../model/geometry';
+import { componentBounds, INPUT_WARN, MAX_INPUTS, pinPos } from '../model/geometry';
 import { isModifierOnly, keyBindLabel } from '../model/keys';
 import { NOTE_BG } from '../model/shapes';
 import { THEMES, toHex6, wireColors } from '../model/themes';
@@ -99,9 +99,19 @@ function KeyBindField({
   );
 }
 
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (c: string) => void }) {
+function ColorField({
+  label,
+  value,
+  onChange,
+  grow,
+}: {
+  label: string;
+  value: string;
+  onChange: (c: string) => void;
+  grow?: boolean;
+}) {
   return (
-    <label className="color-field" title={`${label} colour`}>
+    <label className={`color-field${grow ? ' grow' : ''}`} title={`${label} colour`}>
       <span className="swatch" style={{ background: value }} />
       <input type="color" value={toHex6(value)} onChange={(e) => onChange(e.target.value)} />
       <span>{label}</span>
@@ -186,7 +196,83 @@ function partTitle(c: Component): string {
   return KIND_LABEL[c.kind];
 }
 
+function selectionClientRect(editor: Editor): { left: number; top: number; right: number; bottom: number } | null {
+  const canvas = editor.canvas?.getBoundingClientRect();
+  if (!canvas) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const add = (x: number, y: number, w: number, h: number) => {
+    const a = editor.toScreen({ x, y });
+    const b = editor.toScreen({ x: x + w, y: y + h });
+    minX = Math.min(minX, a.x, b.x);
+    minY = Math.min(minY, a.y, b.y);
+    maxX = Math.max(maxX, a.x, b.x);
+    maxY = Math.max(maxY, a.y, b.y);
+  };
+  for (const c of editor.selectedComponents()) {
+    const r = componentBounds(c);
+    add(r.x, r.y, r.w, r.h);
+  }
+  for (const b of editor.selectedBoxes()) add(b.x, b.y, b.w, b.h);
+  for (const w of editor.selectedWires()) {
+    const src = editor.doc.components.get(w.from);
+    const dst = editor.doc.components.get(w.to);
+    const p0 = src ? pinPos(src, -1 - (w.lane ?? 0)) : null;
+    const p1 = dst ? pinPos(dst, w.input) : null;
+    if (p0) add(p0.x, p0.y, 0, 0);
+    if (p1) add(p1.x, p1.y, 0, 0);
+  }
+  if (!Number.isFinite(minX)) return null;
+  return {
+    left: canvas.left + minX,
+    top: canvas.top + minY,
+    right: canvas.left + maxX,
+    bottom: canvas.top + maxY,
+  };
+}
+
+/** Puts the selection menu just outside the selected parts, above them when it fits. */
+function placeProps(editor: Editor, el: HTMLElement): void {
+  const rect = selectionClientRect(editor);
+  if (!rect) return;
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const gap = 12;
+  const edge = 8;
+  const dockTop = el.closest('.dock')?.getBoundingClientRect().top ?? window.innerHeight;
+  const limit = dockTop - edge;
+  const above = rect.top - gap - h;
+  const below = rect.bottom + gap;
+  let top = above >= edge ? above : below;
+  if (top + h > limit && above >= edge) top = above;
+  if (top < edge) top = edge;
+  if (top + h > window.innerHeight - edge) top = Math.max(edge, window.innerHeight - h - edge);
+  let left = (rect.left + rect.right) / 2 - w / 2;
+  left = Math.max(edge, Math.min(left, window.innerWidth - w - edge));
+  el.style.left = `${Math.round(left)}px`;
+  el.style.top = `${Math.round(top)}px`;
+}
+
 function PropsBar({ editor }: { editor: Editor }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const near = editor.propsNear;
+  const selected = editor.selection.size > 0;
+  useLayoutEffect(() => {
+    if (!near || !selected) return;
+    const el = ref.current;
+    if (!el) return;
+    let raf = 0;
+    const tick = () => {
+      const node = ref.current;
+      if (node) placeProps(editor, node);
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(raf);
+  }, [near, selected, editor]);
+
   const theme = editor.theme;
   const comps = editor.selectedComponents();
   const boxes = editor.selectedBoxes();
@@ -218,11 +304,10 @@ function PropsBar({ editor }: { editor: Editor }) {
             : 'Wire'
       : `${total} selected`;
 
-  return (
-    <div className="props" onPointerDown={(e) => e.stopPropagation()}>
-      <span className="props-title">{title}</span>
-      {(widthParts.length > 0 || gates.length > 0) && (
-        <div className="props-group">
+  const groups: ReactNode[] = [<span className="props-title" key="title">{title}</span>];
+  if (widthParts.length > 0 || gates.length > 0) {
+    groups.push(
+        <div className="props-group" key="inputs">
           {widthParts.length > 0 && (
             <>
               <span className="props-label">{widthParts.every((p) => p.kind === 'port') ? 'Width' : 'Inputs'}</span>
@@ -248,11 +333,12 @@ function PropsBar({ editor }: { editor: Editor }) {
               NOT
             </button>
           )}
-        </div>
-      )}
-      {ports.length > 0 && ports.every(isRibbonPort) && (
-        <>
-          <div className="props-group">
+        </div>,
+    );
+  }
+  if (ports.length > 0 && ports.every(isRibbonPort)) {
+    groups.push(
+          <div className="props-group" key="in-face">
             <span className="props-label">Input side</span>
             <button
               type="button"
@@ -268,8 +354,10 @@ function PropsBar({ editor }: { editor: Editor }) {
             >
               Wires
             </button>
-          </div>
-          <div className="props-group">
+          </div>,
+    );
+    groups.push(
+          <div className="props-group" key="out-face">
             <span className="props-label">Output side</span>
             <button
               type="button"
@@ -285,11 +373,12 @@ function PropsBar({ editor }: { editor: Editor }) {
             >
               Wires
             </button>
-          </div>
-        </>
-      )}
-      {rgbBulbs.length > 0 && (
-        <div className="props-group">
+          </div>,
+    );
+  }
+  if (rgbBulbs.length > 0) {
+    groups.push(
+        <div className="props-group" key="rgb">
           <span className="props-label">Input</span>
           <button
             type="button"
@@ -305,11 +394,12 @@ function PropsBar({ editor }: { editor: Editor }) {
           >
             Wires
           </button>
-        </div>
-      )}
-      {timers.length === 1 && (
-        <>
-          <label className="props-group">
+        </div>,
+    );
+  }
+  if (timers.length === 1) {
+    groups.push(
+          <label className="props-group" key="cycle">
             <span className="props-label">Cycle</span>
             <input
               className="number-input"
@@ -321,8 +411,10 @@ function PropsBar({ editor }: { editor: Editor }) {
               onChange={(e) => editor.setTimerTiming(Number(e.target.value), timers[0].pulse ?? 1)}
             />
             <span className="props-label">s</span>
-          </label>
-          <label className="props-group">
+          </label>,
+    );
+    groups.push(
+          <label className="props-group" key="pulse">
             <span className="props-label">Pulse</span>
             <input
               className="number-input"
@@ -334,30 +426,36 @@ function PropsBar({ editor }: { editor: Editor }) {
               onChange={(e) => editor.setTimerTiming(timers[0].period ?? 5, Number(e.target.value))}
             />
             <span className="props-label">s</span>
-          </label>
-        </>
-      )}
-      {keyable.length > 0 && (
+          </label>,
+    );
+  }
+  if (keyable.length > 0) {
+    groups.push(
         <KeyBindField
+          key="key"
           value={keyable[0].key ?? null}
           mixed={!keyable.every((c) => (c.key ?? null) === (keyable[0].key ?? null))}
           onChange={(code) => editor.setKeyBind(code)}
-        />
-      )}
-      {rotatable.length > 0 && (
-        <div className="props-group">
+        />,
+    );
+  }
+  if (rotatable.length > 0) {
+    groups.push(
+        <div className="props-group" key="turn">
           <button type="button" className="chip icon-chip" title="Rotate" onClick={() => editor.rotateSelection(1)}>
             {Icons.rotate}
           </button>
           <button type="button" className="chip icon-chip" title="Flip" onClick={() => editor.flipSelection()}>
             {Icons.flip}
           </button>
-        </div>
-      )}
-      {colourable.length > 0 && (
-        <div className="props-group">
-          <ColorField label="Outline" value={colourable[0].stroke ?? theme.stroke} onChange={(c) => editor.setStroke(c)} />
-          <ColorField label="Fill" value={colourable[0].fill ?? theme.fill} onChange={(c) => editor.setFill(c)} />
+        </div>,
+    );
+  }
+  if (colourable.length > 0) {
+    groups.push(
+        <div className="props-group" key="paint">
+          <ColorField grow label="Outline" value={colourable[0].stroke ?? theme.stroke} onChange={(c) => editor.setStroke(c)} />
+          <ColorField grow label="Fill" value={colourable[0].fill ?? theme.fill} onChange={(c) => editor.setFill(c)} />
           {bulbs.length > 0 && (
             <ColorField label="Light" value={bulbs[0].color ?? theme.bulb} onChange={(c) => editor.setColor(c)} />
           )}
@@ -375,10 +473,12 @@ function PropsBar({ editor }: { editor: Editor }) {
               Reset
             </button>
           )}
-        </div>
-      )}
-      {(named || tinted.length > 0) && (
-        <div className="props-group">
+        </div>,
+    );
+  }
+  if (named || tinted.length > 0) {
+    groups.push(
+        <div className="props-group" key="name">
           {named && (
             <input
               className="name-input"
@@ -398,9 +498,11 @@ function PropsBar({ editor }: { editor: Editor }) {
               onChange={(c) => editor.setColor(c)}
             />
           )}
-        </div>
-      )}
-      <div className="props-group">
+        </div>,
+    );
+  }
+  groups.push(
+      <div className="props-group" key="actions">
         {(comps.length > 0 || boxes.length > 0) && (
           <button type="button" className="chip" title="Duplicate" onClick={() => editor.duplicateSelection()}>
             Duplicate
@@ -414,7 +516,18 @@ function PropsBar({ editor }: { editor: Editor }) {
         <button type="button" className="chip danger" title="Delete" onClick={() => editor.deleteSelection()}>
           {Icons.trash}
         </button>
-      </div>
+      </div>,
+  );
+
+  const mid = Math.ceil(groups.length / 2);
+  const rows = near && groups.length > 1 ? [groups.slice(0, mid), groups.slice(mid)] : [groups];
+  return (
+    <div ref={ref} className={near ? 'props props-near' : 'props'} onPointerDown={(e) => e.stopPropagation()}>
+      {rows.map((row, i) => (
+        <div className="props-row" key={i}>
+          {row}
+        </div>
+      ))}
     </div>
   );
 }
@@ -558,6 +671,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
   const thinRef = useRef<HTMLDivElement>(null);
+  const ioMeasureRef = useRef<HTMLDivElement>(null);
   const theme = editor.theme;
   const hasSelection = editor.selection.size > 0;
 
@@ -592,14 +706,16 @@ export function Toolbar({ editor }: { editor: Editor }) {
     const row = rowRef.current;
     const measure = measureRef.current;
     const thin = thinRef.current;
-    if (!row || !measure || !thin) return;
+    const ioMeasure = ioMeasureRef.current;
+    if (!row || !measure || !thin || !ioMeasure) return;
     const check = () => {
       let ioW = 0;
-      row.querySelectorAll('.io-toggle').forEach((el) => {
+      ioMeasure.querySelectorAll('.io-toggle').forEach((el) => {
         ioW += (el as HTMLElement).offsetWidth;
       });
       const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
-      const room = row.clientWidth - ioW - gap * 2;
+      const fullRoom = row.clientWidth - ioW - gap * 2;
+      const shortRoom = row.clientWidth;
       const widths: Record<string, number> = {};
       let maxBody = 0;
       row.querySelectorAll('.tb-body-probe').forEach((el) => {
@@ -611,7 +727,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
       });
       const icon = thin.querySelector('.tb-btn')?.getBoundingClientRect().width ?? 40;
       const inlineW = thin.offsetWidth - icon + maxBody;
-      const next = measure.offsetWidth <= room + 1 ? 'full' : inlineW <= room + 1 ? 'inline' : 'thin';
+      const next = measure.offsetWidth <= fullRoom + 1 ? 'full' : inlineW <= shortRoom + 1 ? 'inline' : 'thin';
       setMode((cur) => (cur === next ? cur : next));
       setSlotW((cur) => {
         const same = Object.keys(widths).every((id) => Math.abs((cur[id] ?? 0) - widths[id]) < 1);
@@ -622,6 +738,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
     ro.observe(row);
     ro.observe(measure);
     ro.observe(thin);
+    ro.observe(ioMeasure);
     row.querySelectorAll('.tb-body-probe').forEach((el) => ro.observe(el));
     check();
     return () => ro.disconnect();
@@ -889,6 +1006,13 @@ export function Toolbar({ editor }: { editor: Editor }) {
               <button type="button" className={editor.wireStyle === 'square' ? 'active' : ''} onClick={() => editor.setWireStyle('square')}>Square</button>
             </div>
           </div>
+          <div className="wire-style">
+            <span>Component menu</span>
+            <div className="seg">
+              <button type="button" className={!editor.propsNear ? 'active' : ''} onClick={() => editor.setPropsNear(false)}>Above toolbar</button>
+              <button type="button" className={editor.propsNear ? 'active' : ''} onClick={() => editor.setPropsNear(true)}>Around part</button>
+            </div>
+          </div>
           <div className="panel-sub">Placed</div>
           {(() => {
             const rows = placedCounts(editor);
@@ -911,12 +1035,12 @@ export function Toolbar({ editor }: { editor: Editor }) {
           })()}
           <ul className="keys">
             <li><b>Drag</b> a part from the toolbar, or click it then click the canvas</li>
-            <li><b>Drag from a pin</b> to wire it; drop on empty space to add a connected part</li>
+            <li><b>Drag from a pin</b> to wire it; on a touchscreen, hold the pin first. Drop on empty space to add a connected part</li>
             <li><b>Drag from a wired input</b> to move or remove that wire</li>
-            <li><b>Click</b> switches to toggle; hold buttons to press. Select one and set a <b>Key</b> to control it from the keyboard (hold for buttons, press to toggle switches)</li>
+            <li><b>Click</b> switches to toggle; hold buttons to press. Select one and set a <b>Key</b> to control it from the keyboard</li>
             <li><b>Drag the NOT bubble</b> onto a gate to invert it</li>
-            <li><b>Two fingers</b> to pan, <b>pinch</b> to zoom; with a mouse, <b>wheel</b> zooms and <b>right-drag</b> pans</li>
-            <li><b>Right-click</b> empty space for the add menu</li>
+            <li><b>Two fingers</b> to pan and <b>pinch</b> to zoom. A second finger cancels a one-finger drag. With a mouse, <b>wheel</b> zooms and <b>right-drag</b> pans</li>
+            <li><b>Right-click</b> or <b>hold</b> for the add menu. On a touchscreen, one finger on empty space pans, and a hold then a drag selects a box</li>
             <li><b>Click inside a box</b> to select it; <b>drag its edges or corners</b> to resize</li>
             <li><b>Box</b> with items selected wraps them in a box; wires through its walls get connectors you can label and slide</li>
             <li><b>Shift</b>+click / drag to add to the selection</li>
@@ -939,7 +1063,19 @@ export function Toolbar({ editor }: { editor: Editor }) {
 
       <PropsBar editor={editor} />
 
-      <div className="tb-row" ref={rowRef}>
+      <div className={`tb-row${mode === 'full' ? '' : ' compact'}`} ref={rowRef}>
+        <div className="io-measure" ref={ioMeasureRef} aria-hidden="true">
+          <button type="button" className="io-toggle" tabIndex={-1}>
+            {Icons.inputs}
+            <span>{editor.ioList('inputs').length}</span>
+            <span className="io-chevron">{Icons.chevron}</span>
+          </button>
+          <button type="button" className="io-toggle" tabIndex={-1}>
+            {Icons.outputs}
+            <span>{editor.ioList('outputs').length}</span>
+            <span className="io-chevron">{Icons.chevron}</span>
+          </button>
+        </div>
         <div className="toolbar tb-measure" ref={measureRef} aria-hidden="true">
           {toolbarBody}
         </div>
@@ -956,12 +1092,14 @@ export function Toolbar({ editor }: { editor: Editor }) {
             {seg.body}
           </div>
         ))}
-        <SideList
-          editor={editor}
-          which="inputs"
-          open={lists.inputs}
-          onToggle={() => setLists((l) => ({ ...l, inputs: !l.inputs }))}
-        />
+        {mode === 'full' && (
+          <SideList
+            editor={editor}
+            which="inputs"
+            open={lists.inputs}
+            onToggle={() => setLists((l) => ({ ...l, inputs: !l.inputs }))}
+          />
+        )}
         <div
           className={`toolbar${mode === 'full' ? '' : ` ${mode}`}`}
           role="toolbar"
@@ -1010,12 +1148,14 @@ export function Toolbar({ editor }: { editor: Editor }) {
                 );
               })}
         </div>
-        <SideList
-          editor={editor}
-          which="outputs"
-          open={lists.outputs}
-          onToggle={() => setLists((l) => ({ ...l, outputs: !l.outputs }))}
-        />
+        {mode === 'full' && (
+          <SideList
+            editor={editor}
+            which="outputs"
+            open={lists.outputs}
+            onToggle={() => setLists((l) => ({ ...l, outputs: !l.outputs }))}
+          />
+        )}
       </div>
     </div>
   );

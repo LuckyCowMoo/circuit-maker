@@ -59,7 +59,7 @@ export function buildSvg(
   theme: Theme,
   sim: Simulator,
   ids?: Set<string>,
-  wireStyle: WireStyle = 'avoid',
+  wireStyle: WireStyle = 'curve',
   opts: ImageExportOptions = {},
 ): SvgResult {
   const comps = [...doc.components.values()].filter((c) => !ids || ids.has(c.id));

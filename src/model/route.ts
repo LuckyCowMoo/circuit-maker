@@ -22,9 +22,9 @@ const CORNER_SPREAD = [0, 3, 6, 9];
 export type WireStyle = 'curve' | 'avoid' | 'square';
 
 export function wireStyleOf(stored: string | null): WireStyle {
-  if (stored === '0' || stored === 'curve') return 'curve';
   if (stored === 'square') return 'square';
-  return 'avoid';
+  if (stored === 'avoid' || stored === '1') return 'avoid';
+  return 'curve';
 }
 
 export interface AvoidMap {
@@ -586,7 +586,7 @@ export function squareWire(a: Point, da: Point, b: Point, db: Point, lane = 0): 
 }
 
 /** Wire or cable curve in the chosen style. Cached until the layout changes. */
-export function routedWire(map: AvoidMap, src: Component, dst: Component, input: number, lane: number, pad: number, style: WireStyle = 'avoid', cable = false): WireCurve | null {
+export function routedWire(map: AvoidMap, src: Component, dst: Component, input: number, lane: number, pad: number, style: WireStyle = 'curve', cable = false): WireCurve | null {
   if (cable && style === 'square') style = 'avoid';
   const a = attachPos(src, wireEndPin(src, cable ? -1 : -1 - lane, cable));
   const b = attachPos(dst, wireEndPin(dst, input, cable));
