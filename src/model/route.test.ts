@@ -139,7 +139,7 @@ describe('wire routing', () => {
     doc.components.set(src.id, src);
     doc.components.set(dst.id, dst);
     doc.components.set(mid.id, mid);
-    const curve = routedWire(avoidMap(doc), src, dst, 0, 0, 8);
+    const curve = routedWire(avoidMap(doc), src, dst, 0, 0, 8, 'avoid');
     expect(curve).not.toBeNull();
     let hitGate = false;
     const body = { x: mid.x, y: mid.y, w: 60, h: 40 };
