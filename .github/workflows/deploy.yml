@@ -2,7 +2,9 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "TABG - 2 (raytraced chatboxes)"
   workflow_dispatch:
 
 permissions:
@@ -15,28 +17,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-main:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: src
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm test
-      - run: npm run build
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+          cache-dependency-path: src/package-lock.json
+      - working-directory: src
+        run: npm ci
+      - working-directory: src
+        run: npm test
+      - working-directory: src
+        run: npm run build
+      - uses: actions/upload-artifact@v4
         with:
-          path: dist
+          name: site-main
+          path: src/dist
+
+  build-tabg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "TABG - 2 (raytraced chatboxes)"
+          path: src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+      - working-directory: src
+        run: npm ci
+      - working-directory: src
+        run: npm test
+      - working-directory: src
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site-tabg
+          path: src/dist
 
   deploy:
-    needs: build
+    needs: [build-main, build-tabg]
+    if: always() && needs.build-main.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site-main
+          path: site
+      - uses: actions/download-artifact@v4
+        if: needs.build-tabg.result == 'success'
+        with:
+          name: site-tabg
+          path: site/tabg-2
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
       - id: deployment
         uses: actions/deploy-pages@v4
