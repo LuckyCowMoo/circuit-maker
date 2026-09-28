@@ -1,4 +1,5 @@
 import { BUBBLE_D, geomFor, geomOf, IO_SIZE, MARKER_FONT, PIN_LEN, PORT_SIZE, RIBBON_PITCH, type Geom } from './geometry';
+import { keyBindLabel } from './keys';
 import type { Theme } from './themes';
 import type { Component, ComponentKind, Point, Rect } from './types';
 import { bundleInput, bundleOutput, isGate } from './types';
@@ -80,6 +81,92 @@ export function complementColor(hex: string): string {
 }
 
 const WAVE_K = 0.5522847498;
+const KEY_LINE = 1.15;
+
+/** Approximate width of bold UI text, in ems. Wide enough that the words stay inside the part. */
+function emWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) {
+    if (ch === ' ') w += 0.34;
+    else if (ch === 'm' || ch === 'w' || ch === 'M' || ch === 'W') w += 1;
+    else if (ch >= 'A' && ch <= 'Z') w += 0.72;
+    else if (ch >= '0' && ch <= '9') w += 0.62;
+    else w += 0.56;
+  }
+  return Math.max(0.6, w);
+}
+
+function parseColor(color: string): [number, number, number] | null {
+  const raw = color.trim();
+  const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(raw);
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  const hsl = /^hsla?\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%/i.exec(raw);
+  if (!hsl) return null;
+  const h = Number(hsl[1]);
+  const s = Number(hsl[2]) / 100;
+  const l = Number(hsl[3]) / 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const seg = Math.floor(h / 60) % 6;
+  const rgb =
+    seg === 0 ? [c, x, 0] : seg === 1 ? [x, c, 0] : seg === 2 ? [0, c, x] : seg === 3 ? [0, x, c] : seg === 4 ? [x, 0, c] : [c, 0, x];
+  return rgb.map((v) => Math.round(Math.min(1, Math.max(0, v + m)) * 255)) as [number, number, number];
+}
+
+/** Black or white, whichever reads on `color` (a hex or hsl wire colour). */
+function keyInk(color: string): string {
+  const rgb = parseColor(color);
+  if (!rgb) return '#111111';
+  const l = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+  return l > 0.62 ? '#111111' : '#ffffff';
+}
+
+function keyFit(textWidth: number, rows: number, boxW: number, boxH: number): number {
+  const byW = (boxW * 0.92) / textWidth;
+  const byH = (boxH * 0.86) / (rows === 1 ? 1 : rows * KEY_LINE);
+  return Math.min(byW, byH);
+}
+
+/** The bound key, fitted to a box on the part. A two-word label stacks when that keeps the letters larger. */
+function keyOps(c: Component, cx: number, cy: number, boxW: number, boxH: number, bg: string): TextOp[] {
+  if (!c.key || boxW < 3 || boxH < 3) return [];
+  const label = keyBindLabel(c.key);
+  if (!label) return [];
+  const words = label.split(' ').filter(Boolean);
+  const options: string[][] = [[label]];
+  if (words.length > 1) {
+    const mid = Math.ceil(words.length / 2);
+    options.push([words.slice(0, mid).join(' '), words.slice(mid).join(' ')]);
+  }
+  let lines = options[0];
+  let size = 0;
+  for (const candidate of options) {
+    const next = keyFit(Math.max(...candidate.map(emWidth)), candidate.length, boxW, boxH);
+    if (next > size) {
+      size = next;
+      lines = candidate;
+    }
+  }
+  if (size < 1) return [];
+  const gap = size * KEY_LINE;
+  const block = (lines.length - 1) * gap;
+  const fill = keyInk(bg);
+  return lines.map((text, i) => ({
+    t: 'text',
+    text,
+    x: cx,
+    y: cy - block / 2 + i * gap,
+    size,
+    fill,
+    bold: true,
+    anchor: 'middle',
+  }));
+}
 
 export function noteAmp(w: number, h: number): number {
   return Math.max(3.5, Math.min(7, Math.min(w, h) * 0.07));
@@ -408,7 +495,7 @@ function filament(g: Geom): string {
   return pts.map(([x, y], i) => `${i ? 'L' : 'M'}${f(cx + x * s)} ${f(cy + y * s)}`).join('');
 }
 
-/** Drawing ops for a component in its unrotated local frame. Labels are drawn separately. */
+/** Drawing ops for a component in its unrotated local frame. The part name is drawn separately. */
 export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
   const stroke = c.stroke ?? theme.stroke;
   const fill = c.fill ?? theme.fill;
@@ -534,7 +621,10 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
       ops.push({ t: 'path', d: roundRectD(trackL, cy - r, 2 * (half + r), 2 * r, r), fill: theme.trackOff });
       ops.push({ t: 'path', d: capsuleH(cap, pipX, cy, r - 1.2), fill: onColor });
       ops.push({ t: 'path', d: roundRectD(trackL, cy - r, 2 * (half + r), 2 * r, r), stroke, width: 1.8 });
-      ops.push({ t: 'path', d: circlePath(pipX, cy, r - 0.8), fill, stroke, width: 1.6 });
+      const pipR = r - 0.8;
+      ops.push({ t: 'path', d: circlePath(pipX, cy, pipR), fill, stroke, width: 1.6 });
+      const pipFace = pipR * 1.4;
+      ops.push(...keyOps(c, pipX, cy, pipFace, pipFace, fill));
       return ops;
     }
     case 'button': {
@@ -551,6 +641,8 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
         { t: 'path', d: rr(outer), fill: theme.trackOff, stroke, width: 1.8 },
         { t: 'path', d: rr(inner), fill: active ? onColor : fill, stroke, width: 1.8 },
       );
+      const cap = Math.min(g.w, g.h) - 2 * 11.5 * s;
+      ops.push(...keyOps(c, cx, cy, cap * 0.8, cap * 0.56, active ? onColor : fill));
       return ops;
     }
     case 'timer': {

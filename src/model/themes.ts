@@ -50,7 +50,7 @@ export const THEMES: Theme[] = [
     wireOn: { s: 95, l: 47 },
     glowAlpha: 0.35,
     ui: {
-      bg: 'rgba(253,246,227,0.95)',
+      bg: '#c4a47a',
       fg: '#073642',
       muted: '#657b83',
       border: 'rgba(7,54,66,0.14)',
@@ -78,7 +78,7 @@ export const THEMES: Theme[] = [
     wireOn: { s: 100, l: 50 },
     glowAlpha: 0.35,
     ui: {
-      bg: 'rgba(255,255,255,0.94)',
+      bg: '#bebcb7',
       fg: '#1a1a1a',
       muted: '#6b6b6b',
       border: 'rgba(0,0,0,0.12)',
@@ -106,7 +106,7 @@ export const THEMES: Theme[] = [
     wireOn: { s: 100, l: 62 },
     glowAlpha: 0.4,
     ui: {
-      bg: 'rgba(28,31,38,0.94)',
+      bg: '#323b4e',
       fg: '#ececec',
       muted: '#9aa0aa',
       border: 'rgba(255,255,255,0.10)',
@@ -134,7 +134,7 @@ export const THEMES: Theme[] = [
     wireOn: { s: 100, l: 66 },
     glowAlpha: 0.4,
     ui: {
-      bg: 'rgba(12,42,78,0.94)',
+      bg: '#1a4f86',
       fg: '#e8f1ff',
       muted: '#9fb8d9',
       border: 'rgba(255,255,255,0.14)',

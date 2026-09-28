@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "gen:example-previews": "tsx scripts/generate-example-previews.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -34,7 +34,7 @@ describe('examples', () => {
         }
       }
     }
-  });
+  }, 180000);
 
   it('joins a numbered bus into one cable, bit 0 on top', () => {
     for (const g of EXAMPLES) {
@@ -80,7 +80,7 @@ describe('examples', () => {
         }
       }
     }
-  });
+  }, 180000);
 
   it('keeps parts inside a box from sitting on each other', () => {
     for (const g of EXAMPLES) {
@@ -132,7 +132,7 @@ describe('examples', () => {
         }
       }
     }
-  });
+  }, 180000);
 });
 
 function part(doc: Doc, name: string) {

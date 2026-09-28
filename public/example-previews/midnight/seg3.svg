@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-182 -899 5624 4218" width="5624" height="4218" font-family="Inter, 'Segoe UI', system-ui, sans-serif">
+<rect x="-182" y="-899" width="5624" height="4218" fill="#111318"/>
+<rect x="240" y="-190" width="2800" height="1870" rx="112.2" fill="#5b4b8a" fill-opacity="0.28" stroke="#5b4b8a" stroke-width="62.48888888888889"/>
+<text x="2949.614285714286" y="0.8142857142857167" font-size="200.85714285714286" font-weight="700" fill="#5b4b8a" text-anchor="end">Binary to decimal</text>
+<rect x="3110" y="-190" width="1710" height="2800" rx="102.6" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="62.48888888888889"/>
+<text x="4729.614285714286" y="0.8142857142857167" font-size="200.85714285714286" font-weight="700" fill="#6e56cf" text-anchor="end">Decoders</text>
+<rect x="3140" y="-120" width="550" height="2700" rx="33" fill="#5b4b8a" fill-opacity="0.28" stroke="#5b4b8a" stroke-width="62.48888888888889"/>
+<rect x="3690" y="-120" width="550" height="2700" rx="33" fill="#5b4b8a" fill-opacity="0.28" stroke="#5b4b8a" stroke-width="62.48888888888889"/>
+<rect x="4240" y="-120" width="550" height="2700" rx="33" fill="#5b4b8a" fill-opacity="0.28" stroke="#5b4b8a" stroke-width="62.48888888888889"/>
+<rect x="800" y="-120" width="530" height="880" rx="31.799999999999997" fill="#e5932a" fill-opacity="0.28" stroke="#e5932a" stroke-width="62.48888888888889"/>
+<text x="1270.375" y="5.875" font-size="132.5" font-weight="700" fill="#e5932a" text-anchor="end">Add 3</text>
+<rect x="1330" y="-120" width="530" height="880" rx="31.799999999999997" fill="#e5932a" fill-opacity="0.28" stroke="#e5932a" stroke-width="62.48888888888889"/>
+<text x="1800.375" y="5.875" font-size="132.5" font-weight="700" fill="#e5932a" text-anchor="end">Add 3</text>
+<rect x="1860" y="-120" width="530" height="880" rx="31.799999999999997" fill="#e5932a" fill-opacity="0.28" stroke="#e5932a" stroke-width="62.48888888888889"/>
+<text x="2330.375" y="5.875" font-size="132.5" font-weight="700" fill="#e5932a" text-anchor="end">Add 3</text>
+<rect x="2390" y="-120" width="530" height="880" rx="31.799999999999997" fill="#e5932a" fill-opacity="0.28" stroke="#e5932a" stroke-width="62.48888888888889"/>
+<text x="2860.375" y="5.875" font-size="132.5" font-weight="700" fill="#e5932a" text-anchor="end">Add 3</text>
+<rect x="1290" y="770" width="530" height="880" rx="31.799999999999997" fill="#e5932a" fill-opacity="0.28" stroke="#e5932a" stroke-width="62.48888888888889"/>
+<text x="1760.375" y="895.875" font-size="132.5" font-weight="700" fill="#e5932a" text-anchor="end">Add 3</text>
+<rect x="2350" y="770" width="530" height="880" rx="31.799999999999997" fill="#e5932a" fill-opacity="0.28" stroke="#e5932a" stroke-width="62.48888888888889"/>
+<text x="2820.375" y="895.875" font-size="132.5" font-weight="700" fill="#e5932a" text-anchor="end">Add 3</text>
+<rect x="270" y="-120" width="530" height="880" rx="31.799999999999997" fill="#e5932a" fill-opacity="0.28" stroke="#e5932a" stroke-width="62.48888888888889"/>
+<text x="740.375" y="5.875" font-size="132.5" font-weight="700" fill="#e5932a" text-anchor="end">Add 3</text>
+<rect x="-20" y="-60" width="190" height="1470" rx="11.4" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="62.48888888888889"/>
+<rect x="4920" y="-120" width="360" height="620" rx="21.599999999999998" fill="#4c1d95" fill-opacity="0.28" stroke="#4c1d95" stroke-width="62.48888888888889"/>
+<text x="5239.5" y="-34.5" font-size="90" font-weight="700" fill="#4c1d95" text-anchor="end">100s</text>
+<rect x="4920" y="580" width="360" height="620" rx="21.599999999999998" fill="#4c1d95" fill-opacity="0.28" stroke="#4c1d95" stroke-width="62.48888888888889"/>
+<text x="5239.5" y="665.5" font-size="90" font-weight="700" fill="#4c1d95" text-anchor="end">10s</text>
+<rect x="4920" y="1280" width="360" height="620" rx="21.599999999999998" fill="#4c1d95" fill-opacity="0.28" stroke="#4c1d95" stroke-width="62.48888888888889"/>
+<text x="5239.5" y="1365.5" font-size="90" font-weight="700" fill="#4c1d95" text-anchor="end">1s</text>
+</svg>

@@ -176,7 +176,7 @@ export type Drag =
   | { kind: 'port'; comp: string; inward: boolean; sx: number; sy: number; moved: boolean }
   | { kind: 'pinch'; dist: number; world: Point; zoom: number };
 
-export const MIN_ZOOM = 0.12;
+export const MIN_ZOOM = 0.03;
 export const MAX_ZOOM = 3;
 const BOX_COLORS = ['#6e56cf', '#0f9d8a', '#e5932a', '#3b82c4', '#e5484d', '#d4a017', '#0ea5e9', '#7c3aed'];
 const DRAG_PX = 4;
@@ -1487,12 +1487,11 @@ export class Editor {
     const spot = this.freeSpot(rect, new Set());
     this.checkpoint();
     const map = this.cloneItems(src, ids, snap(spot.x - bounds.x), snap(spot.y - bounds.y), true);
-    const boxes = [...src.boxes.values()];
+    const tree = buildBoxTree(src);
     const top = [...ids].filter((id) => {
       const c = src.components.get(id);
-      if (c) return c.kind !== 'port' && !boxes.some((b) => componentInBox(src, c, b));
-      const b = src.boxes.get(id)!;
-      return !boxes.some((o) => boxInBox(b, o));
+      if (c) return c.kind !== 'port' && tree.scope(c) === null;
+      return tree.parent.get(id) === null;
     });
     this.selection = new Set(top.map((id) => map.get(id)).filter((id): id is string => !!id));
     this.changed(true);

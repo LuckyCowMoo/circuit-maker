@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="418.4 -728.7 3303.2 2477.4" width="3303.2" height="2477.4" font-family="Inter, 'Segoe UI', system-ui, sans-serif">
+<rect x="418.4" y="-728.7" width="3303.2" height="2477.4" fill="#f5f4f0"/>
+<rect x="1800" y="200" width="780" height="780" rx="46.8" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="36.70222222222222"/>
+<text x="2526.9128571428573" y="312.0728571428571" font-size="117.97142857142856" font-weight="700" fill="#0f766e" text-anchor="end">Block B</text>
+<rect x="500" y="60" width="900" height="620" rx="37.199999999999996" fill="#5b4b8a" fill-opacity="0.28" stroke="#5b4b8a" stroke-width="36.70222222222222"/>
+<text x="1346.912857142857" y="172.07285714285712" font-size="117.97142857142856" font-weight="700" fill="#5b4b8a" text-anchor="end">Block A</text>
+<rect x="3000" y="40" width="640" height="480" rx="28.799999999999997" fill="#b45309" fill-opacity="0.28" stroke="#b45309" stroke-width="36.70222222222222"/>
+<text x="3592.48" y="140.32" font-size="105.6" font-weight="700" fill="#b45309" text-anchor="end">Block C</text>
+</svg>

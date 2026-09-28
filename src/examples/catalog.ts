@@ -19,6 +19,7 @@ import {
   srDoc,
   sub8Doc,
 } from './circuits';
+import { calculatorDoc } from './calculator';
 import { snakeDoc } from './snake';
 import { emptyDoc, makeComponent } from '../model/doc';
 
@@ -26,6 +27,8 @@ export interface Example {
   id: string;
   name: string;
   build: () => Doc;
+  /** Built when chosen, not when the examples list opens. */
+  heavy?: boolean;
 }
 
 export interface ExampleGroup {
@@ -94,6 +97,7 @@ export const EXAMPLES: ExampleGroup[] = [
       { id: 'div4', name: '4-bit divider', build: div4Doc },
       { id: 'mod4', name: '4-bit modulus', build: mod4Doc },
       { id: 'cmp4', name: '4-bit comparator', build: cmp4Doc },
+      { id: 'calc', name: 'Calculator', build: calculatorDoc, heavy: true },
     ],
   },
   {

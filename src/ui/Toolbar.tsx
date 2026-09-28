@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Editor, ExportScope, PlaceKind } from '../editor/Editor';
 import { KIND_LABEL } from '../editor/Editor';
-import { componentBounds, INPUT_WARN, MAX_INPUTS, pinPos } from '../model/geometry';
+import { componentBounds, INPUT_WARN, MAX_INPUTS, pinPos, rotatedSize } from '../model/geometry';
+import { choosePropsBox, type ScreenBox } from './propsPlace';
 import { isModifierOnly, keyBindLabel } from '../model/keys';
 import { NOTE_BG } from '../model/shapes';
 import { THEMES, toHex6, wireColors } from '../model/themes';
@@ -115,6 +116,54 @@ function ColorField({
       <span className="swatch" style={{ background: value }} />
       <input type="color" value={toHex6(value)} onChange={(e) => onChange(e.target.value)} />
       <span>{label}</span>
+    </label>
+  );
+}
+
+function formatSeconds(n: number): string {
+  if (!Number.isFinite(n)) return '';
+  return String(Math.round(n * 1000) / 1000);
+}
+
+/** A seconds field that can be cleared while typing. A blank field restores the previous value on blur. */
+function TimingField({ label, value, onCommit }: { label: string; value: number; onCommit: (n: number) => void }) {
+  const [text, setText] = useState(() => formatSeconds(value));
+  const focused = useRef(false);
+  const before = useRef(value);
+  useEffect(() => {
+    if (!focused.current) setText(formatSeconds(value));
+  }, [value]);
+  const finish = () => {
+    focused.current = false;
+    const trimmed = text.trim();
+    const n = Number(trimmed);
+    if (trimmed === '' || !Number.isFinite(n)) {
+      setText(formatSeconds(before.current));
+      return;
+    }
+    if (n !== value) onCommit(n);
+    setText(formatSeconds(n));
+  };
+  return (
+    <label className="props-group">
+      <span className="props-label">{label}</span>
+      <input
+        className="number-input"
+        type="text"
+        inputMode="decimal"
+        aria-label={label}
+        value={text}
+        onFocus={() => {
+          focused.current = true;
+          before.current = value;
+        }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={finish}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        }}
+      />
+      <span className="props-label">s</span>
     </label>
   );
 }
@@ -233,26 +282,59 @@ function selectionClientRect(editor: Editor): { left: number; top: number; right
   };
 }
 
-/** Puts the selection menu just outside the selected parts, above them when it fits. */
+function screenBoxOf(r: DOMRect): ScreenBox {
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+}
+
+/** Parts near the selection, in screen space, so the menu can sit in the clearest gap. */
+function nearbyObstacles(editor: Editor, anchor: ScreenBox, menuW: number, menuH: number): ScreenBox[] {
+  const canvas = editor.canvas?.getBoundingClientRect();
+  if (!canvas) return [];
+  const z = editor.cam.zoom || 1;
+  const pad = (Math.hypot(menuW, menuH) + 48) / z;
+  const wx0 = editor.cam.x + (anchor.left - canvas.left) / z - pad;
+  const wy0 = editor.cam.y + (anchor.top - canvas.top) / z - pad;
+  const wx1 = editor.cam.x + (anchor.right - canvas.left) / z + pad;
+  const wy1 = editor.cam.y + (anchor.bottom - canvas.top) / z + pad;
+  const out: ScreenBox[] = [];
+  for (const c of editor.doc.components.values()) {
+    if (editor.selection.has(c.id)) continue;
+    const s = rotatedSize(c);
+    if (c.x > wx1 || c.y > wy1 || c.x + s.w < wx0 || c.y + s.h < wy0) continue;
+    const a = editor.toScreen({ x: c.x, y: c.y });
+    const b = editor.toScreen({ x: c.x + s.w, y: c.y + s.h });
+    out.push({
+      left: canvas.left + Math.min(a.x, b.x),
+      top: canvas.top + Math.min(a.y, b.y),
+      right: canvas.left + Math.max(a.x, b.x),
+      bottom: canvas.top + Math.max(a.y, b.y),
+    });
+  }
+  for (const node of document.querySelectorAll('.io-wrap.open .io-list, .panel')) {
+    if (!(node instanceof HTMLElement)) continue;
+    const r = node.getBoundingClientRect();
+    if (r.width > 1 && r.height > 1) out.push(screenBoxOf(r));
+  }
+  return out;
+}
+
+/** Puts the selection menu just outside the part, on the side that covers the least. */
 function placeProps(editor: Editor, el: HTMLElement): void {
-  const rect = selectionClientRect(editor);
-  if (!rect) return;
-  const w = el.offsetWidth;
-  const h = el.offsetHeight;
-  const gap = 12;
+  const anchor = selectionClientRect(editor);
+  if (!anchor) return;
+  const menuW = el.offsetWidth;
+  const menuH = el.offsetHeight;
+  if (menuW < 2 || menuH < 2) return;
   const edge = 8;
   const dockTop = el.closest('.dock')?.getBoundingClientRect().top ?? window.innerHeight;
-  const limit = dockTop - edge;
-  const above = rect.top - gap - h;
-  const below = rect.bottom + gap;
-  let top = above >= edge ? above : below;
-  if (top + h > limit && above >= edge) top = above;
-  if (top < edge) top = edge;
-  if (top + h > window.innerHeight - edge) top = Math.max(edge, window.innerHeight - h - edge);
-  let left = (rect.left + rect.right) / 2 - w / 2;
-  left = Math.max(edge, Math.min(left, window.innerWidth - w - edge));
-  el.style.left = `${Math.round(left)}px`;
-  el.style.top = `${Math.round(top)}px`;
+  const box = choosePropsBox(anchor, menuW, menuH, {
+    left: edge,
+    top: edge,
+    right: window.innerWidth - edge,
+    bottom: Math.min(window.innerHeight, dockTop) - edge,
+  }, nearbyObstacles(editor, anchor, menuW, menuH));
+  el.style.left = `${Math.round(box.left)}px`;
+  el.style.top = `${Math.round(box.top)}px`;
 }
 
 function PropsBar({ editor }: { editor: Editor }) {
@@ -398,35 +480,22 @@ function PropsBar({ editor }: { editor: Editor }) {
     );
   }
   if (timers.length === 1) {
+    const timer = timers[0];
     groups.push(
-          <label className="props-group" key="cycle">
-            <span className="props-label">Cycle</span>
-            <input
-              className="number-input"
-              type="number"
-              min="0.01"
-              max="3600"
-              step="0.1"
-              value={timers[0].period ?? 5}
-              onChange={(e) => editor.setTimerTiming(Number(e.target.value), timers[0].pulse ?? 1)}
-            />
-            <span className="props-label">s</span>
-          </label>,
+      <TimingField
+        key="cycle"
+        label="Cycle"
+        value={timer.period ?? 5}
+        onCommit={(period) => editor.setTimerTiming(period, timer.pulse ?? 1)}
+      />,
     );
     groups.push(
-          <label className="props-group" key="pulse">
-            <span className="props-label">Pulse</span>
-            <input
-              className="number-input"
-              type="number"
-              min="0.001"
-              max={timers[0].period ?? 5}
-              step="0.1"
-              value={timers[0].pulse ?? 1}
-              onChange={(e) => editor.setTimerTiming(timers[0].period ?? 5, Number(e.target.value))}
-            />
-            <span className="props-label">s</span>
-          </label>,
+      <TimingField
+        key="pulse"
+        label="Pulse"
+        value={timer.pulse ?? 1}
+        onCommit={(pulse) => editor.setTimerTiming(timer.period ?? 5, pulse)}
+      />,
     );
   }
   if (keyable.length > 0) {
@@ -958,7 +1027,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
               editor.openInNewTab(null);
             }}
           >
-            {Icons.blank} New blank project
+            <span>{Icons.blank} New blank project</span>
           </button>
           <div className="panel-sub">Examples</div>
           <Examples editor={editor} onPicked={() => setPanel(null)} />

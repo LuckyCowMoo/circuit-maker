@@ -125,17 +125,49 @@ export function wallPoint(box: Box, p: Point): { side: Side; x: number; y: numbe
  * Moves a port onto the wall of its box as close to `target` as possible, sliding along the wall
  * past other ports, and points it in or out.
  */
+const portsByBox = new WeakMap<Doc, Map<string, Component[]>>();
+
+function portsAlong(doc: Doc, boxId: string): Component[] {
+  let map = portsByBox.get(doc);
+  if (!map) {
+    map = new Map();
+    for (const c of doc.components.values()) {
+      if (c.kind !== 'port' || !c.box) continue;
+      const list = map.get(c.box);
+      if (list) list.push(c);
+      else map.set(c.box, [c]);
+    }
+    portsByBox.set(doc, map);
+  }
+  const list = map.get(boxId);
+  if (!list) return [];
+  let n = 0;
+  for (const c of list) if (doc.components.get(c.id) === c && c.box === boxId) list[n++] = c;
+  list.length = n;
+  return list;
+}
+
+function rememberPort(doc: Doc, port: Component): void {
+  if (!port.box) return;
+  const map = portsByBox.get(doc);
+  if (!map) return;
+  const list = map.get(port.box);
+  if (!list) map.set(port.box, [port]);
+  else if (!list.includes(port)) list.push(port);
+}
+
 export function placePort(doc: Doc, port: Component, box: Box, target: Point, inward: boolean, slide = true): void {
   const wp = wallPoint(box, target);
   const n = outwardNormal(wp.side);
   const vertical = wp.side === 0 || wp.side === 2;
   const lo = (vertical ? box.y : box.x) + CORNER;
   const hi = (vertical ? box.y + box.h : box.x + box.w) - CORNER;
+  const along = portsAlong(doc, box.id);
+  rememberPort(doc, port);
   const others: number[] = [];
-  for (const c of doc.components.values()) {
-    if (c.kind !== 'port' || c.box !== box.id || c.id === port.id) continue;
-    const b = doc.boxes.get(box.id);
-    if (!b || portSide(c, b) !== wp.side) continue;
+  for (const c of along) {
+    if (c.id === port.id) continue;
+    if (portSide(c, box) !== wp.side) continue;
     const cc = componentCenter(c);
     others.push(vertical ? cc.y : cc.x);
   }
@@ -332,21 +364,17 @@ export function normalizePorts(doc: Doc): boolean {
       }
       route(doc, tree, info, w, S, T);
     }
+    const used = new Set<string>();
+    for (const w of doc.wires.values()) {
+      used.add(w.from);
+      used.add(w.to);
+    }
     for (const c of [...doc.components.values()]) {
-      if (c.kind !== 'port') continue;
-      let wired = false;
-      for (const w of doc.wires.values()) {
-        if (w.from === c.id || w.to === c.id) {
-          wired = true;
-          break;
-        }
-      }
-      if (!wired) {
-        // Ribbon ports and toolbar-placed ports stay put when empty.
-        if (c.inputs >= 2 || c.placed) continue;
-        doc.components.delete(c.id);
-        dirty = true;
-      }
+      if (c.kind !== 'port' || used.has(c.id)) continue;
+      // Ribbon ports and toolbar-placed ports stay put when empty.
+      if (c.inputs >= 2 || c.placed) continue;
+      doc.components.delete(c.id);
+      dirty = true;
     }
     if (!dirty) break;
     changed = true;
@@ -423,10 +451,19 @@ function outsidePoint(box: Box, side: Side, along: number): Point {
  */
 function bundlePorts(doc: Doc): boolean {
   const tree = buildBoxTree(doc);
+  const fromWires = new Map<string, Wire[]>();
+  const toWires = new Map<string, Wire[]>();
+  for (const w of doc.wires.values()) {
+    const from = fromWires.get(w.from);
+    if (from) from.push(w);
+    else fromWires.set(w.from, [w]);
+    const to = toWires.get(w.to);
+    if (to) to.push(w);
+    else toWires.set(w.to, [w]);
+  }
   const peerOf = (port: Component): string => {
     const outward = !portInward(port, doc.boxes.get(port.box!)!);
-    for (const w of doc.wires.values()) {
-      if (outward ? w.from !== port.id : w.to !== port.id) continue;
+    for (const w of (outward ? fromWires.get(port.id) : toWires.get(port.id)) ?? []) {
       const other = doc.components.get(outward ? w.to : w.from);
       if (!other) continue;
       if (other.kind === 'port' && other.box) return other.box;
@@ -451,11 +488,8 @@ function bundlePorts(doc: Doc): boolean {
   const groupOf = new Map<string, string>();
   for (const [key, list] of groups) for (const p of list) groupOf.set(p.id, key);
   const partner = (port: Component, incoming: boolean): Component | undefined => {
-    for (const w of doc.wires.values()) {
-      if (incoming ? w.to !== port.id : w.from !== port.id) continue;
-      return doc.components.get(incoming ? w.from : w.to);
-    }
-    return undefined;
+    const w = (incoming ? toWires.get(port.id) : fromWires.get(port.id))?.[0];
+    return w ? doc.components.get(incoming ? w.from : w.to) : undefined;
   };
   // A face is a cable only when the ports on the other end are one ribbon of the same width.
   const faceIsCable = (list: Component[], incoming: boolean): boolean => {
@@ -514,14 +548,16 @@ function bundlePorts(doc: Doc): boolean {
     const target = peerBox ? outsidePoint(box, face, face === 0 || face === 2 ? avg.y : avg.x) : avg;
     placePort(doc, port, box, target, inward);
     list.forEach((old, i) => {
-      for (const w of doc.wires.values()) {
-        if (w.to === old.id) {
-          w.to = port.id;
-          w.input = i;
-        } else if (w.from === old.id) {
-          w.from = port.id;
-          w.lane = i;
-        }
+      const incoming = toWires.get(old.id) ?? [];
+      for (const w of incoming) {
+        w.to = port.id;
+        w.input = i;
+      }
+      const skip = new Set(incoming);
+      for (const w of fromWires.get(old.id) ?? []) {
+        if (skip.has(w)) continue;
+        w.from = port.id;
+        w.lane = i;
       }
       doc.components.delete(old.id);
     });

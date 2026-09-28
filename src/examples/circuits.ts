@@ -1,5 +1,6 @@
-import { Builder, sop, type Src } from './builder';
+import { componentBounds } from '../model/geometry';
 import type { Doc } from '../model/types';
+import { Builder, sop, type Src } from './builder';
 
 const COL = {
   half: '#0f9d8a',
@@ -44,6 +45,23 @@ function bulbs(b: Builder, x: number, y: number, srcs: Src[], prefix: string, na
   b.box(name, ids, 30, COL.out);
 }
 
+/** A text box above the whole example, clear of every part and box. */
+function explain(b: Builder, text: string): void {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  for (const c of b.doc.components.values()) {
+    const r = componentBounds(c);
+    x0 = Math.min(x0, r.x);
+    y0 = Math.min(y0, r.y);
+  }
+  for (const box of b.doc.boxes.values()) {
+    x0 = Math.min(x0, box.x);
+    y0 = Math.min(y0, box.y);
+  }
+  if (!Number.isFinite(x0)) return;
+  b.add('note', x0, y0 - 480, { name: text, w: 400, h: 400 });
+}
+
 function zero(b: Builder, x: number, y: number): string {
   return b.gate('buffer', x, y, [null]);
 }
@@ -59,7 +77,7 @@ function pad8(b: Builder, srcs: Src[], x: number, y: number): Src[] {
   return out;
 }
 
-function fullAdder(b: Builder, x: number, y: number, a: Src, bb: Src, cin: Src) {
+export function fullAdder(b: Builder, x: number, y: number, a: Src, bb: Src, cin: Src) {
   const ain = b.gate('buffer', x, y, [a]);
   const bin = b.gate('buffer', x, y + 200, [bb]);
   const x1 = b.gate('xor', x + 195, y, [ain, bin]);
@@ -74,7 +92,7 @@ function fullAdder(b: Builder, x: number, y: number, a: Src, bb: Src, cin: Src) 
   return { s: x2 as Src, c: carry as Src, box: b.box('Full adder', [ha1, ha2, carry], 28, COL.full) };
 }
 
-function ripple(b: Builder, x: number, y: number, a: Src[], bb: Src[], cin: Src) {
+export function ripple(b: Builder, x: number, y: number, a: Src[], bb: Src[], cin: Src) {
   const sums: Src[] = [];
   const boxes: string[] = [];
   let c = cin;
@@ -104,6 +122,10 @@ export function halfAdderDoc(): Doc {
   b.wire(s, sum);
   b.wire(c, carry);
   b.box('Outputs', [sum, carry], 30, COL.out);
+  explain(
+    b,
+    'What: Adds two bits, A and B.\nHow: XOR makes the sum, which is 1 when the bits differ. AND makes the carry, which is 1 only when both bits are 1.\nWhy: Every bigger adder is built by joining half adders together.',
+  );
   return b.finish();
 }
 
@@ -121,6 +143,10 @@ export function fullAdderDoc(): Doc {
   b.wire(fa.c, cout);
   b.box('Sum', [sum], 30, COL.out);
   b.box('Carry', [cout], 30, COL.carry);
+  explain(
+    b,
+    'What: Adds two bits plus a carry coming in from the bit on the right.\nHow: One half adder adds A and B. A second half adder adds that sum to Cin. An OR joins the two little carries into Cout.\nWhy: Chain the carry from one full adder into the next and you can add numbers of any length.',
+  );
   return b.finish();
 }
 
@@ -154,6 +180,10 @@ export function adder4Doc(): Doc {
   b.wire(cin, cout);
   ids.push(cout);
   b.box('4-bit adder', ids, 36, COL.outer);
+  explain(
+    b,
+    'What: Adds two 4-bit numbers and shows the sum, plus a final carry.\nHow: Four full adders in a row. Bit 0 is on the right. Each stage passes its carry left into the next bit.\nWhy: This ripple is how a computer adds scores, addresses, and the small numbers in a program.',
+  );
   return b.finish();
 }
 
@@ -169,6 +199,10 @@ export function adder8Doc(): Doc {
   b.wire(added.cout, cout);
   b.signal(added.cout, 'Cout');
   b.box('Carry', [cout], 30, COL.carry);
+  explain(
+    b,
+    'What: Adds two 8-bit numbers, a whole byte at a time.\nHow: Eight full adders chained so the carry walks from bit 0 up to Cout.\nWhy: A byte is the usual size of data in a small computer, so this is the adder inside a simple processor.',
+  );
   return b.finish();
 }
 
@@ -188,6 +222,10 @@ export function sub8Doc(): Doc {
   const bulb = b.bulb(edge.x + edge.w + 270, edge.y + 900, 'Borrow');
   b.wire(borrow, bulb);
   b.box('Borrow', [borrow, bulb], 30, COL.carry);
+  explain(
+    b,
+    'What: Subtracts an 8-bit B from A, and lights Borrow when A is smaller.\nHow: Each bit of B is flipped, then added to A with a carry-in of 1. Adding that pattern is the same as subtracting B.\nWhy: Computers subtract by adding, so one adder can do both jobs.',
+  );
   return b.finish();
 }
 
@@ -227,6 +265,10 @@ export function mul4Doc(): Doc {
   const block = b.box('4-bit multiplier', [...hi, ...rows, ...wide.filter((s) => !p.includes(s)) as string[]], 36, COL.outer);
   const edge = b.bounds([block]);
   bulbs(b, edge.x + edge.w + 50, edge.y, wide, 'P', 'Product');
+  explain(
+    b,
+    'What: Multiplies two 4-bit numbers and shows an 8-bit product.\nHow: Each bit of B turns a copy of A on or off. Those rows are partial products. They are added together, each shifted one place to the left.\nWhy: This is long multiplication done with gates, the same method a multiply instruction uses.',
+  );
   return b.finish();
 }
 
@@ -285,6 +327,12 @@ function divide(showQ: boolean): Doc {
   const block = b.box(showQ ? '4-bit divider' : '4-bit modulus', [...hi, ...steps, ...wide.filter((s) => !shown.includes(s)) as string[]], 36, COL.outer);
   const edge = b.bounds([block]);
   bulbs(b, edge.x + edge.w + 50, edge.y, wide, showQ ? 'Q' : 'R', showQ ? 'Quotient' : 'Remainder');
+  explain(
+    b,
+    showQ
+      ? 'What: Divides a 4-bit A by a 4-bit B and shows how many times B fits in.\nHow: Restoring division. Each stage subtracts B from the remainder. If that goes negative, that quotient bit stays 0 and the old remainder is put back.\nWhy: Division splits a number into equal groups. The partner circuit shows what is left over.'
+      : 'What: Divides a 4-bit A by B and shows the remainder, A mod B.\nHow: The same restoring divider as the quotient circuit. The lamps show what is left after B has been taken out as many times as it will go.\nWhy: Remainders tell you about wrapping, clocks, and whether one number divides another exactly.',
+  );
   return b.finish();
 }
 
@@ -320,6 +368,10 @@ export function cmp4Doc(): Doc {
   b.wire(all, eb);
   b.wire(l, lb);
   b.box('Result', [gb, eb, lb], 30, COL.out);
+  explain(
+    b,
+    'What: Compares two 4-bit numbers and lights A>B, A=B, or A<B.\nHow: XNOR finds bits that match. A=B needs every bit to match. A>B is decided at the highest bit where they differ, if A has the 1. A<B is the swap of that.\nWhy: Comparisons choose a path: which score is higher, whether a loop has finished, or which value to keep.',
+  );
   return b.finish();
 }
 
@@ -345,6 +397,10 @@ export function mux4Doc(): Doc {
   const out = b.bulb(rightOf(b, [block]), 80, 'Y');
   b.wire(top.o, out);
   b.box('Output', [out], 30, COL.out);
+  explain(
+    b,
+    'What: Chooses one of four inputs, D0 to D3, and sends it to Y.\nHow: S0 and S1 are the address. Each small mux lets one input through with an AND and blocks the other with a NOT. Two select bits pick among four inputs.\nWhy: Multiplexers steer data: which value to read, or which operation a calculator should use.',
+  );
   return b.finish();
 }
 
@@ -365,10 +421,14 @@ export function dec2Doc(): Doc {
     return id;
   });
   b.box('Outputs', bulbs, 30, COL.out);
+  explain(
+    b,
+    'What: Turns a 2-bit number into a single 1 on one of four outputs.\nHow: Each AND gate matches one pattern of S0 and S1. NOT gates supply the 0s that pattern needs. Only one pattern can match at a time.\nWhy: Decoders pick one device out of many: a memory row, a digit, or one operation in a control unit.',
+  );
   return b.finish();
 }
 
-function dLatch(b: Builder, x: number, y: number, d: Src, en: Src) {
+export function dLatch(b: Builder, x: number, y: number, d: Src, en: Src) {
   const nd = b.gate('buffer', x, y + 180, [d], true);
   const s = b.gate('and', x + 195, y, [d, en]);
   const r = b.gate('and', x + 195, y + 180, [en, nd]);
@@ -400,6 +460,10 @@ export function srDoc(): Doc {
   b.wire(q, qBulb);
   b.wire(qb, qbBulb);
   b.box('Outputs', [qBulb, qbBulb], 30, COL.out);
+  explain(
+    b,
+    'What: Remembers one bit. S sets it, R resets it.\nHow: Two NOR gates feed each other. Pressing S forces Q on. Pressing R forces Q off. With both released, each gate holds the other where it is.\nWhy: This is the smallest memory. Do not press S and R together: both outputs would be forced off.',
+  );
   return b.finish();
 }
 
@@ -413,10 +477,14 @@ export function memDoc(): Doc {
   const q = b.bulb(rightOf(b, [box]), 80, 'Q');
   b.wire(cell.q, q);
   b.box('Output', [q], 30, COL.out);
+  explain(
+    b,
+    'What: Stores one bit, and only changes it while Write is held.\nHow: While Write is on, Q follows D. When Write is released, the crossed gates keep Q as it was.\nWhy: This is one cell of a register or of RAM. Write when you mean to, then leave the value sitting there.',
+  );
   return b.finish();
 }
 
-function dff(b: Builder, x: number, y: number, d: Src, clk: Src) {
+export function dff(b: Builder, x: number, y: number, d: Src, clk: Src) {
   const nclk = b.gate('buffer', x, y + 240, [clk], true);
   const master = dLatch(b, x + 165, y, d, nclk);
   const mBox = b.box('Latch', master.ids, 20, COL.latch);
@@ -434,6 +502,10 @@ export function dffDoc(): Doc {
   const q = b.bulb(rightOf(b, [ff.box]), 80, 'Q');
   b.wire(ff.q, q);
   b.box('Output', [q], 30, COL.out);
+  explain(
+    b,
+    'What: Copies D into Q at the moment Clock turns on, then holds it.\nHow: Two latches in a row. The master is open while Clock is off. The slave opens when Clock turns on, and that is the instant Q updates.\nWhy: Edge-triggered memory lets registers and counters change once per tick, instead of flickering while the input moves.',
+  );
   return b.finish();
 }
 
@@ -456,6 +528,10 @@ export function reg8Doc(): Doc {
   }
   const block = b.box('8-bit register', [en, ...cells], 30, COL.outer);
   bulbs(b, rightOf(b, [block]), y, qs, 'Q', 'Q');
+  explain(
+    b,
+    'What: Holds an 8-bit number until you press Load.\nHow: Eight memory cells share one Load signal. Press Load and each cell copies its D bit. Release Load and the byte stays.\nWhy: A processor keeps numbers in registers like this between instructions.',
+  );
   return b.finish();
 }
 
@@ -484,21 +560,33 @@ export function count4Doc(): Doc {
   const hi = [0, 1, 2, 3].map((i) => zero(b, x, y + i * 70));
   const block = b.box('4-bit counter', [clock, ...stages, ...hi], 30, COL.outer);
   bulbs(b, rightOf(b, [block]), 0, [...qs, ...hi], 'Q', 'Count');
+  explain(
+    b,
+    'What: Counts in binary each time you press Clock, from 0 up to 15, then back to 0.\nHow: The lowest flip-flop toggles on every press. Each higher bit toggles only when all the bits below it are 1, which is when a binary count carries.\nWhy: Counters time events, step through addresses, and make the program counter in a processor.',
+  );
   return b.finish();
 }
 
 const SEGMENTS = 'abcdefg';
 const HEX = ['abcdef', 'bc', 'abdeg', 'abcdg', 'bcfg', 'acdfg', 'acdefg', 'abc', 'abcdefg', 'abcdfg', 'abcefg', 'cdefg', 'adef', 'bcdeg', 'adefg', 'aefg'];
 
-function segDecoder(b: Builder, x: number, y: number, ins: Src[]) {
+export function segDecoder(b: Builder, x: number, y: number, ins: Src[]) {
   const outputs = [...SEGMENTS].map((s) => ({ on: HEX.flatMap((segs, v) => (segs.includes(s) ? [v] : [])) }));
   const res = sop(b, x, y, ins, outputs);
   return { outs: res.outs, box: b.box('7-segment decoder', res.ids, 24, COL.outer) };
 }
 
-function digit(b: Builder, x: number, y: number, segs: Src[], name: string): string {
-  const t = 60;
-  const L = 180;
+export function digit(
+  b: Builder,
+  x: number,
+  y: number,
+  segs: Src[],
+  name: string,
+  opts?: { scale?: number; title?: string | null },
+): string {
+  const scale = opts?.scale ?? 1;
+  const t = 60 * scale;
+  const L = 180 * scale;
   const bar = (sx: number, sy: number, vertical: boolean) =>
     b.bulb(x + sx, y + sy, '', vertical ? { w: t, h: L } : { w: L, h: t });
   const ids = [
@@ -515,7 +603,8 @@ function digit(b: Builder, x: number, y: number, segs: Src[], name: string): str
     const c = b.doc.components.get(id)!;
     c.name = `${name} ${SEGMENTS[i]}`;
   });
-  return b.box(name, ids, 24, COL.display);
+  const title = opts?.title === undefined ? name : opts.title;
+  return b.box(title ?? '', ids, Math.max(12, 24 * scale), COL.display);
 }
 
 export function seg7Doc(): Doc {
@@ -527,10 +616,14 @@ export function seg7Doc(): Doc {
   const dec = segDecoder(b, x + 210, y, value.slice(0, 4));
   const block = b.box('Decoder', [dec.box, ...hi], 30, COL.outer);
   digit(b, rightOf(b, [block]), y + 200, dec.outs, 'Display');
+  explain(
+    b,
+    'What: Shows a 4-bit value as a digit from 0 to F.\nHow: AND and OR gates turn the four bits into the seven segment wires, a to g. Each wire lights one bar of the display.\nWhy: This is how a calculator or a clock turns a binary number into a shape you can read.',
+  );
   return b.finish();
 }
 
-function add3(b: Builder, x: number, y: number, ins: Src[]) {
+export function add3(b: Builder, x: number, y: number, ins: Src[]) {
   const on: number[][] = [[], [], [], []];
   const dc: number[] = [];
   for (let v = 0; v < 16; v++) {
@@ -573,5 +666,9 @@ export function seg3Doc(): Doc {
   digit(b, dispX, y, h.outs, '100s');
   digit(b, dispX, y + 700, t.outs, '10s');
   digit(b, dispX, y + 1400, o.outs, '1s');
+  explain(
+    b,
+    'What: Shows an 8-bit number as three decimal digits, from 0 to 255.\nHow: Double dabble. Whenever a group of bits is 5 or more, an Add-3 box adds 3, which shifts the value into decimal digits. Three decoders then drive the hundreds, tens, and ones.\nWhy: People read decimal. This turns a byte into the digits you would see on a display.',
+  );
   return b.finish();
 }

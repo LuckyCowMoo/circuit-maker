@@ -1,5 +1,5 @@
 :root {
-  --ui-bg: rgba(253, 246, 227, 0.95);
+  --ui-bg: #c4a47a;
   --ui-fg: #073642;
   --ui-muted: #657b83;
   --ui-border: rgba(7, 54, 66, 0.14);
@@ -204,7 +204,7 @@ button {
 }
 
 .tb-sep {
-  width: 1px;
+  width: 2px;
   height: 26px;
   margin: 0 5px;
   background: var(--ui-border);
@@ -350,7 +350,7 @@ button {
 .stepper {
   display: flex;
   align-items: center;
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -377,8 +377,8 @@ button {
   width: 44px;
   height: 28px;
   border: none;
-  border-left: 1px solid var(--ui-border);
-  border-right: 1px solid var(--ui-border);
+  border-left: 2px solid var(--ui-border);
+  border-right: 2px solid var(--ui-border);
   background: transparent;
   color: inherit;
   text-align: center;
@@ -396,7 +396,7 @@ button {
 .number-input {
   width: 68px;
   height: 28px;
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   border-radius: 7px;
   background: transparent;
   color: inherit;
@@ -407,7 +407,7 @@ button {
 .chip {
   height: 30px;
   padding: 0 10px;
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   border-radius: 8px;
   background: transparent;
   cursor: pointer;
@@ -460,7 +460,7 @@ button {
   gap: 6px;
   height: 30px;
   padding: 0 8px 0 4px;
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   border-radius: 8px;
   cursor: pointer;
 }
@@ -493,7 +493,7 @@ button {
   min-width: 0;
   width: 160px;
   padding: 0 10px;
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   border-radius: 8px;
   background: transparent;
   color: inherit;
@@ -546,7 +546,7 @@ button {
   height: 36px;
   padding: 0 14px;
   border-radius: 10px;
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   background: transparent;
   cursor: pointer;
   font-weight: 600;
@@ -683,7 +683,7 @@ button {
   min-height: 72px;
   resize: vertical;
   font: 12px/1.4 ui-monospace, monospace;
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   border-radius: 8px;
   padding: 8px;
   background: var(--ui-bg);
@@ -757,23 +757,23 @@ kbd {
 
 .open-panel {
   width: min(560px, calc(100vw - 16px));
+  --open-gap: 10px;
 }
 
 .open-big {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: var(--open-gap);
 }
 
 .open-big,
 .open-wide {
-  width: min(100%, 360px);
-  margin-inline: auto;
+  width: 100%;
 }
 
 .open-big button,
 .open-wide {
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   border-radius: 14px;
   background: transparent;
   cursor: pointer;
@@ -801,18 +801,36 @@ kbd {
 }
 
 .open-big button:hover,
-.open-wide:hover,
-.example-card:hover {
+.open-wide:hover {
   background: var(--ui-hover);
 }
 
+.example-card:hover,
+.example-card:focus-visible {
+  filter: brightness(1.03);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
 .open-wide {
-  height: 40px;
+  display: grid;
+  padding: 0;
+  font-weight: 600;
+}
+
+/* Padding % is the content width. Add the 2px borders back so the border box
+   matches half of one square button: (full width − gap) / 4. */
+.open-wide::before {
+  content: '';
+  grid-area: 1 / 1;
+  padding-bottom: calc((100% + 4px - var(--open-gap)) / 4 - 4px);
+}
+
+.open-wide > span {
+  grid-area: 1 / 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font-weight: 600;
 }
 
 .open-wide .icon {
@@ -826,8 +844,12 @@ kbd {
   gap: 12px;
 }
 
+.examples-section {
+  --group-hue: 220;
+}
+
 .examples-group {
-  color: var(--ui-muted);
+  color: hsl(var(--group-hue), 42%, 38%);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
@@ -846,21 +868,77 @@ kbd {
   flex-direction: column;
   gap: 6px;
   padding: 6px 6px 8px;
-  border: 1px solid var(--ui-border);
+  border: 1px solid var(--ex-border, var(--ui-border));
   border-radius: 12px;
-  background: transparent;
+  background: var(--ex-bg, transparent);
+  color: var(--ex-fg, var(--ui-fg));
   cursor: pointer;
   font-weight: 600;
   text-align: center;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.example-card img {
+.example-card-hero {
+  background: var(--ex-bg);
+  box-shadow: inset 0 0 0 1px hsl(var(--group-hue), 50%, 28%);
+}
+
+.example-card-art {
+  position: relative;
   width: 100%;
   aspect-ratio: 4 / 3;
-  object-fit: contain;
+  overflow: hidden;
   border-radius: 8px;
-  background: var(--canvas-bg);
-  box-shadow: inset 0 0 0 1px var(--ui-border);
+  background: var(--ex-bg, var(--canvas-bg));
+}
+
+.example-card-hero .example-card-art {
+  background: #0a0a0c;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+.example-card-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: transform 0.28s cubic-bezier(0.33, 1, 0.68, 1);
+  will-change: transform;
+}
+
+.example-icon {
+  transform: translateY(0);
+  z-index: 2;
+  padding: 14%;
+  box-sizing: border-box;
+}
+
+.example-card-art .example-preview {
+  transform: translateY(100%);
+  z-index: 1;
+}
+
+.example-card:hover .example-icon,
+.example-card:focus-visible .example-icon {
+  transform: translateY(-100%);
+}
+
+.example-card:hover .example-preview,
+.example-card:focus-visible .example-preview {
+  transform: translateY(0);
+}
+
+.example-name {
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.example-pieces {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  opacity: 0.72;
 }
 
 /* ---------------------------------------------------------------- inputs / outputs lists */
@@ -1019,7 +1097,7 @@ kbd {
   min-width: 0;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid transparent;
+  border: 2px solid transparent;
   border-radius: 6px;
   background: transparent;
   color: inherit;
@@ -1040,7 +1118,7 @@ kbd {
 .io-button,
 .io-lamp {
   flex: none;
-  border: 1px solid var(--ui-border);
+  border: 2px solid var(--ui-border);
   background: var(--ui-hover);
 }
 
