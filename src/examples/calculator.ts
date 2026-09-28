@@ -1,9 +1,13 @@
-import { Builder, sop, type Src } from './builder';
+import { Builder, type Src } from './builder';
 import { add3, dff, digit, fullAdder, ripple, segDecoder } from './circuits';
 import type { Doc } from '../model/types';
 
 const N = 16;
-const SEGMENTS = 'abcdefg';
+// The adder settles while the key is held, before the timer pulse. That pulse is only a few
+// dozen waves wide, so these waits have to stay shorter than it or the clocks never fire.
+const CAPTURE_DELAY = 4;
+// Flags that choose the next number move after the result is stored, still inside that pulse.
+const COMMIT_DELAY = 12;
 // A flip-flop box rises above the point it is placed at, so this is the below() gap that leaves the boxes clear of each other.
 const DFF_GAP = 220;
 
@@ -52,7 +56,7 @@ const NOTE = {
   Digits: 'Seven lamps make each digit. Leading zeros stay dark, except the ones place. The lamp on the left is the minus sign.',
   'Acc readout': 'The number stored in the accumulator register, shown in decimal like the main display.',
   'Acc to decimal': 'Same double-dabble path as the main display, driven from the accumulator register for the upper readout row.',
-  'Op readout': 'The saved operator (+ − × ÷). It stays after equals so you can press equals again.',
+  'Op readout': 'One lamp for the saved operator: + − × or ÷. It stays lit after equals, and the next equals repeats that operation with the same second number.',
 };
 
 const KEYS = [
@@ -159,6 +163,20 @@ function muxBit(b: Builder, x: number, y: number, sel: Src, d0: Src, d1: Src): {
   const c = b.gate('and', x + 480, y + 80, [sel, d1]);
   const o = b.gate('or', x + 720, y + 80, [a, c]);
   return { o, ids: [nsel, a, c, o] };
+}
+
+function delaySrc(b: Builder, src: Src, n: number, x: number, y: number): { out: Src; ids: string[] } {
+  const ids: string[] = [];
+  let s = src;
+  const rows = 16;
+  const pitch = 50;
+  for (let i = 0; i < n; i++) {
+    if (!s) break;
+    const id = b.gate('buffer', x + Math.floor(i / rows) * pitch, y + (i % rows) * pitch, [s]);
+    ids.push(id);
+    s = id;
+  }
+  return { out: ids.length ? ids[ids.length - 1] : src, ids };
 }
 
 function copyWord(b: Builder, x: number, y: number, bits: Src[]): Word {
@@ -410,20 +428,8 @@ interface Face {
   accMinus: string;
   op0: string;
   op1: string;
-}
-
-/** 7-segment patterns for + − × ÷ from operator bits (op0, op1). */
-function opSegments(b: Builder, x: number, y: number, op0: Src, op1: Src) {
-  const codes = ['cfag', 'g', 'bcef', 'bcd'];
-  const on = [...SEGMENTS].map(() => [] as number[]);
-  for (let v = 0; v < 4; v++) {
-    for (const ch of codes[v]) {
-      const i = SEGMENTS.indexOf(ch);
-      if (i >= 0) on[i].push(v);
-    }
-  }
-  const logic = sop(b, x, y, [op0, op1], on.map((m) => ({ on: m })));
-  return { outs: logic.outs, box: b.box('Op decoder', logic.ids, 24, COL.control) };
+  /** High while an operator is waiting, including after equals. */
+  opShow: string;
 }
 
 function flattenSegs(shown: Src[][]): Src[] {
@@ -452,8 +458,14 @@ function maskedDigitRow(b: Builder, cx: number, y: number, fromHigh: Src[][], de
     const dec = segDecoder(b, cx, y, fromHigh[i]);
     decIds.push(dec.box);
     if (i === 4) {
-      shown.push(dec.outs);
-      cx = rightOf(b, [dec.box], 200);
+      const bx = rightOf(b, [dec.box], 80);
+      const segs = dec.outs.map((s, bit) => {
+        const g = b.gate('buffer', bx + 700, y + 600 + bit * 90, [s]);
+        decIds.push(g);
+        return g as Src;
+      });
+      shown.push(segs);
+      cx = rightOf(b, segs.filter((s): s is string => !!s), 200);
     } else {
       const bx = rightOf(b, [dec.box], 80);
       const nz = orGate(b, bx, y, fromHigh[i]);
@@ -524,18 +536,19 @@ function buildFace(b: Builder): Face {
   const accY = bcdBottom + 760;
   const accSeg: string[] = [];
   const accGroups: Src[][] = [];
-  const tapX = digitStartX - 120;
+  const tapPitch = 40;
+  const tapX = digitStartX - 400;
   for (let i = 0; i < 5; i++) {
     const segs: Src[] = [];
     for (let j = 0; j < 7; j++) {
-      const tap = b.add('buffer', tapX, accY + i * 70 + j * 8, { inputs: 1, name: `AccSeg${i}${j}` });
+      const tap = b.add('buffer', tapX + i * 50, accY + j * tapPitch, { inputs: 1, name: `AccSeg${i}${j}` });
       accSeg.push(tap);
       segs.push(tap);
     }
     accGroups.push(segs);
   }
-  const accMinus = b.add('buffer', tapX, accY + 360, { inputs: 1, name: 'AccMinusIn' });
-  const accMinusBulb = b.bulb(digitStartX, accY + 80, 'Acc Minus', { w: 56, h: 56 });
+  const accMinus = b.add('buffer', tapX + 5 * 50, accY, { inputs: 1, name: 'AccMinusIn' });
+  const accMinusBulb = b.bulb(digitStartX, accY + 80, 'Acc Minus', { w: 60, h: 60 });
   b.wire(accMinus, accMinusBulb);
   let ax = digitStartX + 160;
   const accDigitBoxes = accPlaces.map((name, i) => {
@@ -545,12 +558,33 @@ function buildFace(b: Builder): Face {
   });
   const accReadout = annotate(b, [accMinus, accMinusBulb, ...accSeg, ...accDigitBoxes], 'Acc readout', NOTE['Acc readout'], COL.acc);
 
-  const opX = Math.max(rightOf(b, [digits], 200), rightOf(b, [accReadout], 200));
+  const opX = Math.max(rightOf(b, [digits], 360), rightOf(b, [accReadout], 360));
   const op0In = b.add('buffer', opX, keyY, { inputs: 1, name: 'Op0In' });
-  const op1In = b.add('buffer', opX, keyY + 80, { inputs: 1, name: 'Op1In' });
-  const opDec = opSegments(b, opX + 160, keyY, op0In, op1In);
-  const opBulb = digit(b, rightOf(b, [opDec.box], 80), keyY + 40, opDec.outs, 'Op', { scale: 0.42, title: '' });
-  const opReadout = annotate(b, [op0In, op1In, opDec.box, opBulb], 'Op readout', NOTE['Op readout'], COL.control);
+  const op1In = b.add('buffer', opX, keyY + 120, { inputs: 1, name: 'Op1In' });
+  const opShowIn = b.add('buffer', opX, keyY + 240, { inputs: 1, name: 'OpShowIn' });
+  // Pins face the buffers on the left, so the operator names sit in the gap before the decoder.
+  const lampX = opX + 460;
+  const n0 = b.gate('buffer', lampX + 360, keyY, [op0In], true);
+  const n1 = b.gate('buffer', lampX + 360, keyY + 280, [op1In], true);
+  const plus = b.gate('and', lampX + 700, keyY, [n0, n1, opShowIn]);
+  const minusOp = b.gate('and', lampX + 700, keyY + 240, [op0In, n1, opShowIn]);
+  const times = b.gate('and', lampX + 700, keyY + 480, [n0, op1In, opShowIn]);
+  const div = b.gate('and', lampX + 700, keyY + 720, [op0In, op1In, opShowIn]);
+  const opLogic = [n0, n1, plus, minusOp, times, div];
+  const opLamps = (
+    [
+      ['+', plus, COL.add],
+      ['−', minusOp, COL.signs],
+      ['×', times, COL.mul],
+      ['÷', div, COL.div],
+    ] as const
+  ).map(([name, src, color], i) => {
+    const id = b.bulb(lampX, keyY + i * 200, name, { w: 100, h: 100 });
+    b.doc.components.get(id)!.color = color;
+    b.wire(src, id);
+    return id;
+  });
+  const opReadout = annotate(b, [op0In, op1In, opShowIn, ...opLogic, ...opLamps], 'Op readout', NOTE['Op readout'], COL.control);
 
   const ex = rightOf(b, [opReadout], 240);
   const digitKeys = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].map((n) => buttons.get(n)!);
@@ -581,7 +615,7 @@ function buildFace(b: Builder): Face {
   });
 
   const face = b.box('Calculator', [bcd, accReadout, opReadout, digits, clear, keypad, encoder, ...k], 48, COL.face);
-  return { box: face, k, v, accSeg, accMinus, op0: op0In, op1: op1In };
+  return { box: face, k, v, accSeg, accMinus, op0: op0In, op1: op1In, opShow: opShowIn };
 }
 
 interface ProcFace {
@@ -591,6 +625,7 @@ interface ProcFace {
   accSign: Src;
   op0: Src;
   op1: Src;
+  opShow: Src;
 }
 
 function buildProcessing(b: Builder, originX: number, faceK: string[]): ProcFace {
@@ -795,28 +830,57 @@ function buildProcessing(b: Builder, originX: number, faceK: string[]): ProcFace
   drive(b, [repeating], [ctrl.repeatD]);
   drive(b, [postEq], [ctrl.postEqD]);
   drive(b, [opSinceEq], [ctrl.opSinceEqD]);
-  const savedEntryD = muxWord(b, flagX + 2400, ctrlY + 6400, ctrl.saveEntryFire, forCtrl.bits, savedEntry.q);
-  drive(b, savedEntry.ffs, savedEntryD.bits);
+  // The save clock rises before the entry clock, so this stores the second number rather than the result.
+  drive(b, savedEntry.ffs, forCtrl.bits);
   drive(b, [op0ff], [kLocal[5]]);
   drive(b, [op1ff], [kLocal[6]]);
   drive(b, [ovf], [ctrl.ovfD]);
-  b.wire(ctrl.entryFire, entryClk, 0);
-  b.wire(ctrl.accFire, accClk, 0);
+  const delayX = rightOf(
+    b,
+    [...ctrl.ids, ...mulDiv.ids, ...result.ids, ...mulDivOvf.ids, ...resultOvf.ids, div0],
+    240,
+  );
+  let dx = delayX;
+  const delayed = (src: Src, n: number) => {
+    const chain = delaySrc(b, src, n, dx, ctrlY);
+    dx = rightOf(b, chain.ids, 80, dx + 80);
+    return chain;
+  };
+  const entrySlow = delayed(ctrl.aluFire, CAPTURE_DELAY);
+  const accDelay = delayed(ctrl.accFire, CAPTURE_DELAY);
+  const freshDelay = delayed(ctrl.freshFire, COMMIT_DELAY);
+  const pendDelay = delayed(ctrl.pendFire, COMMIT_DELAY);
+  const repeatDelay = delayed(ctrl.repeatFire, COMMIT_DELAY);
+  const opSinceDelay = delayed(ctrl.opSinceEqFire, COMMIT_DELAY);
+  const opDelay = delayed(opP, COMMIT_DELAY);
+  const entryJoin = orGate(b, dx, ctrlY, [ctrl.entryFast, entrySlow.out]);
+  const delays = [
+    ...entrySlow.ids,
+    ...accDelay.ids,
+    ...freshDelay.ids,
+    ...pendDelay.ids,
+    ...repeatDelay.ids,
+    ...opSinceDelay.ids,
+    ...opDelay.ids,
+  ];
+  if (entryJoin) delays.push(entryJoin);
+  b.wire(entryJoin, entryClk, 0);
+  b.wire(accDelay.out, accClk, 0);
+  b.wire(freshDelay.out, freshClk, 0);
+  b.wire(pendDelay.out, pendClk, 0);
   b.wire(msP, memClk, 0);
-  b.wire(ctrl.freshFire, freshClk, 0);
-  b.wire(ctrl.pendFire, pendClk, 0);
-  b.wire(opP, opClk, 0);
+  b.wire(opDelay.out, opClk, 0);
   b.wire(ctrl.ovfFire, ovfClk, 0);
   b.wire(ctrl.doneFire, doneClk, 0);
-  b.wire(ctrl.repeatFire, repeatClk, 0);
+  b.wire(repeatDelay.out, repeatClk, 0);
   b.wire(ctrl.saveEntryFire, saveEntryClk, 0);
   b.wire(ctrl.postEqFire, postEqClk, 0);
-  b.wire(ctrl.opSinceEqFire, opSinceEqClk, 0);
+  b.wire(opSinceDelay.out, opSinceEqClk, 0);
 
   const entryBox = annotate(b, entryIds, 'Entry', NOTE.Entry, COL.entry);
   const ctrlBox = annotate(
     b,
-    [...clocks, ...flagBoxes, ...aluEntryIds, ...savedEntryD.ids, ...mulDiv.ids, ...result.ids, ...mulDivOvf.ids, ...resultOvf.ids, div0, ...ctrl.ids],
+    [...clocks, ...flagBoxes, ...aluEntryIds, ...delays, ...mulDiv.ids, ...result.ids, ...mulDivOvf.ids, ...resultOvf.ids, div0, ...ctrl.ids],
     'Control',
     NOTE.Control,
     COL.control,
@@ -836,6 +900,7 @@ function buildProcessing(b: Builder, originX: number, faceK: string[]): ProcFace
     accSign: accDisplay.sign,
     op0: op0ff.q,
     op1: op1ff.q,
+    opShow: pending.q,
   };
 }
 
@@ -878,7 +943,8 @@ function control(
   freshD: Src;
   pendingD: Src;
   ovfD: Src;
-  entryFire: Src;
+  entryFast: Src;
+  aluFire: Src;
   accFire: Src;
   freshFire: Src;
   pendFire: Src;
@@ -922,11 +988,13 @@ function control(
   const digFire = keep(andGate(b, x + 500, y + 1460, [s.digP, digOk]));
   const pulseOr = keep(orGate(b, x + 900, y + 1640, [s.eqP, s.opP]));
   const compute = keep(andGate(b, x + 500, y + 1640, [pulseOr, useAlu]));
-  const aluFire = keep(andGate(b, x + 500, y + 1820, [compute, notBlock]));
-  const entryFire = keep(orGate(b, x, y + 2100, [s.clrP, s.mrP, s.signP, digFire, aluFire]))!;
+  // Divide-by-zero blocks the stored result, not the clock. Gating the clock from the
+  // number it writes makes the latch ring.
+  const aluFire = compute!;
+  const entryFast = keep(orGate(b, x, y + 2100, [s.clrP, s.mrP, s.signP, digFire]))!;
   const eqAndPend = keep(andGate(b, x + 500, y + 2100, [s.eqP, s.pending]));
   const accPulse = keep(orGate(b, x + 800, y + 2100, [s.opP, eqAndPend]));
-  const accFire = keep(andGate(b, x + 500, y + 2280, [accPulse, notBlock]))!;
+  const accFire = accPulse!;
   const digFresh = keep(andGate(b, x + 500, y + 2480, [s.digP, s.fresh]));
   const notOpSinceEq = b.gate('buffer', x + 1100, y + 2480, [s.opSinceEq], true);
   ids.push(notOpSinceEq);
@@ -938,7 +1006,7 @@ function control(
   const pendingD = keep(andGate(b, x + 1100, y + 2800, [s.opP, notClrP]))!;
   const ovfFire = keep(orGate(b, x, y + 3100, [s.signP, s.clrP, digFresh, compute]))!;
   const signMin = keep(andGate(b, x + 500, y + 2800, [s.level[9], s.isMin]));
-  const bad = keep(orGate(b, x + 800, y + 2800, [divBad, s.resultOvf]));
+  const bad = keep(orGate(b, x + 800, y + 3100, [divBad, s.resultOvf]));
   const setOvf = keep(orGate(b, x + 500, y + 3000, [signMin, andGate(b, x + 1100, y + 3000, [useAlu, bad])]));
   const clrOvf = keep(orGate(b, x + 500, y + 3300, [s.level[8], andGate(b, x + 800, y + 3300, [s.level[4], s.fresh])]));
   const notClr = b.gate('buffer', x + 500, y + 3500, [clrOvf], true);
@@ -954,10 +1022,12 @@ function control(
   ids.push(notRepeating);
   const repeatSet = keep(andGate(b, x + 1400, y + 3960, [aluFire, s.eqP, notBlock, notRepeating]))!;
   const saveEntryFire = keep(andGate(b, x + 1100, y + 3960, [eqAndPend, notRepeating]))!;
-  const repeatReset = keep(orGate(b, x + 800, y + 4140, [s.digP, s.opP, s.clrP]));
-  const notRepeatReset = b.gate('buffer', x + 1100, y + 4140, [repeatReset], true);
-  ids.push(notRepeatReset);
-  const repeatD = keep(orGate(b, x + 1400, y + 4140, [repeatSet, andGate(b, x + 1700, y + 4140, [s.repeating, notRepeatReset])]))!;
+  const repeatResetLvl = keep(orGate(b, x + 800, y + 4140, [s.level[4], s.level[7], s.level[8]]));
+  const notRepeatResetLvl = b.gate('buffer', x + 1200, y + 4140, [repeatResetLvl], true);
+  ids.push(notRepeatResetLvl);
+  const repeatArm = keep(andGate(b, x + 1600, y + 4140, [s.level[12], s.pending, notBlock]));
+  const repeatHold = keep(andGate(b, x + 2100, y + 4140, [s.repeating, notRepeatResetLvl]));
+  const repeatD = keep(orGate(b, x + 2600, y + 4140, [repeatArm, repeatHold]))!;
   const repeatFire = keep(orGate(b, x, y + 4320, [s.digP, s.opP, s.clrP, repeatSet]))!;
   const postEqSet = eqDone;
   const postEqClr = keep(orGate(b, x + 800, y + 4500, [s.opP, s.clrP, startOver]));
@@ -966,24 +1036,31 @@ function control(
   const postEqD = keep(orGate(b, x + 1400, y + 4500, [postEqSet, andGate(b, x + 1700, y + 4500, [s.postEq, notPostEqClr])]))!;
   const postEqFire = keep(orGate(b, x, y + 4680, [postEqSet, postEqClr]))!;
   const opSinceEqSet = s.opP;
-  const opSinceEqClr = keep(orGate(b, x + 800, y + 4860, [eqDone, s.clrP, startOver]));
-  const notOpSinceEqClr = b.gate('buffer', x + 1100, y + 4860, [opSinceEqClr], true);
-  ids.push(notOpSinceEqClr);
-  const opSinceEqD = keep(orGate(b, x + 1400, y + 4860, [opSinceEqSet, andGate(b, x + 1700, y + 4860, [s.opSinceEq, notOpSinceEqClr])]))!;
-  const opSinceEqFire = keep(orGate(b, x, y + 5040, [opSinceEqSet, opSinceEqClr]))!;
+  const opSinceClrLvl = keep(orGate(b, x + 800, y + 4860, [s.level[12], s.level[8]]));
+  const notOpSinceClrLvl = b.gate('buffer', x + 1200, y + 4860, [opSinceClrLvl], true);
+  ids.push(notOpSinceClrLvl);
+  const opSinceHold = keep(andGate(b, x + 1600, y + 4860, [s.opSinceEq, notOpSinceClrLvl]));
+  const opSinceEqD = keep(orGate(b, x + 2100, y + 4860, [s.level[7], opSinceHold]))!;
+  const opSinceEqClr = keep(orGate(b, x + 800, y + 5040, [eqDone, s.clrP, startOver]));
+  const opSinceEqFire = keep(orGate(b, x, y + 5220, [opSinceEqSet, opSinceEqClr]))!;
 
   const digitWord: Src[] = [...s.level.slice(0, 4), ...Array(N - 4).fill(null)];
   const digValue = muxWord(b, muxX, muxY, s.fresh, s.appended, digitWord);
   let my = muxY + 2700;
-  const afterDig = muxWord(b, muxX, my, s.level[4], s.result, digValue.bits);
+  // While no sum is waiting, keep the number already stored. Following the adder here leaves the latch open on a moving result.
+  const take = keep(andGate(b, muxX, my, [useAlu, notBlock]));
+  const held = muxWord(b, muxX, my + 400, take, s.entry, s.result);
+  my += 2700;
+  const afterDig = muxWord(b, muxX, my, s.level[4], held.bits, digValue.bits);
   my += 2700;
   const afterSign = muxWord(b, muxX, my, s.level[9], afterDig.bits, s.flipped);
   my += 2700;
   const afterMr = muxWord(b, muxX, my, s.level[11], afterSign.bits, s.mem);
   my += 2700;
   const entryD = muxWord(b, muxX, my, s.level[8], afterMr.bits, Array(N).fill(null));
-  const accD = muxWord(b, muxX, my + 2700, accFire, s.entry, s.result);
-  ids.push(...digValue.ids, ...afterDig.ids, ...afterSign.ids, ...afterMr.ids, ...entryD.ids, ...accD.ids, notFresh, notBig, notDig, notEq);
+  // useAlu is true while the key is held, before the clock, so this stores the result of a pending sum.
+  const accD = muxWord(b, muxX, my + 2700, take, s.entry, s.result);
+  ids.push(...digValue.ids, ...held.ids, ...afterDig.ids, ...afterSign.ids, ...afterMr.ids, ...entryD.ids, ...accD.ids, notFresh, notBig, notDig, notEq);
   return {
     ids,
     entryD: entryD.bits,
@@ -991,7 +1068,8 @@ function control(
     freshD: notDig,
     pendingD,
     ovfD,
-    entryFire,
+    entryFast,
+    aluFire,
     accFire,
     freshFire,
     pendFire,
@@ -1017,5 +1095,6 @@ export function calculatorDoc(): Doc {
   b.wire(proc.accSign, face.accMinus, 0);
   b.wire(proc.op0, face.op0, 0);
   b.wire(proc.op1, face.op1, 0);
+  b.wire(proc.opShow, face.opShow, 0);
   return b.finish();
 }

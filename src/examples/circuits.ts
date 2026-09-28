@@ -1,4 +1,4 @@
-import { componentBounds } from '../model/geometry';
+import { componentBounds, snap } from '../model/geometry';
 import type { Doc } from '../model/types';
 import { Builder, sop, type Src } from './builder';
 
@@ -202,6 +202,33 @@ export function adder8Doc(): Doc {
   explain(
     b,
     'What: Adds two 8-bit numbers, a whole byte at a time.\nHow: Eight full adders chained so the carry walks from bit 0 up to Cout.\nWhy: A byte is the usual size of data in a small computer, so this is the adder inside a simple processor.',
+  );
+  return b.finish();
+}
+
+export function sub4Doc(): Doc {
+  const b = new Builder('4-bit subtractor');
+  const a = [0, 1, 2, 3].map((i) => b.sw(0, i * 180, `A${i}`));
+  b.box('A', a, 36, COL.inA);
+  const bTop = below(b, boxByName(b, 'A').id, 120);
+  const bb = [0, 1, 2, 3].map((i) => b.sw(0, bTop + i * 180, `B${i}`));
+  b.box('B', bb, 36, COL.inB);
+  const x = rightOf(b, [boxByName(b, 'A').id, boxByName(b, 'B').id]);
+  const y = boxByName(b, 'A').y;
+  const cin = one(b, x, y);
+  const inv = bb.map((id, i) => b.gate('buffer', x, y + 160 + i * 150, [id], true));
+  const added = ripple(b, x + 280, y, a, inv, cin);
+  const block = b.box('4-bit subtractor', [cin, ...inv, ...added.boxes], 36, COL.outer);
+  const edge = b.bounds([block]);
+  bulbs(b, edge.x + edge.w + 50, edge.y, added.sums, 'D', 'Difference');
+  const by = below(b, boxByName(b, 'Difference').id, 140);
+  const borrow = b.gate('buffer', edge.x + edge.w + 50, by, [added.cout], true);
+  const lamp = b.bulb(edge.x + edge.w + 280, by, 'Borrow');
+  b.wire(borrow, lamp);
+  b.box('Borrow', [borrow, lamp], 30, COL.carry);
+  explain(
+    b,
+    'What: Subtracts a 4-bit B from A, and lights Borrow when A is smaller.\nHow: Each bit of B is flipped, then added to A with a carry-in of 1. Adding that pattern is the same as subtracting B.\nWhy: Computers subtract by adding, so the same adder can do both jobs.',
   );
   return b.finish();
 }
@@ -535,8 +562,8 @@ export function reg8Doc(): Doc {
   return b.finish();
 }
 
-export function count4Doc(): Doc {
-  const b = new Builder('4-bit counter');
+export function count8Doc(): Doc {
+  const b = new Builder('8-bit counter');
   const clk = b.btn(0, 0, 'Clock');
   const inputs = b.box('Inputs', [clk], 36, COL.inA);
   const x = rightOf(b, [inputs]);
@@ -544,25 +571,24 @@ export function count4Doc(): Doc {
   const stages: string[] = [];
   const qs: Src[] = [];
   let y = 0;
-  for (let i = 0; i < 4; i++) {
-    const ff = dff(b, x + 360, y, null, clock);
+  for (let i = 0; i < 8; i++) {
+    const ff = dff(b, x + 480, y, null, clock);
     const lower = qs.slice();
-    const toggle: Src = i === 0 ? null : lower.length === 1 ? lower[0] : b.gate('and', x, y + 120, lower);
-    const d = i === 0 ? ff.qb : b.gate('xor', x, y + 280, [ff.q, toggle]);
-    for (const [id, pin] of ff.dPins) b.wire(d, id, pin);
     const extra = [ff.box];
-    if (i > 0 && lower.length > 1) extra.push(toggle as string);
+    const toggle: Src = i === 0 ? null : i === 1 ? lower[0] : b.gate('and', x, y, lower);
+    if (i > 1) extra.push(toggle as string);
+    const d = i === 0 ? ff.qb : b.gate('xor', x, i === 1 ? y + 280 : below(b, toggle as string, 80), [ff.q, toggle]);
     if (i > 0) extra.push(d as string);
+    for (const [id, pin] of ff.dPins) b.wire(d, id, pin);
     stages.push(b.box('T flip-flop', extra, 20, COL.full));
     qs.push(ff.q);
-    y = below(b, stages[i], 280);
+    y = below(b, stages[i], 220);
   }
-  const hi = [0, 1, 2, 3].map((i) => zero(b, x, y + i * 70));
-  const block = b.box('4-bit counter', [clock, ...stages, ...hi], 30, COL.outer);
-  bulbs(b, rightOf(b, [block]), 0, [...qs, ...hi], 'Q', 'Count');
+  const block = b.box('8-bit counter', [clock, ...stages], 30, COL.outer);
+  bulbs(b, rightOf(b, [block]), 0, qs, 'Q', 'Count');
   explain(
     b,
-    'What: Counts in binary each time you press Clock, from 0 up to 15, then back to 0.\nHow: The lowest flip-flop toggles on every press. Each higher bit toggles only when all the bits below it are 1, which is when a binary count carries.\nWhy: Counters time events, step through addresses, and make the program counter in a processor.',
+    'What: Counts in binary each time you press Clock, from 0 up to 255, then back to 0.\nHow: The lowest flip-flop toggles on every press. Each higher bit toggles only when all the bits below it are 1, which is when a binary count carries.\nWhy: Counters time events, step through addresses, and make the program counter in a processor.',
   );
   return b.finish();
 }
@@ -585,8 +611,8 @@ export function digit(
   opts?: { scale?: number; title?: string | null },
 ): string {
   const scale = opts?.scale ?? 1;
-  const t = 60 * scale;
-  const L = 180 * scale;
+  const t = snap(60 * scale);
+  const L = snap(180 * scale);
   const bar = (sx: number, sy: number, vertical: boolean) =>
     b.bulb(x + sx, y + sy, '', vertical ? { w: t, h: L } : { w: L, h: t });
   const ids = [
@@ -669,6 +695,206 @@ export function seg3Doc(): Doc {
   explain(
     b,
     'What: Shows an 8-bit number as three decimal digits, from 0 to 255.\nHow: Double dabble. Whenever a group of bits is 5 or more, an Add-3 box adds 3, which shifts the value into decimal digits. Three decoders then drive the hundreds, tens, and ones.\nWhy: People read decimal. This turns a byte into the digits you would see on a display.',
+  );
+  return b.finish();
+}
+
+export function aluDoc(): Doc {
+  const b = new Builder('1-bit ALU');
+  const a = b.sw(0, 0, 'A');
+  const bb = b.sw(0, 200, 'B');
+  const cin = b.sw(0, 400, 'Cin');
+  const numbers = b.box('Numbers', [a, bb, cin], 36, COL.inA);
+  const op0 = b.sw(0, below(b, numbers, 140), 'Op0');
+  const op1 = b.sw(0, below(b, numbers, 140) + 200, 'Op1');
+  const ops = b.box('Operation', [op0, op1], 36, COL.inB);
+  const x = rightOf(b, [numbers, ops]);
+  const aa = b.gate('buffer', x, 0, [a]);
+  const ba = b.gate('buffer', x, 200, [bb]);
+  const ci = b.gate('buffer', x, 400, [cin]);
+  const s0 = b.gate('buffer', x, 640, [op0]);
+  const s1 = b.gate('buffer', x, 840, [op1]);
+  const andG = b.gate('and', x + 320, 0, [aa, ba]);
+  const orG = b.gate('or', x + 320, 200, [aa, ba]);
+  const pass = b.gate('buffer', x + 320, 400, [aa]);
+  const fa = fullAdder(b, x + 320, below(b, pass, 180), aa, ba, ci);
+  const anchor = [aa, ba, ci, s0, s1, andG, orG, pass, fa.box];
+  const mx = rightOf(b, anchor);
+  const lo = mux2(b, mx, 0, s0, andG, orG);
+  const hi = mux2(b, mx, below(b, lo.box, 140), s0, fa.s, pass);
+  const top = mux2(b, rightOf(b, [lo.box, hi.box]), 80, s1, lo.o, hi.o);
+  const block = b.box('1-bit ALU', [...anchor, lo.box, hi.box, top.box], 30, COL.outer);
+  const ox = rightOf(b, [block]);
+  const yb = b.bulb(ox, 40, 'Y');
+  const cb = b.bulb(ox, 220, 'Cout');
+  b.wire(top.o, yb);
+  b.wire(fa.c, cb);
+  b.box('Result', [yb, cb], 30, COL.out);
+  explain(
+    b,
+    'What: One bit of an arithmetic logic unit. It can AND, OR, or add A and B, and Y shows the result you pick.\nHow: AND, OR, and a full adder all run at once. Op0 and Op1 are a 2-bit code for a multiplexer: 00 is AND, 01 is OR, 10 is the sum, and 11 passes A through. Cout always shows the adder carry.\nWhy: A processor uses one block like this on every bit. The control unit sets the operation, and the same wires add, mask, or combine a number.',
+  );
+  return b.finish();
+}
+
+export function parityDoc(): Doc {
+  const b = new Builder('Parity checker');
+  const bits = [0, 1, 2, 3].map((i) => b.sw(0, i * 200, `A${i}`));
+  const inputs = b.box('Bits', bits, 36, COL.inA);
+  const x = rightOf(b, [inputs]);
+  const p01 = b.gate('xor', x, 40, [bits[0], bits[1]]);
+  const p23 = b.gate('xor', x, 440, [bits[2], bits[3]]);
+  const odd = b.gate('xor', x + 320, 220, [p01, p23]);
+  const logic = b.box('Parity', [p01, p23, odd], 28, COL.outer);
+  const lamp = b.bulb(rightOf(b, [logic]), 220, 'Odd');
+  b.wire(odd, lamp);
+  b.box('Output', [lamp], 30, COL.out);
+  explain(
+    b,
+    'What: Lights Odd when a 4-bit number contains an odd count of 1s.\nHow: XOR is 1 when its two inputs differ. The bits are paired, then the two pair results are XORed. That final bit is 1 exactly when the whole number has an odd number of 1s.\nWhy: Parity catches a bit that flipped in memory or on a wire. An even count leaves the lamp off.',
+  );
+  return b.finish();
+}
+
+export function lockDoc(): Doc {
+  const b = new Builder('Combination lock');
+  const bits = [0, 1, 2, 3].map((i) => b.sw(0, i * 200, `C${i}`));
+  const inputs = b.box('Code', bits, 36, COL.inA);
+  const x = rightOf(b, [inputs]);
+  // Code from the top switch: C0 on, C1 off, C2 on, C3 on.
+  const n1 = b.gate('buffer', x, 200, [bits[1]], true);
+  const open = b.gate('and', x + 320, 240, [bits[0], n1, bits[2], bits[3]]);
+  const logic = b.box('Lock', [n1, open], 28, COL.outer);
+  const lamp = b.bulb(rightOf(b, [logic]), 240, 'Open');
+  b.wire(open, lamp);
+  b.box('Output', [lamp], 30, COL.out);
+  explain(
+    b,
+    'What: Lights Open only when the switches show one code: C0 on, C1 off, C2 on, C3 on.\nHow: C0, C2, and C3 must be 1. C1 must be 0, so a NOT watches that switch. One AND lights Open only when all four match.\nWhy: The same pattern check opens a door, enables a mode, or matches an instruction.',
+  );
+  return b.finish();
+}
+
+export function shift4Doc(): Doc {
+  const b = new Builder('4-bit shift register');
+  const din = b.sw(0, 0, 'In');
+  const clk = b.btn(0, 220, 'Clock');
+  const inputs = b.box('Inputs', [din, clk], 36, COL.inA);
+  const x = rightOf(b, [inputs]);
+  const clock = b.gate('buffer', x, 40, [clk]);
+  const enter = b.gate('buffer', x, 240, [din]);
+  const stages: string[] = [];
+  const qs: Src[] = [];
+  let d: Src = enter;
+  let y = 0;
+  for (let i = 0; i < 4; i++) {
+    const ff = dff(b, x + 420, y, d, clock);
+    stages.push(ff.box);
+    qs.push(ff.q);
+    d = ff.q;
+    y = below(b, ff.box, 200);
+  }
+  const block = b.box('Shift register', [clock, enter, ...stages], 30, COL.outer);
+  bulbs(b, rightOf(b, [block]), 0, qs, 'Q', 'Q');
+  explain(
+    b,
+    'What: Slides a bit along four lamps, one step each time you press Clock.\nHow: Four flip-flops share Clock. The first copies In when Clock turns on. Each of the others copies the lamp before it, so the bit walks down the row.\nWhy: A shift register turns a serial stream into a stored word, and shifting a binary number multiplies or divides it by two.',
+  );
+  return b.finish();
+}
+
+export function ram4Doc(): Doc {
+  const b = new Builder('4×1 memory');
+  const a0 = b.sw(0, 0, 'A0');
+  const a1 = b.sw(0, 200, 'A1');
+  const addr = b.box('Address', [a0, a1], 36, COL.inA);
+  const d = b.sw(0, below(b, addr, 140), 'D');
+  const wr = b.btn(0, below(b, addr, 140) + 220, 'Write');
+  const data = b.box('Data', [d, wr], 36, COL.inB);
+  const x = rightOf(b, [addr, data]);
+  const b0 = b.gate('buffer', x, 0, [a0]);
+  const n0 = b.gate('buffer', x + 240, 0, [b0], true);
+  const b1 = b.gate('buffer', x, 220, [a1]);
+  const n1 = b.gate('buffer', x + 240, 220, [b1], true);
+  const dbuf = b.gate('buffer', x, 440, [d]);
+  const wbuf = b.gate('buffer', x, 660, [wr]);
+  const rows = [0, 1, 2, 3].map((v) => {
+    const sel = b.gate('and', x + 520, v * 220, [v & 1 ? b0 : n0, v & 2 ? b1 : n1]);
+    const en = b.gate('and', x + 800, v * 220, [sel, wbuf]);
+    return { sel, en };
+  });
+  const dec = [b0, n0, b1, n1, dbuf, wbuf, ...rows.flatMap((r) => [r.sel, r.en])];
+  const cellX = rightOf(b, dec, 80);
+  const cells: string[] = [];
+  const qs: Src[] = [];
+  let y = 0;
+  for (let i = 0; i < 4; i++) {
+    const cell = dLatch(b, cellX, y, dbuf, rows[i].en);
+    cells.push(b.box(`Cell ${i}`, cell.ids, 20, COL.latch));
+    qs.push(cell.q);
+    y = below(b, cells[i], 180);
+  }
+  const mx = rightOf(b, cells);
+  const lo = mux2(b, mx, 0, b0, qs[0], qs[1]);
+  const hi = mux2(b, mx, below(b, lo.box, 140), b0, qs[2], qs[3]);
+  const top = mux2(b, rightOf(b, [lo.box, hi.box]), 40, b1, lo.o, hi.o);
+  b.box('Memory', [...dec, ...cells, lo.box, hi.box, top.box], 30, COL.outer);
+  const q = b.bulb(rightOf(b, [boxByName(b, 'Memory').id]), 80, 'Q');
+  b.wire(top.o, q);
+  b.box('Output', [q], 30, COL.out);
+  explain(
+    b,
+    'What: Stores four bits. The address picks which one you write, and which one you read on Q.\nHow: A0 and A1 are a number from 0 to 3. A decoder turns that into one select line. Hold Write and the selected cell copies D; the others keep their bits. A multiplexer reads the selected cell onto Q.\nWhy: This is a tiny RAM. Real memory is the same idea with more cells and a wider address.',
+  );
+  return b.finish();
+}
+
+export function ringDoc(): Doc {
+  const b = new Builder('Ring counter');
+  const stagesN = 8;
+  const clk = b.add('timer', 0, 0, { name: 'Pulse', w: 120, h: 120 });
+  const timer = b.doc.components.get(clk)!;
+  timer.period = 1;
+  timer.pulse = 0.35;
+  const inputs = b.box('Pulse', [clk], 36, COL.inA);
+  const x = rightOf(b, [inputs]);
+  const clock = b.gate('buffer', x, 40, [clk]);
+  const ffs: ReturnType<typeof dff>[] = [];
+  const stages: string[] = [];
+  let y = 0;
+  for (let i = 0; i < stagesN; i++) {
+    const ff = dff(b, x + 640, y, null, clock);
+    ffs.push(ff);
+    stages.push(ff.box);
+    y = below(b, ff.box, 200);
+  }
+  // A 1 re-enters from the last stage. A blank ring loads a 1 so the chase can start.
+  const any = b.gate('or', x, 360, ffs.map((f) => f.q));
+  const none = b.gate('buffer', x, 620, [any], true);
+  const rein = b.gate('or', x, 820, [ffs[stagesN - 1].q, none]);
+  for (const [id, pin] of ffs[0].dPins) b.wire(rein, id, pin);
+  for (let i = 1; i < stagesN; i++) for (const [id, pin] of ffs[i].dPins) b.wire(ffs[i - 1].q, id, pin);
+  const block = b.box('Ring counter', [clock, any, none, rein, ...stages], 30, COL.outer);
+  const edge = b.bounds([block]);
+  const lamp = 120;
+  const radius = 250;
+  const cx = edge.x + edge.w + 200 + radius;
+  const cy = edge.y + edge.h / 2;
+  const lamps: string[] = [];
+  for (let i = 0; i < stagesN; i++) {
+    const ang = -Math.PI / 2 + (i * 2 * Math.PI) / stagesN;
+    const id = b.bulb(cx + radius * Math.cos(ang) - lamp / 2, cy + radius * Math.sin(ang) - lamp / 2, `Q${i}`, {
+      w: lamp,
+      h: lamp,
+    });
+    b.signal(ffs[i].q, `Q${i}`);
+    b.wire(ffs[i].q, id);
+    lamps.push(id);
+  }
+  b.box('Display', lamps, 36, COL.display);
+  explain(
+    b,
+    'What: One lamp chases around a circle of eight.\nHow: A pulse timer ticks the ring. Each flip-flop copies the lamp before it, and the first copies the last, so the light walks clockwise. If every lamp is off, the next tick loads a 1 and the chase starts by itself.\nWhy: Ring counters scan a display and step a circle of lights, one lamp at a time.',
   );
   return b.finish();
 }

@@ -31,6 +31,7 @@ function Btn(props: {
   disabled?: boolean;
   children: ReactNode;
   className?: string;
+  auraArmed?: boolean;
 }) {
   return (
     <button
@@ -40,6 +41,7 @@ function Btn(props: {
       aria-label={props.title}
       aria-pressed={props.active}
       disabled={props.disabled}
+      data-aura-armed={props.auraArmed ? '' : undefined}
       onClick={props.onClick}
     >
       {props.children}
@@ -849,6 +851,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
       className={`tb-btn place ${editor.placing === kind ? 'active' : ''}`}
       title={KIND_LABEL[kind]}
       aria-label={KIND_LABEL[kind]}
+      data-aura-place={editor.placing === kind ? '' : undefined}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -937,7 +940,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
   return (
     <div className="dock" ref={dockRef}>
       {editor.toastMessage && (
-        <div className="toast" role="status">
+        <div className="toast" role="status" data-aura-toast={editor.toastMessage.startsWith('Building ') ? '' : undefined}>
           {editor.toastMessage}
           {editor.toastAction && (
             <button
@@ -1191,6 +1194,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
                     <Btn
                       title={seg.title}
                       className={mode === 'inline' ? 'tb-slot-icon' : undefined}
+                      auraArmed={seg.active}
                       active={mode === 'thin' && (openSeg === seg.id || seg.active)}
                       onClick={() => {
                         if (mode === 'thin') {

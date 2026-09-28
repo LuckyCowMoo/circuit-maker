@@ -421,6 +421,20 @@ export function bubblePath(g: Geom): string | null {
   return circlePath(g.w + BUBBLE_D / 2, g.h / 2, BUBBLE_D / 2);
 }
 
+/** Closed outline of a part in its local frame. The selection aura hugs this, not a rectangle. */
+export function componentOutline(c: Component): string {
+  if (c.kind === 'marker') return MARKER_PIN;
+  const g = geomOf(c);
+  if (c.kind === 'note') return noteHole(g.w, g.h, c.id);
+  if (c.kind === 'port') return c.inputs > 1 ? roundRectD(0, 1, g.w, g.h - 2, 3) : PORT_PLUG;
+  if (isGate(c.kind)) {
+    const body = gateBodyPath(g);
+    const bubble = bubblePath(g);
+    return bubble ? body + bubble : body;
+  }
+  return ioBody(g);
+}
+
 /** Stubs for the pins that aren't wired, so free pins stay visible and wires reach the body. */
 export function stubsPath(g: Geom, mask = ''): string {
   let d = '';

@@ -18,11 +18,15 @@ function sharedEditor(): Editor {
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const auraRef = useRef<HTMLCanvasElement>(null);
+  const coverRef = useRef<HTMLCanvasElement>(null);
   const [editor] = useState(sharedEditor);
   useEditor(editor);
 
   useEffect(() => {
     editor.attach(canvasRef.current!);
+    editor.attachAura(auraRef.current!);
+    editor.attachCover(coverRef.current!);
     if (import.meta.env.DEV) (window as unknown as { editor: Editor }).editor = editor;
     return () => editor.detach();
   }, [editor]);
@@ -46,6 +50,8 @@ export default function App() {
   return (
     <>
       <canvas ref={canvasRef} className="stage" tabIndex={0} aria-label="Circuit canvas" />
+      <canvas ref={auraRef} className="aura" aria-hidden="true" />
+      <canvas ref={coverRef} className="aura-cover" aria-hidden="true" />
       <LabelEdit editor={editor} />
       <ContextMenu editor={editor} />
       <Toolbar editor={editor} />

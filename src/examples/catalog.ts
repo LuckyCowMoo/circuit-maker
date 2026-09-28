@@ -2,21 +2,28 @@ import type { Doc } from '../model/types';
 import {
   adder4Doc,
   adder8Doc,
+  aluDoc,
   cmp4Doc,
-  count4Doc,
+  count8Doc,
   dec2Doc,
   dffDoc,
   div4Doc,
   fullAdderDoc,
   halfAdderDoc,
+  lockDoc,
   memDoc,
   mod4Doc,
   mul4Doc,
   mux4Doc,
+  parityDoc,
+  ram4Doc,
   reg8Doc,
+  ringDoc,
   seg3Doc,
   seg7Doc,
+  shift4Doc,
   srDoc,
+  sub4Doc,
   sub8Doc,
 } from './circuits';
 import { calculatorDoc } from './calculator';
@@ -90,13 +97,15 @@ export const EXAMPLES: ExampleGroup[] = [
     items: [
       { id: 'half', name: 'Half adder', build: halfAdderDoc },
       { id: 'full', name: 'Full adder', build: fullAdderDoc },
+      { id: 'alu', name: '1-bit ALU', build: aluDoc },
       { id: 'adder4', name: '4-bit adder', build: adder4Doc },
-      { id: 'adder8', name: '8-bit adder', build: adder8Doc },
-      { id: 'sub8', name: '8-bit subtractor', build: sub8Doc },
+      { id: 'sub4', name: '4-bit subtractor', build: sub4Doc },
       { id: 'mul4', name: '4-bit multiplier', build: mul4Doc },
       { id: 'div4', name: '4-bit divider', build: div4Doc },
       { id: 'mod4', name: '4-bit modulus', build: mod4Doc },
       { id: 'cmp4', name: '4-bit comparator', build: cmp4Doc },
+      { id: 'adder8', name: '8-bit adder', build: adder8Doc },
+      { id: 'sub8', name: '8-bit subtractor', build: sub8Doc },
       { id: 'calc', name: 'Calculator', build: calculatorDoc, heavy: true },
     ],
   },
@@ -107,7 +116,9 @@ export const EXAMPLES: ExampleGroup[] = [
       { id: 'mem', name: 'Memory cell', build: memDoc },
       { id: 'dff', name: 'D flip-flop', build: dffDoc },
       { id: 'reg8', name: '8-bit register', build: reg8Doc },
-      { id: 'count4', name: '4-bit counter', build: count4Doc },
+      { id: 'count8', name: '8-bit counter', build: count8Doc },
+      { id: 'shift', name: '4-bit shift register', build: shift4Doc },
+      { id: 'ram', name: '4×1 memory', build: ram4Doc },
     ],
   },
   {
@@ -115,6 +126,7 @@ export const EXAMPLES: ExampleGroup[] = [
     items: [
       { id: 'seg7', name: '7-segment display', build: seg7Doc },
       { id: 'seg3', name: '3-digit display', build: seg3Doc },
+      { id: 'ring', name: 'Ring counter', build: ringDoc },
     ],
   },
   {
@@ -122,6 +134,13 @@ export const EXAMPLES: ExampleGroup[] = [
     items: [
       { id: 'mux4', name: '4-to-1 multiplexer', build: mux4Doc },
       { id: 'dec2', name: '2-to-4 decoder', build: dec2Doc },
+    ],
+  },
+  {
+    name: 'Logic',
+    items: [
+      { id: 'parity', name: 'Parity checker', build: parityDoc },
+      { id: 'lock', name: 'Combination lock', build: lockDoc },
     ],
   },
   {

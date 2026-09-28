@@ -199,6 +199,16 @@ describe('example behaviour', () => {
       expect(read(sim, sub, 'D', 8)).toBe((a - b) & 255);
       expect(sim.value(part(sub, 'Borrow'))).toBe(a < b);
     }
+    const sub4 = halfOf('sub4');
+    const s4 = new Simulator();
+    s4.compile(sub4);
+    for (const [a, b] of [[5, 3], [3, 5], [0, 1], [15, 15], [7, 9], [8, 0]]) {
+      word(s4, sub4, 'A', 4, a);
+      word(s4, sub4, 'B', 4, b);
+      expect(s4.settle(), `4bit ${a}-${b}`).toBe(true);
+      expect(read(s4, sub4, 'D', 4)).toBe((a - b) & 15);
+      expect(s4.value(part(sub4, 'Borrow'))).toBe(a < b);
+    }
     const mul = halfOf('mul4');
     const ms = new Simulator();
     ms.compile(mul);
@@ -327,18 +337,138 @@ describe('example behaviour', () => {
     expect(rs.settle()).toBe(true);
     expect(read(rs, reg, 'Q', 8)).toBe(0b10110001);
 
-    const ctr = halfOf('count4');
+    const ctr = halfOf('count8');
     const cs = new Simulator();
     cs.compile(ctr);
     expect(cs.settle()).toBe(true);
     expect(read(cs, ctr, 'Q', 8)).toBe(0);
     const clock = part(ctr, 'Clock');
-    for (let n = 1; n <= 6; n++) {
+    for (let n = 1; n <= 256; n++) {
       cs.setPressed(clock, true);
-      expect(cs.settle()).toBe(true);
+      expect(cs.settle(), `rise ${n}`).toBe(true);
       cs.setPressed(clock, false);
-      expect(cs.settle()).toBe(true);
-      expect(read(cs, ctr, 'Q', 8)).toBe(n);
+      expect(cs.settle(), `fall ${n}`).toBe(true);
+      expect(read(cs, ctr, 'Q', 8), `count ${n}`).toBe(n & 255);
+    }
+  });
+
+  it('runs the shift register, memory, ALU, parity, ring and lock', () => {
+    const edge = (sim: Simulator, id: string) => {
+      sim.setPressed(id, true);
+      expect(sim.settle()).toBe(true);
+      sim.setPressed(id, false);
+      expect(sim.settle()).toBe(true);
+    };
+
+    const shift = halfOf('shift');
+    const sh = new Simulator();
+    sh.compile(shift);
+    sh.setSwitch(part(shift, 'In'), true);
+    expect(sh.settle()).toBe(true);
+    expect(read(sh, shift, 'Q', 4)).toBe(0);
+    edge(sh, part(shift, 'Clock'));
+    expect(read(sh, shift, 'Q', 4)).toBe(1);
+    sh.setSwitch(part(shift, 'In'), false);
+    expect(sh.settle()).toBe(true);
+    expect(read(sh, shift, 'Q', 4)).toBe(1);
+    edge(sh, part(shift, 'Clock'));
+    expect(read(sh, shift, 'Q', 4)).toBe(2);
+    edge(sh, part(shift, 'Clock'));
+    expect(read(sh, shift, 'Q', 4)).toBe(4);
+    edge(sh, part(shift, 'Clock'));
+    expect(read(sh, shift, 'Q', 4)).toBe(8);
+    edge(sh, part(shift, 'Clock'));
+    expect(read(sh, shift, 'Q', 4)).toBe(0);
+
+    const ram = halfOf('ram');
+    const rm = new Simulator();
+    rm.compile(ram);
+    const write = (addr: number, bit: boolean) => {
+      rm.setSwitch(part(ram, 'A0'), !!(addr & 1));
+      rm.setSwitch(part(ram, 'A1'), !!(addr & 2));
+      rm.setSwitch(part(ram, 'D'), bit);
+      rm.setPressed(part(ram, 'Write'), true);
+      expect(rm.settle(), `write ${addr}`).toBe(true);
+      rm.setPressed(part(ram, 'Write'), false);
+      expect(rm.settle(), `hold ${addr}`).toBe(true);
+    };
+    const readQ = (addr: number) => {
+      rm.setSwitch(part(ram, 'A0'), !!(addr & 1));
+      rm.setSwitch(part(ram, 'A1'), !!(addr & 2));
+      rm.setSwitch(part(ram, 'D'), false);
+      expect(rm.settle(), `read ${addr}`).toBe(true);
+      return rm.value(part(ram, 'Q'));
+    };
+    write(0, true);
+    write(2, true);
+    expect(readQ(0)).toBe(true);
+    expect(readQ(1)).toBe(false);
+    expect(readQ(2)).toBe(true);
+    expect(readQ(3)).toBe(false);
+    write(0, false);
+    expect(readQ(0)).toBe(false);
+    expect(readQ(2)).toBe(true);
+
+    const alu = halfOf('alu');
+    const al = new Simulator();
+    al.compile(alu);
+    for (let op = 0; op < 4; op++) {
+      for (let a = 0; a < 2; a++) {
+        for (let bbit = 0; bbit < 2; bbit++) {
+          for (let cin = 0; cin < 2; cin++) {
+            al.setSwitch(part(alu, 'Op0'), !!(op & 1));
+            al.setSwitch(part(alu, 'Op1'), !!(op & 2));
+            al.setSwitch(part(alu, 'A'), !!a);
+            al.setSwitch(part(alu, 'B'), !!bbit);
+            al.setSwitch(part(alu, 'Cin'), !!cin);
+            expect(al.settle(), `op ${op} ${a}${bbit}${cin}`).toBe(true);
+            const sum = a ^ bbit ^ cin;
+            const cout = (a & bbit) | (cin & (a ^ bbit));
+            const y = op === 0 ? a & bbit : op === 1 ? a | bbit : op === 2 ? sum : a;
+            expect(al.value(part(alu, 'Y')), `Y op ${op}`).toBe(!!y);
+            expect(al.value(part(alu, 'Cout'))).toBe(!!cout);
+          }
+        }
+      }
+    }
+
+    const parity = halfOf('parity');
+    const py = new Simulator();
+    py.compile(parity);
+    for (let n = 0; n < 16; n++) {
+      word(py, parity, 'A', 4, n);
+      expect(py.settle(), `parity ${n}`).toBe(true);
+      let ones = 0;
+      for (let i = 0; i < 4; i++) if (n & (1 << i)) ones++;
+      expect(py.value(part(parity, 'Odd')), `odd ${n}`).toBe(ones % 2 === 1);
+    }
+
+    const ring = halfOf('ring');
+    const rg = new Simulator();
+    rg.compile(ring);
+    expect(rg.settle()).toBe(true);
+    expect(read(rg, ring, 'Q', 8)).toBe(0);
+    const pulsePart = [...ring.components.values()].find((c) => c.kind === 'timer')!;
+    const periodMs = (pulsePart.period ?? 1) * 1000;
+    const pulseMs = (pulsePart.pulse ?? 0.2) * 1000;
+    let t = pulseMs / 2;
+    for (let i = 0; i < 9; i++) {
+      expect(rg.tickTime(t), `rise ${i}`).toBe(true);
+      expect(rg.settle(), `rise ${i}`).toBe(true);
+      expect(read(rg, ring, 'Q', 8), `bit ${i}`).toBe(1 << (i % 8));
+      expect(rg.tickTime(t + pulseMs), `fall ${i}`).toBe(true);
+      expect(rg.settle(), `fall ${i}`).toBe(true);
+      expect(read(rg, ring, 'Q', 8)).toBe(1 << (i % 8));
+      t += periodMs;
+    }
+
+    const lock = halfOf('lock');
+    const lk = new Simulator();
+    lk.compile(lock);
+    for (let n = 0; n < 16; n++) {
+      word(lk, lock, 'C', 4, n);
+      expect(lk.settle(), `lock ${n}`).toBe(true);
+      expect(lk.value(part(lock, 'Open')), `open ${n}`).toBe(n === 0b1101);
     }
   });
 });

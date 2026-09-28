@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { rectInside, rectsOverlap } from '../model/geometry';
+import { componentBounds, rectInside, rectsOverlap } from '../model/geometry';
+import { partLabel } from '../model/parts';
+import { textRect } from '../model/shapes';
+import { DEFAULT_THEME } from '../model/themes';
 import { buildBoxTree } from '../model/ports';
 import type { Doc } from '../model/types';
 import { bundleInput, bundleOutput } from '../model/types';
@@ -76,11 +79,18 @@ function screen(sim: Simulator, doc: Doc): string {
   return `${on('Minus') ? '-' : ''}${places.join(' ')}${on('Overflow') ? ' ovf' : ''}`;
 }
 
-function expectNumber(sim: Simulator, doc: Doc, n: number, overflow = false) {
+function expectPlaces(
+  sim: Simulator,
+  doc: Doc,
+  n: number,
+  names: string[],
+  minusName: string,
+  overflowName: string | null,
+  overflow = false,
+) {
   const neg = n < 0;
   const mag = Math.abs(n);
   const digits = [10000, 1000, 100, 10, 1].map((place, i) => Math.floor(mag / place) % 10);
-  const names = ['10000s', '1000s', '100s', '10s', '1s'];
   names.forEach((name, i) => {
     const show = i === 4 || mag >= 10 ** (4 - i);
     const pattern = show ? HEX[digits[i]] : '';
@@ -88,8 +98,30 @@ function expectNumber(sim: Simulator, doc: Doc, n: number, overflow = false) {
       expect(sim.value(part(doc, `${name} ${ch}`)), `${screen(sim, doc)} wanted ${n}`).toBe(pattern.includes(ch));
     }
   });
-  expect(sim.value(part(doc, 'Minus')), screen(sim, doc)).toBe(neg);
-  expect(sim.value(part(doc, 'Overflow')), screen(sim, doc)).toBe(overflow);
+  expect(sim.value(part(doc, minusName)), screen(sim, doc)).toBe(neg);
+  if (overflowName) expect(sim.value(part(doc, overflowName)), screen(sim, doc)).toBe(overflow);
+}
+
+function expectNumber(sim: Simulator, doc: Doc, n: number, overflow = false) {
+  expectPlaces(sim, doc, n, ['10000s', '1000s', '100s', '10s', '1s'], 'Minus', 'Overflow', overflow);
+}
+
+function expectAcc(sim: Simulator, doc: Doc, n: number) {
+  expectPlaces(sim, doc, n, ['Acc 10000s', 'Acc 1000s', 'Acc 100s', 'Acc 10s', 'Acc 1s'], 'Acc Minus', null);
+}
+
+const OP_LAMPS = ['+', '−', '×', '÷'] as const;
+
+function opLamp(doc: Doc, name: string) {
+  const found = [...doc.components.values()].find((c) => c.kind === 'bulb' && c.name === name);
+  if (!found) throw new Error(`missing op lamp ${name}`);
+  return found.id;
+}
+
+function expectOp(sim: Simulator, doc: Doc, on: string | null) {
+  for (const name of OP_LAMPS) {
+    expect(sim.value(opLamp(doc, name)), name).toBe(name === on);
+  }
 }
 
 describe('calculator', () => {
@@ -184,15 +216,37 @@ describe('calculator', () => {
       for (const key of keys) press(key);
     };
 
-    type('12+3=');
+    expectOp(sim, doc, null);
+    type('1+1=');
+    expectNumber(sim, doc, 2);
+    expectAcc(sim, doc, 2);
+    expectOp(sim, doc, '+');
+    press('=');
+    expectNumber(sim, doc, 3);
+    expectAcc(sim, doc, 3);
+    press('=');
+    expectNumber(sim, doc, 4);
+    expectAcc(sim, doc, 4);
+    type('C5−2=');
+    expectNumber(sim, doc, 3);
+    expectOp(sim, doc, '−');
+    press('=');
+    expectNumber(sim, doc, 1);
+    type('C8÷2=');
+    expectNumber(sim, doc, 4);
+    expectOp(sim, doc, '÷');
+    press('=');
+    expectNumber(sim, doc, 2);
+    type('C12+3=');
     expectNumber(sim, doc, 15);
     press('=');
     expectNumber(sim, doc, 18);
     type('×2=');
     expectNumber(sim, doc, 36);
+    expectOp(sim, doc, '×');
     press('=');
     expectNumber(sim, doc, 72);
-  }, 180000);
+  }, 300000);
 
   it('keeps boxes from covering each other', () => {
     const doc = calculatorDoc();
@@ -207,6 +261,21 @@ describe('calculator', () => {
       }
     }
     expect(hits.slice(0, 12), `${hits.length} overlapping pairs`).toEqual([]);
+
+    const lamps = OP_LAMPS.map((name) => [...doc.components.values()].find((c) => c.kind === 'bulb' && c.name === name)!);
+    const lampHits: string[] = [];
+    for (const lamp of lamps) {
+      const body = componentBounds(lamp);
+      const label = partLabel(doc, lamp, DEFAULT_THEME);
+      const labelRect = label ? textRect(label) : null;
+      for (const other of doc.components.values()) {
+        if (other.id === lamp.id) continue;
+        const bounds = componentBounds(other);
+        if (rectsOverlap(body, bounds)) lampHits.push(`${lamp.name} overlaps ${other.kind} ${other.name || other.id}`);
+        if (labelRect && rectsOverlap(labelRect, bounds)) lampHits.push(`${lamp.name} label overlaps ${other.kind} ${other.name || other.id}`);
+      }
+    }
+    expect(lampHits, lampHits.slice(0, 8).join('; ')).toEqual([]);
 
     const tree = buildBoxTree(doc);
     for (const w of doc.wires.values()) {

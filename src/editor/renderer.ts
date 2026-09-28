@@ -26,7 +26,7 @@ import { placePort } from '../model/ports';
 import { componentOps, noteHole, textRect, type DrawOp, type TextOp } from '../model/shapes';
 import { contrastText, wireColors, type Theme, type WireColors } from '../model/themes';
 import type { Box, Component, Point, Rect } from '../model/types';
-import { bundleSource, laneCount } from '../model/types';
+import { bundleSource, isInput, laneCount } from '../model/types';
 import { FONT_STACK } from '../io/export';
 import type { Arrow, Camera, Editor } from './Editor';
 
@@ -492,6 +492,7 @@ export function renderScene(ed: Editor): void {
   }
   const covered = visible.filter((b) => (ed.boxT.get(b.id) ?? 1) < 0.02);
   const avoid = avoidMap(doc);
+  ed.routeMap = avoid;
 
   // Wires, batched by colour: unpowered first, then glowing powered wires on top. A wire takes
   // the colour of the part that really drives it, so it keeps its hue through box ports.
@@ -512,6 +513,7 @@ export function renderScene(ed: Editor): void {
   }
   const onNet = (from: string, lane: number) => picked.has(signals.get(laneKey(from, lane)) ?? laneKey(from, lane));
   const selectedCurves: WireCurve[] = [];
+  const coverWires: { curve: WireCurve; color: string; width: number }[] = [];
   for (const w of doc.wires.values()) {
     if (w.cable) continue;
     const a = doc.components.get(w.from);
@@ -523,7 +525,15 @@ export function renderScene(ed: Editor): void {
     if (covered.length && covered.some((bx) => pointInRect(curve.a, bx) && pointInRect(curve.b, bx))) continue;
     const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
     const cols = colorsFor(pc.roots.get(srcKey) ?? w.from, theme);
-    if (onNet(w.from, w.lane ?? 0)) selectedCurves.push(curve);
+    if (onNet(w.from, w.lane ?? 0)) {
+      selectedCurves.push(curve);
+      const on = sim.value(w.from, w.lane ?? 0);
+      coverWires.push({
+        curve,
+        color: on ? cols.on : cols.off,
+        width: on ? (far ? dp : Math.max(3, 1.5 * px)) : Math.max(STROKE_W, dp),
+      });
+    }
     if (sim.value(w.from, w.lane ?? 0)) {
       let entry = onPaths.get(cols.on);
       if (!entry) onPaths.set(cols.on, (entry = { cols, path: new Path2D() }));
@@ -539,7 +549,7 @@ export function renderScene(ed: Editor): void {
     ctx.strokeStyle = color;
     ctx.stroke(p);
   }
-  if (selectedCurves.length) {
+  if (!ed.auraOn && selectedCurves.length) {
     ctx.strokeStyle = theme.selection;
     ctx.globalAlpha = 0.45;
     ctx.lineWidth = Math.max(8, 6 * px);
@@ -588,7 +598,7 @@ export function renderScene(ed: Editor): void {
     }
     let cableHit = false;
     for (let i = 0; i < n; i++) if (onNet(w.from, i)) cableHit = true;
-    if (cableHit) {
+    if (cableHit && !ed.auraOn) {
       ctx.strokeStyle = theme.selection;
       ctx.globalAlpha = 0.35;
       ctx.lineWidth = n * CABLE_PITCH + 4;
@@ -650,28 +660,32 @@ export function renderScene(ed: Editor): void {
   drawNoteWells(ctx, floating, ed);
   for (const l of labels) if (l.size * z >= 5) drawText(ctx, l);
 
-  // Selection outlines for components.
-  ctx.strokeStyle = theme.selection;
-  ctx.lineWidth = 1.5 * px;
-  for (const id of ed.selection) {
-    const c = doc.components.get(id);
-    if (!c) continue;
-    const r = inflate(bodyRect(c), 5);
-    ctx.beginPath();
-    ctx.roundRect(r.x, r.y, r.w, r.h, 4);
-    ctx.stroke();
+  // Flat selection rectangles stay only when the wave overlay is unavailable.
+  if (!ed.auraOn) {
+    ctx.strokeStyle = theme.selection;
+    ctx.lineWidth = 1.5 * px;
+    for (const id of ed.selection) {
+      const c = doc.components.get(id);
+      if (!c) continue;
+      const r = inflate(bodyRect(c), 5);
+      ctx.beginPath();
+      ctx.roundRect(r.x, r.y, r.w, r.h, 4);
+      ctx.stroke();
+    }
   }
   const sized = ed.resizeTarget();
   if (sized) drawHandles(ctx, bodyRect(sized), theme, px);
 
   // Selected boxes and their resize handles.
   for (const b of ed.selectedBoxes()) {
-    ctx.strokeStyle = theme.selection;
-    ctx.lineWidth = 2 * px;
-    ctx.setLineDash([6 * px, 4 * px]);
-    roundRectPath(ctx, inflate(b, 3 * px), 9);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    if (!ed.auraOn) {
+      ctx.strokeStyle = theme.selection;
+      ctx.lineWidth = 2 * px;
+      ctx.setLineDash([6 * px, 4 * px]);
+      roundRectPath(ctx, inflate(b, 3 * px), 9);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     drawHandles(ctx, b, theme, px);
   }
 
@@ -835,6 +849,83 @@ export function renderScene(ed: Editor): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ed.arrows = computeArrows(ed, view);
   drawArrows(ctx, ed.arrows, theme);
+
+  paintAuraCover(ed, [...lower, ...floating], visible, coverWires, px);
+}
+
+/** Redraws aura targets above the wave so it emerges from under the part, with no gap. */
+function paintAuraCover(
+  ed: Editor,
+  parts: Component[],
+  boxes: Box[],
+  wires: { curve: WireCurve; color: string; width: number }[],
+  px: number,
+): void {
+  const ctx = ed.coverCtx;
+  const canvas = ed.cover;
+  if (!ctx || !canvas) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!ed.auraOn) return;
+  const { dpr, cam, theme } = ed;
+  const z = cam.zoom;
+  const dp = 1 / (z * dpr);
+  ctx.setTransform(dpr * z, 0, 0, dpr * z, -cam.x * z * dpr, -cam.y * z * dpr);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = 1;
+
+  for (const w of wires) {
+    ctx.strokeStyle = w.color;
+    ctx.lineWidth = w.width;
+    strokeCurve(ctx, w.curve);
+  }
+
+  const batch = new OpBatcher();
+  const notes: Component[] = [];
+  for (const c of parts) {
+    if (c.id === ed.editingId) continue;
+    const selected = ed.selection.has(c.id);
+    if (!selected && !(isInput(c.kind) && ed.isActive(c))) continue;
+    const info = partInfo(ed.parts, c, theme, ed.isActive(c));
+    if (c.kind === 'switch') info.switchT = ed.switchBlend(c.id);
+    if (c.kind === 'bulb' || c.kind === 'rgb') {
+      const look = ed.bulbLook(c.id);
+      if (look) {
+        info.bulbPower = look.power;
+        info.bulbColor = look.color;
+      }
+    }
+    info.lanes?.forEach((lane, i) => {
+      lane.on = ed.sim.value(c.id, i);
+    });
+    const ops = componentOps(c, theme, info).filter((op) => op.t === 'text' || op.alpha === undefined || op.alpha >= 0.99);
+    batch.add(ops, xformOf(c));
+    if (c.kind === 'note') notes.push(c);
+  }
+  batch.flush(ctx, dp);
+  drawNoteWells(ctx, notes, ed);
+
+  for (const b of boxes) {
+    if (!ed.selection.has(b.id)) continue;
+    roundRectPath(ctx, b, 8);
+    ctx.strokeStyle = b.color ?? theme.box;
+    ctx.lineWidth = Math.max(2, 1.5 * px);
+    ctx.stroke();
+    drawHandles(ctx, b, theme, px);
+  }
+  const sized = ed.resizeTarget();
+  if (sized) drawHandles(ctx, bodyRect(sized), theme, px);
+
+  const dock = document.querySelector('.dock')?.getBoundingClientRect();
+  if (dock && dock.width > 2 && dock.height > 2) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = '#000';
+    ctx.fillRect(dock.x, dock.y, dock.width, dock.height);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.globalAlpha = 1;
 }
 
 function componentCoveredBy(ed: Editor, c: Component, covered: Box[]): boolean {

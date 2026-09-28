@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1323.13 -343.6 5756.27 4317.2" width="5756.27" height="4317.2" font-family="Inter, 'Segoe UI', system-ui, sans-serif">
+<rect x="-1323.13" y="-343.6" width="5756.27" height="4317.2" fill="#111318"/>
+<rect x="290" y="-200" width="2050" height="4030" rx="123" fill="#5b4b8a" fill-opacity="0.28" stroke="#5b4b8a" stroke-width="47.968888888888884"/>
+<text x="2270.6164285714285" y="-53.523571428571444" font-size="154.18571428571428" font-weight="700" fill="#5b4b8a" text-anchor="end">Ring counter</text>
+<rect x="930" y="1370" width="1380" height="430" rx="25.8" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="47.968888888888884"/>
+<text x="2267.43" y="1459.87" font-size="94.6" font-weight="700" fill="#6e56cf" text-anchor="end">D flip-flop</text>
+<rect x="930" y="1870" width="1380" height="430" rx="25.8" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="47.968888888888884"/>
+<text x="2267.43" y="1959.87" font-size="94.6" font-weight="700" fill="#6e56cf" text-anchor="end">D flip-flop</text>
+<rect x="930" y="2370" width="1380" height="430" rx="25.8" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="47.968888888888884"/>
+<text x="2267.43" y="2459.87" font-size="94.6" font-weight="700" fill="#6e56cf" text-anchor="end">D flip-flop</text>
+<rect x="930" y="2870" width="1380" height="430" rx="25.8" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="47.968888888888884"/>
+<text x="2267.43" y="2959.87" font-size="94.6" font-weight="700" fill="#6e56cf" text-anchor="end">D flip-flop</text>
+<rect x="930" y="3370" width="1380" height="430" rx="25.8" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="47.968888888888884"/>
+<text x="2267.43" y="3459.87" font-size="94.6" font-weight="700" fill="#6e56cf" text-anchor="end">D flip-flop</text>
+<rect x="930" y="-130" width="1380" height="430" rx="25.8" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="47.968888888888884"/>
+<text x="2267.43" y="-40.13000000000001" font-size="94.6" font-weight="700" fill="#6e56cf" text-anchor="end">D flip-flop</text>
+<rect x="930" y="370" width="1380" height="430" rx="25.8" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="47.968888888888884"/>
+<text x="2267.43" y="459.87" font-size="94.6" font-weight="700" fill="#6e56cf" text-anchor="end">D flip-flop</text>
+<rect x="930" y="870" width="1380" height="430" rx="25.8" fill="#6e56cf" fill-opacity="0.28" stroke="#6e56cf" stroke-width="47.968888888888884"/>
+<text x="2267.43" y="959.87" font-size="94.6" font-weight="700" fill="#6e56cf" text-anchor="end">D flip-flop</text>
+<rect x="2440" y="1450" width="690" height="710" rx="41.4" fill="#4c1d95" fill-opacity="0.28" stroke="#4c1d95" stroke-width="47.968888888888884"/>
+<text x="3060.6164285714285" y="1596.4764285714286" font-size="154.18571428571428" font-weight="700" fill="#4c1d95" text-anchor="end">Display</text>
+<rect x="1100" y="1440" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="1640.3" y="1502.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1710" y="1440" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="2250.3" y="1502.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1100" y="1940" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="1640.3" y="2002.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1710" y="1940" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="2250.3" y="2002.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1100" y="2440" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="1640.3" y="2502.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1710" y="2440" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="2250.3" y="2502.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1100" y="-60" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="1640.3" y="2.6999999999999957" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1100" y="2940" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="1640.3" y="3002.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1710" y="2940" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="2250.3" y="3002.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1100" y="3440" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="1640.3" y="3502.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1710" y="3440" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="2250.3" y="3502.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1710" y="-60" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="2250.3" y="2.6999999999999957" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1100" y="440" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="1640.3" y="502.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1710" y="440" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="2250.3" y="502.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1100" y="940" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="1640.3" y="1002.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="1710" y="940" width="570" height="300" rx="18" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+<text x="2250.3" y="1002.7" font-size="66" font-weight="700" fill="#0f766e" text-anchor="end">Latch</text>
+<rect x="-20" y="-60" width="190" height="210" rx="11.4" fill="#0f766e" fill-opacity="0.28" stroke="#0f766e" stroke-width="47.968888888888884"/>
+</svg>

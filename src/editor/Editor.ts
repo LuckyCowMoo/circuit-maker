@@ -36,7 +36,7 @@ import {
   rotatedSize,
   snap,
 } from '../model/geometry';
-import { avoidMap, invalidateRoutes, routedWire, wireStyleOf, type WireStyle } from '../model/route';
+import { avoidMap, invalidateRoutes, routedWire, wireStyleOf, type AvoidMap, type WireStyle } from '../model/route';
 import { floatsAboveBoxes, type PartContext } from '../model/parts';
 import {
   buildBoxTree,
@@ -74,6 +74,7 @@ import { Simulator } from '../sim/simulator';
 import { docToText, FILE_EXTENSION, parseCircuit, serialize, type CircuitFile, type FileView } from '../io/format';
 import { buildSvg, svgToPng, type ImageExportOptions } from '../io/export';
 import { downloadBlob, downloadText, safeFilename } from '../io/download';
+import { AuraOverlay, type PlaceRipple } from './aura';
 import { colorsFor, renderScene, TOOLBAR_SPACE } from './renderer';
 import { acceptEdit, CircuitSession, type NetMessage } from '../net/session';
 import halfAdderExample from '../../examples/half-adder.cmk.json?raw';
@@ -316,6 +317,15 @@ function bulbRgb(c: Component, fallback: string, sim: { value(id: string, lane?:
   return parseCss(c.color ?? fallback);
 }
 
+/** Top of the toolbar control the pointer went down on, including a popped group. */
+function placeHomeTop(e: PointerEvent): number | null {
+  const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
+  if (!bar) return null;
+  const br = bar.getBoundingClientRect();
+  const node = e.target instanceof Element ? (e.target.closest('.tb-pop') ?? e.target.closest('.tb-btn')) : null;
+  return node ? Math.min(br.top, node.getBoundingClientRect().top) : br.top;
+}
+
 export class Editor {
   doc: Doc = emptyDoc();
   cam: Camera = { x: -400, y: -300, zoom: 1 };
@@ -333,6 +343,16 @@ export class Editor {
   private netTimer: ReturnType<typeof setTimeout> | undefined;
   menu: PlaceMenu | null = null;
   placing: PlaceKind | null = null;
+  /** WebGL selection aura is running, so the flat selection stroke stays off. */
+  auraOn = false;
+  /** Parts redrawn above the aura so the wave sits behind them. */
+  cover: HTMLCanvasElement | null = null;
+  coverCtx: CanvasRenderingContext2D | null = null;
+  /** One-shot wave along the toolbar after a part is dragged out of it. */
+  placeRipple: PlaceRipple | null = null;
+  /** Wire routes from the last scene draw, shared with the aura stamp. */
+  routeMap: AvoidMap | null = null;
+  private aura: AuraOverlay | null = null;
   /** World position of the placement preview. */
   ghost: Point | null = null;
   /** While placing a port, the box edge the ghost is snapped to. */
@@ -437,7 +457,25 @@ export class Editor {
     this.raf = requestAnimationFrame(this.frame);
   }
 
+  attachAura(canvas: HTMLCanvasElement): void {
+    this.aura?.dispose();
+    this.aura = new AuraOverlay(canvas);
+    this.auraOn = this.aura.ok;
+    if (this.width) this.aura.resize(this.width, this.height, this.dpr);
+  }
+
+  attachCover(canvas: HTMLCanvasElement): void {
+    this.cover = canvas;
+    this.coverCtx = canvas.getContext('2d', { alpha: true });
+    this.sizeCover();
+  }
+
   detach(): void {
+    this.aura?.dispose();
+    this.aura = null;
+    this.auraOn = false;
+    this.cover = null;
+    this.coverCtx = null;
     const canvas = this.canvas;
     if (!canvas) return;
     canvas.removeEventListener('pointerdown', this.onPointerDown);
@@ -470,6 +508,8 @@ export class Editor {
     this.height = this.rect.height;
     canvas.width = Math.round(this.width * this.dpr);
     canvas.height = Math.round(this.height * this.dpr);
+    this.aura?.resize(this.width, this.height, this.dpr);
+    this.sizeCover();
     this.needsRender = true;
     const pending = this.pendingView;
     if (pending && this.width) {
@@ -477,6 +517,19 @@ export class Editor {
       if (pending === 'fit') this.fitView(false);
       else this.setView(pending);
     }
+  }
+
+  private dockSig = '';
+
+  private sizeCover(): void {
+    const canvas = this.cover;
+    if (!canvas || !this.width) return;
+    const w = Math.round(this.width * this.dpr);
+    const h = Math.round(this.height * this.dpr);
+    if (canvas.width === w && canvas.height === h && this.coverCtx) return;
+    canvas.width = w;
+    canvas.height = h;
+    this.coverCtx = canvas.getContext('2d', { alpha: true });
   }
 
   private frameBusy = false;
@@ -509,10 +562,19 @@ export class Editor {
       for (const fn of this.simListeners) fn();
     }
     this.syncVisuals(now);
+    const dock = document.querySelector('.dock')?.getBoundingClientRect();
+    const dockSig = dock ? `${dock.x.toFixed(0)},${dock.y.toFixed(0)},${dock.width.toFixed(0)},${dock.height.toFixed(0)}` : '';
+    if (dockSig !== this.dockSig) {
+      this.dockSig = dockSig;
+      this.needsRender = true;
+    }
+    let drew = false;
     if (this.needsRender) {
       this.needsRender = false;
       renderScene(this);
+      drew = true;
     }
+    this.aura?.frame(this, now, drew);
   };
 
   requestRender(): void {
@@ -924,9 +986,18 @@ export class Editor {
     if (!e) return;
     const sx = e.clientX;
     const sy = e.clientY;
+    const homeTop = placeHomeTop(e);
+    let left = false;
     const move = (ev: PointerEvent) => {
       if (this.placing !== kind) return;
       this.updateGhost(this.toWorld(this.screenPoint(ev)));
+      if (left || homeTop == null || ev.clientY >= homeTop - 4) return;
+      const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
+      const br = bar?.getBoundingClientRect();
+      if (!br) return;
+      left = true;
+      const x = Math.max(br.left, Math.min(ev.clientX, br.right));
+      this.placeRipple = { x, y: br.top, t0: performance.now(), kind };
     };
     const up = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', move);
