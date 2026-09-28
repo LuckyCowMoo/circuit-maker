@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - "TABG - 2 (raytraced chatboxes)"
+      - "TABG-2-(raytraced-chatboxes)"
   workflow_dispatch:
 
 permissions:
@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: "TABG - 2 (raytraced chatboxes)"
+          ref: "TABG-2-(raytraced-chatboxes)"
           path: src
       - uses: actions/setup-node@v4
         with:
