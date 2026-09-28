@@ -241,7 +241,7 @@ export interface Rgb {
 
 const wrap360 = (h: number) => ((h % 360) + 360) % 360;
 
-/** Stable hue offset in [-10, 10]. An empty id is the pure kind colour used by toolbar buttons. */
+/** Stable hue offset in [-24, 24]. An empty id is the pure kind colour used by toolbar buttons. */
 export function auraJitter(id: string): number {
   if (!id) return 0;
   let h = 2166136261;
@@ -249,7 +249,7 @@ export function auraJitter(id: string): number {
     h ^= id.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
-  return (((h >>> 0) / 4294967295) * 2 - 1) * 10;
+  return (((h >>> 0) / 4294967295) * 2 - 1) * 24;
 }
 
 /** Hue for a kind, plus a small stable shift when `id` is set. */

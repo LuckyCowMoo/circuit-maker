@@ -853,6 +853,49 @@ export function renderScene(ed: Editor): void {
   paintAuraCover(ed, [...lower, ...floating], visible, coverWires, px);
 }
 
+/** Components a selected wire runs into. Their bodies are redrawn above the wire wave. */
+function wireEndIds(ed: Editor): Set<string> {
+  const ids = new Set<string>();
+  const doc = ed.doc;
+  let any = false;
+  for (const id of ed.selection) if (doc.wires.has(id)) {
+    any = true;
+    break;
+  }
+  if (!any) return ids;
+  const signals = signalKeys(doc);
+  const laneKey = (id: string, lane = 0) => (lane ? `${id}#${lane}` : id);
+  const nets = new Set<string>();
+  for (const id of ed.selection) {
+    const w = doc.wires.get(id);
+    const src = w && doc.components.get(w.from);
+    if (!w || !src) continue;
+    const n = w.cable ? laneCount(src) : 1;
+    for (let i = 0; i < n; i++) {
+      const lane = w.cable ? i : (w.lane ?? 0);
+      nets.add(signals.get(laneKey(w.from, lane)) ?? laneKey(w.from, lane));
+    }
+  }
+  for (const w of doc.wires.values()) {
+    const src = doc.components.get(w.from);
+    const dst = doc.components.get(w.to);
+    if (!src || !dst) continue;
+    const lanes = w.cable ? Math.min(laneCount(src), laneCount(dst)) : 1;
+    let hit = false;
+    for (let i = 0; i < lanes; i++) {
+      const lane = w.cable ? i : (w.lane ?? 0);
+      if (nets.has(signals.get(laneKey(w.from, lane)) ?? laneKey(w.from, lane))) {
+        hit = true;
+        break;
+      }
+    }
+    if (!hit) continue;
+    ids.add(w.from);
+    ids.add(w.to);
+  }
+  return ids;
+}
+
 /** Redraws aura targets above the wave so it emerges from under the part, with no gap. */
 function paintAuraCover(
   ed: Editor,
@@ -883,10 +926,11 @@ function paintAuraCover(
 
   const batch = new OpBatcher();
   const notes: Component[] = [];
+  const ends = wireEndIds(ed);
   for (const c of parts) {
     if (c.id === ed.editingId) continue;
     const selected = ed.selection.has(c.id);
-    if (!selected && !(isInput(c.kind) && ed.isActive(c))) continue;
+    if (!selected && !ends.has(c.id) && !(isInput(c.kind) && ed.isActive(c))) continue;
     const info = partInfo(ed.parts, c, theme, ed.isActive(c));
     if (c.kind === 'switch') info.switchT = ed.switchBlend(c.id);
     if (c.kind === 'bulb' || c.kind === 'rgb') {

@@ -4,10 +4,11 @@ import {
   componentBounds,
   CABLE_PITCH,
   curveBounds,
+  geomFor,
   inflate,
   pointInRect,
   rectsOverlap,
-  rotatedSize,
+  localSize,
   xformOf,
   type WireCurve,
   type Xf,
@@ -21,6 +22,24 @@ import { isInput, laneCount } from '../model/types';
 
 /** How long the toolbar drag-out ripple stays up. */
 const RIPPLE_MS = 700;
+
+/**
+ * How far a part's wave can reach past its outline, as a fraction of its smaller side.
+ * The visible edge sits inside this. 0.13 puts that edge about a tenth of the body out,
+ * matching the switch reference.
+ */
+const WAVE_REACH = 0.13;
+
+/** Twice a 2-input AND's current wave, so smaller parts don't shrink below that. */
+const AND2 = geomFor('and', 2, false);
+const MIN_WAVE_REACH = WAVE_REACH * Math.min(AND2.tip, AND2.h) * 2;
+
+/** Wire sleeve, past the drawn stroke, in multiples of that stroke's width. One layer only. */
+const WIRE_SLEEVE = 2.4;
+
+function partReach(w: number, h: number): number {
+  return Math.max(MIN_WAVE_REACH, WAVE_REACH * Math.min(w, h));
+}
 
 export interface PlaceRipple {
   /** Viewport point on the top edge of the toolbar where the part left. */
@@ -58,28 +77,61 @@ vec3 hueShift(vec3 c, float rad) {
   return clamp(c * co + cross(k, c) * s + k * dot(k, c) * (1.0 - co), 0.0, 1.0);
 }
 
+/** Hue shift that keeps the colour saturated, so a red gate's partner stays a bright orange. */
+vec3 vividShift(vec3 c, float rad) {
+  vec3 shifted = hueShift(c, rad);
+  float l = dot(shifted, vec3(0.299, 0.587, 0.114));
+  return clamp(l + (shifted - l) * 1.9, 0.0, 1.0);
+}
+
 void main() {
   vec4 halo = texture(uHalo, vUv);
   vec3 flow = texture(uFlow, vUv).rgb;
-  float envelope = flow.g;
   float strength = flow.b;
-  float band = step(0.04, strength) * step(0.02, envelope);
-  float innerM = step(0.75, flow.r);
-  float outerM = band * (1.0 - innerM);
   float t = uTime;
   vec2 css = vec2(vUv.x, 1.0 - vUv.y) * uCss;
-  float n1 = texture(uNoise, css * 0.00092 + vec2(t * 0.012, t * 0.007)).r;
-  float n2 = texture(uNoise, css * 0.00145 - vec2(t * 0.02, t * 0.011) + 9.2).r;
-  float dye = texture(uNoise, css * 0.0013 + vec2(t * 0.008, 4.0)).r;
-  float showO = step(0.5, n1);
-  float showI = step(0.52, n2);
-  vec3 base = halo.rgb;
-  vec3 cOuter = mix(hueShift(base, 0.2), vec3(1.0), 0.12 + 0.28 * dye);
-  vec3 cInner = mix(hueShift(base, -0.16), vec3(1.0), 0.08 * dye);
-  float mO = outerM * showO;
-  float mI = innerM * showI;
-  float wave = max(mO, mI) * envelope * strength;
-  vec3 col = cOuter * mO + cInner * mI;
+  // Two-layer parts store red at half of blue. One-layer wires store red at a quarter. Opacity auras store 0 or 1.
+  float two = step(0.03, strength) * step(abs(flow.r * 2.0 - strength), 0.12);
+  float one = step(0.03, strength) * step(abs(flow.r * 4.0 - strength), 0.12);
+  float nOuter = texture(uNoise, css * 0.0018 + vec2(t * 0.04, t * 0.024)).r;
+  float nInner = texture(uNoise, css * 0.0018 - vec2(t * 0.032, t * 0.02) + 7.1).r;
+  float wGate = min(max(fwidth(nOuter), fwidth(nInner)), 0.05);
+  float wave = 0.0;
+  vec3 col = vec3(0.0);
+  if (two + one > 0.5) {
+    // Edge pixels are blended toward black, which would otherwise look like a mid distance and draw a ring.
+    float dist = clamp(flow.g / strength, 0.0, 1.0);
+    float cOuter = smoothstep(0.2, 1.0, dist) * 1.02;
+    float aOuter = smoothstep(cOuter - wGate, cOuter, nOuter);
+    float gain = clamp(strength, 0.0, 1.0);
+    if (one > two) {
+      wave = aOuter * gain;
+      col = halo.rgb;
+    } else {
+      float cInner = smoothstep(0.05, 0.55, dist) * 1.02;
+      float aInner = smoothstep(cInner - wGate, cInner, nInner);
+      vec3 top = vividShift(halo.rgb, 0.66);
+      wave = (aInner + aOuter * (1.0 - aInner)) * gain;
+      col = (top * aInner + halo.rgb * aOuter * (1.0 - aInner)) / max(wave, 0.001);
+    }
+  } else {
+    float envelope = flow.g;
+    float band = step(0.04, strength) * step(0.02, envelope);
+    float innerM = step(0.75, flow.r);
+    float outerM = band * (1.0 - innerM);
+    float n1 = texture(uNoise, css * 0.00092 + vec2(t * 0.012, t * 0.007)).r;
+    float n2 = texture(uNoise, css * 0.00145 - vec2(t * 0.02, t * 0.011) + 9.2).r;
+    float dye = texture(uNoise, css * 0.0013 + vec2(t * 0.008, 4.0)).r;
+    float showO = step(0.5, n1);
+    float showI = step(0.52, n2);
+    vec3 base = halo.rgb;
+    vec3 cOuter = mix(hueShift(base, 0.2), vec3(1.0), 0.12 + 0.28 * dye);
+    vec3 cInner = mix(hueShift(base, -0.16), vec3(1.0), 0.08 * dye);
+    float mO = outerM * showO;
+    float mI = innerM * showI;
+    wave = max(mO, mI) * envelope * strength;
+    col = cOuter * mO + cInner * mI;
+  }
 
   float rip = 0.0;
   if (uRipple.w > 0.5) {
@@ -141,16 +193,35 @@ function curvePath(curve: WireCurve): Path2D {
   return p;
 }
 
-/** Screen-pixel width of the old outer stroke. Half of this is the old reach past the outline. */
-function bandWidth(screen: number): number {
-  const t = Math.max(0, Math.min(1, screen / 48));
-  return 2 + 16 * t;
+/** 2 = a part's two layers, 1 = a wire's single layer, 0 = anything else. */
+function waveLayer(r: number, b: number, a: number): number {
+  if (b < 8 || a < 16) return 0;
+  if (Math.abs(r * 2 - b) < 40) return 2;
+  if (Math.abs(r * 4 - b) < 40) return 1;
+  return 0;
+}
+
+function componentAura(ed: Editor, c: Component): Rgb {
+  if (isInput(c.kind)) {
+    const root = ed.parts.roots.get(c.id) ?? c.id;
+    return parseRgb(wireColors(root, ed.theme).on) ?? kindAura(ed.theme, c.kind, c.id);
+  }
+  if (c.kind === 'marker') return vividAura(ed.theme, c.color ?? ed.theme.marker, c.id);
+  const kind = c.kind === 'port' && c.inputs > 1 ? 'ribbon-port' : c.kind;
+  return kindAura(ed.theme, kind, c.id);
+}
+
+/** Drawn width of a selected signal wire, in world units. Matches the scene stroke. */
+function wireCore(zoom: number, dpr: number): number {
+  if (zoom < 0.3) return 1 / (zoom * Math.max(dpr, 1));
+  return Math.max(3, 1.5 / zoom);
 }
 
 function smoothstep(e0: number, e1: number, x: number): number {
   const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0 || 1)));
   return t * t * (3 - 2 * t);
 }
+
 
 function toolbarEl(): Element | null {
   return document.querySelector('.tb-row .toolbar:not(.tb-measure)');
@@ -257,6 +328,11 @@ export class AuraOverlay {
   private flowCanvas = document.createElement('canvas');
   private colorCtx: CanvasRenderingContext2D | null = null;
   private flowCtx: CanvasRenderingContext2D | null = null;
+  /** One gate's distance field, merged into the stamp so a neighbour cannot overwrite it. */
+  private gateColor = document.createElement('canvas');
+  private gateFlow = document.createElement('canvas');
+  private gateColorCtx: CanvasRenderingContext2D | null = null;
+  private gateFlowCtx: CanvasRenderingContext2D | null = null;
   private view: View = { wx: 1, wy: 1, tx: 0, ty: 0, s: 1, zoom: 1 };
   private stampW = 1;
   private stampH = 1;
@@ -274,9 +350,11 @@ export class AuraOverlay {
       stencil: false,
     });
     if (!gl) return;
-    this.colorCtx = this.colorCanvas.getContext('2d');
-    this.flowCtx = this.flowCanvas.getContext('2d');
-    if (!this.colorCtx || !this.flowCtx || !this.link(gl)) return;
+    this.colorCtx = this.colorCanvas.getContext('2d', { willReadFrequently: true });
+    this.flowCtx = this.flowCanvas.getContext('2d', { willReadFrequently: true });
+    this.gateColorCtx = this.gateColor.getContext('2d', { willReadFrequently: true });
+    this.gateFlowCtx = this.gateFlow.getContext('2d', { willReadFrequently: true });
+    if (!this.colorCtx || !this.flowCtx || !this.gateColorCtx || !this.gateFlowCtx || !this.link(gl)) return;
     this.gl = gl;
     this.ok = true;
   }
@@ -445,18 +523,35 @@ export class AuraOverlay {
       if (!selected && !powered) continue;
       if (!rectsOverlap(componentBounds(c), view)) continue;
       if (partHidden(ed, c, covered)) continue;
-      const size = rotatedSize(c);
-      const screen = Math.min(size.w, size.h) * zoom;
-      const rgb = c.kind === 'marker' ? vividAura(ed.theme, c.color ?? ed.theme.marker, c.id) : kindAura(ed.theme, c.kind === 'port' && c.inputs > 1 ? 'ribbon-port' : c.kind, c.id);
-      this.paintLocal(xformOf(c), cachedPath(componentOutline(c)), rgb, bandWidth(screen), selected ? 1 : 0.5);
+      const local = localSize(c);
+      const reach = partReach(local.w, local.h);
+      this.paintLocalField(
+        xformOf(c),
+        cachedPath(componentOutline(c)),
+        componentAura(ed, c),
+        reach,
+        selected ? 1 : 0.5,
+        local.w,
+        local.h,
+        c.kind === 'note',
+      );
     }
 
     for (const b of ed.doc.boxes.values()) {
       if (!ed.selection.has(b.id)) continue;
       if (!rectsOverlap(b, view)) continue;
       if (covered.some((o) => o !== b && boxInBox(b, o))) continue;
-      const screen = Math.min(b.w, b.h) * zoom;
-      this.paintWorld(roundRectD(b.x, b.y, b.w, b.h, 8), vividAura(ed.theme, b.color ?? ed.theme.box, b.id), bandWidth(screen), 1);
+      const reach = partReach(b.w, b.h);
+      this.paintWorldField(
+        cachedPath(roundRectD(b.x, b.y, b.w, b.h, 8)),
+        vividAura(ed.theme, b.color ?? ed.theme.box, b.id),
+        reach,
+        0,
+        1,
+        'two',
+        b,
+        true,
+      );
     }
 
     this.paintWires(ed, covered, view);
@@ -497,7 +592,7 @@ export class AuraOverlay {
     const onNet = (from: string, lane: number) => nets.has(signals.get(laneKey(from, lane)) ?? laneKey(from, lane));
     const map = ed.routeMap ?? avoidMap(doc);
     const zoom = this.view.zoom;
-    const zoomT = Math.max(0, Math.min(1, zoom / 0.55));
+    const core = wireCore(zoom, ed.dpr);
     for (const w of doc.wires.values()) {
       if (w.cable) continue;
       if (!onNet(w.from, w.lane ?? 0)) continue;
@@ -511,9 +606,7 @@ export class AuraOverlay {
       const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
       const rgb = parseRgb(wireColors(ed.parts.roots.get(srcKey) ?? w.from, ed.theme).on);
       if (!rgb) continue;
-      const hole = 1.6 + 2.2 * zoomT;
-      const outer = hole + 4 + 10 * zoomT;
-      this.paintCurve(curve, rgb, outer, hole, 1);
+      this.paintWireField(curve, rgb, core);
     }
     for (const w of doc.wires.values()) {
       if (!w.cable) continue;
@@ -533,9 +626,7 @@ export class AuraOverlay {
       const key = hit ? `${w.from}#${hit}` : w.from;
       const rgb = parseRgb(wireColors(ed.parts.roots.get(key) ?? w.from, ed.theme).on);
       if (!rgb) continue;
-      const body = Math.max(1.6 + 2.2 * zoomT, n * CABLE_PITCH * zoom);
-      const outer = body + 4 + 10 * zoomT;
-      this.paintCurve(curve, rgb, outer, Math.max(1.5, body - 1), 1);
+      this.paintWireField(curve, rgb, n * CABLE_PITCH + 0.8);
     }
   }
 
@@ -562,31 +653,22 @@ export class AuraOverlay {
     fn(this.flowCtx!);
   }
 
-  private setLocal(m: Xf): void {
-    const { wx, wy, tx, ty } = this.view;
-    this.both((ctx) => ctx.setTransform(wx * m.a, wy * m.b, wx * m.c, wy * m.d, wx * m.e + tx, wy * m.f + ty));
-  }
-
-  private setWorld(): void {
-    const { wx, wy, tx, ty } = this.view;
-    this.both((ctx) => ctx.setTransform(wx, 0, 0, wy, tx, ty));
-  }
-
   private setCss(): void {
     const { s } = this.view;
     this.both((ctx) => ctx.setTransform(s, 0, 0, s, 0, 0));
   }
 
   /**
-   * Full strength at the outline, fading to nothing at three times the previous reach,
-   * so the middle of the falloff sits at 1.5× the old maximum distance.
+   * Full strength at the outline, then a smooth falloff.
+   * The fade runs out to 5× the previous reach: a smoothstep's amplitude-weighted
+   * middle sits at 30% of that span, which is 1.5× the old maximum distance.
    * `holePx` is the wire body; parts pass 0 and the silhouette is the edge.
    */
   private strokeBands(path: Path2D, rgb: Rgb, outerPx: number, strength: number, zoomDiv: number, holePx = 0): void {
     const c = this.colorCtx!;
     const f = this.flowCtx!;
     const oldReach = Math.max(0.5, (outerPx - holePx) / 2);
-    const far = oldReach * 3;
+    const far = oldReach * 5;
     const edge0 = holePx / 2;
     const blue = Math.round(strength * 255);
     const steps = 12;
@@ -616,26 +698,222 @@ export class AuraOverlay {
     });
   }
 
-  private eraseStroke(path: Path2D, widthPx: number, zoomDiv: number): void {
-    this.both((ctx) => {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.lineWidth = widthPx / zoomDiv;
-      ctx.stroke(path);
-      ctx.globalCompositeOperation = 'source-over';
-    });
+  /**
+   * Distance measured in the part's own units, so zooming scales the wave with the part.
+   * 0 on the outline, 1 at `reach` past it. Two layers store red at half of blue; a wire's single layer stores a quarter.
+   * Notes and boxes are hollow so the wave stays outside the shape. Each field is merged by the closer outline.
+   */
+  private paintLocalField(
+    m: Xf,
+    path: Path2D,
+    rgb: Rgb,
+    reach: number,
+    strength: number,
+    bodyW: number,
+    bodyH: number,
+    hollow: boolean,
+  ): void {
+    const pad = reach * 1.2 + 16;
+    const rect = this.gateStampRect(m, bodyW, bodyH, pad);
+    if (!rect) return;
+    this.prepareScratch(rect.w, rect.h);
+    const { wx, wy, tx, ty } = this.view;
+    const place = (ctx: CanvasRenderingContext2D) => {
+      ctx.setTransform(wx * m.a, wy * m.b, wx * m.c, wy * m.d, wx * m.e + tx - rect.x, wy * m.f + ty - rect.y);
+      this.readyStroke(ctx);
+    };
+    this.strokeField(place, path, rgb, reach, 0, strength, 'two', hollow);
+    this.keepCloserField(rect);
+    this.hasStamp = true;
   }
 
-  private paintLocal(m: Xf, path: Path2D, rgb: Rgb, outer: number, strength: number): void {
-    this.setLocal(m);
-    this.strokeBands(path, rgb, outer, strength, this.view.zoom);
-    this.eraseFill(path);
+  private paintWorldField(
+    path: Path2D,
+    rgb: Rgb,
+    reach: number,
+    inner: number,
+    strength: number,
+    mode: 'one' | 'two',
+    bounds: Rect,
+    hollow: boolean,
+  ): void {
+    const pad = reach * 1.2 + inner + 4;
+    const rect = this.worldStampRect(bounds, pad);
+    if (!rect) return;
+    this.prepareScratch(rect.w, rect.h);
+    const { wx, wy, tx, ty } = this.view;
+    const place = (ctx: CanvasRenderingContext2D) => {
+      ctx.setTransform(wx, 0, 0, wy, tx - rect.x, ty - rect.y);
+      this.readyStroke(ctx);
+    };
+    this.strokeField(place, path, rgb, reach, inner, strength, mode, hollow);
+    this.keepCloserField(rect);
+    this.hasStamp = true;
   }
 
-  private paintWorld(d: string, rgb: Rgb, outer: number, strength: number): void {
-    const path = new Path2D(d);
-    this.setWorld();
-    this.strokeBands(path, rgb, outer, strength, this.view.zoom);
-    this.eraseFill(path);
+  private paintWireField(curve: WireCurve, rgb: Rgb, core: number): void {
+    const reach = Math.max(core, 0.5) * WIRE_SLEEVE;
+    this.paintWorldField(curvePath(curve), rgb, reach, core / 2, 0.5, 'one', curveBounds(curve), false);
+  }
+
+  /** Stamp-space bounds of a local body expanded by `pad` world units. */
+  private gateStampRect(m: Xf, bodyW: number, bodyH: number, pad: number): { x: number; y: number; w: number; h: number } | null {
+    const { wx, wy, tx, ty } = this.view;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const px of [-pad, bodyW + pad]) {
+      for (const py of [-pad, bodyH + pad]) {
+        const x = wx * (m.a * px + m.c * py + m.e) + tx;
+        const y = wy * (m.b * px + m.d * py + m.f) + ty;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    const x0 = Math.max(0, Math.floor(minX) - 2);
+    const y0 = Math.max(0, Math.floor(minY) - 2);
+    const x1 = Math.min(this.stampW, Math.ceil(maxX) + 2);
+    const y1 = Math.min(this.stampH, Math.ceil(maxY) + 2);
+    if (x1 - x0 < 1 || y1 - y0 < 1) return null;
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  private prepareScratch(w: number, h: number): void {
+    const gc = this.gateColorCtx!;
+    const gf = this.gateFlowCtx!;
+    if (this.gateColor.width !== w || this.gateColor.height !== h) {
+      this.gateColor.width = w;
+      this.gateColor.height = h;
+      this.gateFlow.width = w;
+      this.gateFlow.height = h;
+    } else {
+      gc.setTransform(1, 0, 0, 1, 0, 0);
+      gf.setTransform(1, 0, 0, 1, 0, 0);
+      gc.clearRect(0, 0, w, h);
+      gf.clearRect(0, 0, w, h);
+    }
+  }
+
+  private readyStroke(ctx: CanvasRenderingContext2D): void {
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+  }
+
+  /** Stamp-space bounds of a world rectangle expanded by `pad` world units. */
+  private worldStampRect(b: Rect, pad: number): { x: number; y: number; w: number; h: number } | null {
+    const { wx, wy, tx, ty } = this.view;
+    const minX = wx * (b.x - pad) + tx;
+    const minY = wy * (b.y - pad) + ty;
+    const maxX = wx * (b.x + b.w + pad) + tx;
+    const maxY = wy * (b.y + b.h + pad) + ty;
+    const x0 = Math.max(0, Math.floor(Math.min(minX, maxX)) - 2);
+    const y0 = Math.max(0, Math.floor(Math.min(minY, maxY)) - 2);
+    const x1 = Math.min(this.stampW, Math.ceil(Math.max(minX, maxX)) + 2);
+    const y1 = Math.min(this.stampH, Math.ceil(Math.max(minY, maxY)) + 2);
+    if (x1 - x0 < 1 || y1 - y0 < 1) return null;
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  /**
+   * `reach` and `inner` are in the same units as the current transform (local units, or world units).
+   * The stroke is centered, so a reach of R extends R past the path. `inner` is the wire's half-width:
+   * distance 0 starts at the wire edge, then the core is punched out.
+   */
+  private strokeField(
+    place: (ctx: CanvasRenderingContext2D) => void,
+    path: Path2D,
+    rgb: Rgb,
+    reach: number,
+    inner: number,
+    strength: number,
+    mode: 'one' | 'two',
+    hollow: boolean,
+  ): void {
+    const c = this.gateColorCtx!;
+    const f = this.gateFlowCtx!;
+    place(c);
+    place(f);
+    const span = Math.max(reach, 0.5) * this.view.zoom * this.view.s;
+    const steps = Math.max(8, Math.min(48, Math.round(span)));
+    const blue = Math.round(Math.max(0, Math.min(1, strength)) * 255);
+    const red = Math.round(blue / (mode === 'one' ? 4 : 2));
+    const colour = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+    c.strokeStyle = colour;
+    c.fillStyle = colour;
+    const shell = (inner + reach * 1.12) * 2;
+    c.lineWidth = shell;
+    c.stroke(path);
+    f.strokeStyle = `rgb(${red},${blue},${blue})`;
+    f.lineWidth = shell;
+    f.stroke(path);
+    for (let i = steps; i >= 1; i--) {
+      const dist = i / steps;
+      const lw = (inner + dist * reach) * 2;
+      c.lineWidth = lw;
+      c.stroke(path);
+      f.strokeStyle = `rgb(${red},${Math.round(dist * blue)},${blue})`;
+      f.lineWidth = lw;
+      f.stroke(path);
+    }
+    if (!hollow && inner <= 0) {
+      c.fill(path);
+      f.fillStyle = `rgb(${red},0,${blue})`;
+      f.fill(path);
+    }
+    if (hollow) {
+      c.globalCompositeOperation = 'destination-out';
+      f.globalCompositeOperation = 'destination-out';
+      c.fillStyle = '#000';
+      f.fillStyle = '#000';
+      c.fill(path);
+      f.fill(path);
+    } else if (inner > 0) {
+      const hole = inner * 2;
+      c.globalCompositeOperation = 'destination-out';
+      f.globalCompositeOperation = 'destination-out';
+      c.lineWidth = hole;
+      f.lineWidth = hole;
+      c.stroke(path);
+      f.stroke(path);
+    }
+    c.globalCompositeOperation = 'source-over';
+    f.globalCompositeOperation = 'source-over';
+  }
+
+  /** Parts stay above wires. Same kind of field keeps whichever outline is closer. */
+  private keepCloserField(rect: { x: number; y: number; w: number; h: number }): void {
+    const srcC = this.gateColorCtx!.getImageData(0, 0, rect.w, rect.h);
+    const srcF = this.gateFlowCtx!.getImageData(0, 0, rect.w, rect.h);
+    const dstC = this.colorCtx!.getImageData(rect.x, rect.y, rect.w, rect.h);
+    const dstF = this.flowCtx!.getImageData(rect.x, rect.y, rect.w, rect.h);
+    const sc = srcC.data;
+    const sf = srcF.data;
+    const dc = dstC.data;
+    const df = dstF.data;
+    for (let i = 0; i < sf.length; i += 4) {
+      const srcL = waveLayer(sf[i], sf[i + 2], sf[i + 3]);
+      if (!srcL) continue;
+      const sb = sf[i + 2];
+      const db = df[i + 2];
+      const dstL = waveLayer(df[i], db, df[i + 3]);
+      if (dstL > srcL) continue;
+      if (dstL === srcL && sf[i + 1] / sb >= df[i + 1] / db) continue;
+      df[i] = sf[i];
+      df[i + 1] = sf[i + 1];
+      df[i + 2] = sf[i + 2];
+      df[i + 3] = sf[i + 3];
+      dc[i] = sc[i];
+      dc[i + 1] = sc[i + 1];
+      dc[i + 2] = sc[i + 2];
+      dc[i + 3] = sc[i + 3];
+    }
+    this.flowCtx!.putImageData(dstF, rect.x, rect.y);
+    this.colorCtx!.putImageData(dstC, rect.x, rect.y);
   }
 
   private paintCss(r: DOMRect, radius: number, rgb: Rgb, outer: number, strength: number): void {
@@ -644,13 +922,6 @@ export class AuraOverlay {
     this.setCss();
     this.strokeBands(path, rgb, outer, strength, 1);
     this.eraseFill(path);
-  }
-
-  private paintCurve(curve: WireCurve, rgb: Rgb, outer: number, hole: number, strength: number): void {
-    const path = curvePath(curve);
-    this.setWorld();
-    this.strokeBands(path, rgb, outer, strength, this.view.zoom, hole);
-    this.eraseStroke(path, hole, this.view.zoom);
   }
 
   private upload(): void {

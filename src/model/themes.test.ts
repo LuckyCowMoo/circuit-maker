@@ -20,11 +20,11 @@ describe('aura colours', () => {
     const ids = ['and_a', 'and_b', 'or_c', 'xor_d', 'gate_e', 'gate_f', 'gate_g', 'gate_h'];
     const shifts = ids.map((id) => auraJitter(id));
     for (const shift of shifts) {
-      expect(Math.abs(shift)).toBeLessThanOrEqual(10);
+      expect(Math.abs(shift)).toBeLessThanOrEqual(24);
       expect(auraJitter(ids[shifts.indexOf(shift)])).toBe(shift);
     }
     expect(new Set(shifts.map((n) => n.toFixed(4))).size).toBeGreaterThan(1);
-    for (const id of ids) expect(hueDistance(auraHueOf('and', id), 4)).toBeLessThanOrEqual(10);
+    for (const id of ids) expect(hueDistance(auraHueOf('and', id), 4)).toBeLessThanOrEqual(24);
   });
 
   it('paints kinds in the expected families and retunes them per theme', () => {
