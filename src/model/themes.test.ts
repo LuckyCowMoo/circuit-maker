@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accentAura, auraHueOf, auraJitter, kindAura, THEMES } from './themes';
+import { accentAura, auraHueOf, auraJitter, auraPartner, kindAura, THEMES } from './themes';
 
 function hueDistance(a: number, b: number): number {
   const d = Math.abs(a - b) % 360;
@@ -41,6 +41,12 @@ describe('aura colours', () => {
     expect(xor.r).toBeGreaterThan(xor.g);
     expect(kindAura(solar, 'and')).not.toEqual(kindAura(midnight, 'and'));
     expect(kindAura(solar, 'and', 'and_a')).toEqual(kindAura(solar, 'and', 'and_a'));
+    const partner = auraPartner(and);
+    expect(partner).not.toEqual(and);
+    for (const ch of [partner.r, partner.g, partner.b]) {
+      expect(ch).toBeGreaterThanOrEqual(0);
+      expect(ch).toBeLessThanOrEqual(255);
+    }
     expect(accentAura(solar)).not.toEqual(accentAura(midnight));
   });
 });

@@ -277,6 +277,24 @@ export function kindAura(theme: Theme, kind: AuraKind, id = ''): Rgb {
   return hslToRgb(auraHueOf(kind, id), theme.aura.s / 100, theme.aura.l / 100);
 }
 
+/**
+ * The second wave colour. Same shift as the canvas shader: 0.66 rad toward a neighbour,
+ * then pushed more vivid. Toolbar outlines swap between this and the kind colour.
+ */
+export function auraPartner(rgb: Rgb): Rgb {
+  const rad = 0.66;
+  const s = Math.sin(rad);
+  const co = Math.cos(rad);
+  const k = 0.57735026919;
+  const c = [rgb.r / 255, rgb.g / 255, rgb.b / 255];
+  const dot = k * (c[0] + c[1] + c[2]);
+  const cross = [k * (c[2] - c[1]), k * (c[0] - c[2]), k * (c[1] - c[0])];
+  const shifted = [0, 1, 2].map((i) => Math.min(1, Math.max(0, c[i] * co + cross[i] * s + k * dot * (1 - co))));
+  const l = 0.299 * shifted[0] + 0.587 * shifted[1] + 0.114 * shifted[2];
+  const vivid = shifted.map((ch) => Math.min(1, Math.max(0, l + (ch - l) * 1.9)));
+  return { r: Math.round(vivid[0] * 255), g: Math.round(vivid[1] * 255), b: Math.round(vivid[2] * 255) };
+}
+
 /** Theme accent, pushed to aura vividness. Used for the building toast. */
 export function accentAura(theme: Theme): Rgb {
   return hslToRgb(colorHue(theme.selection) ?? 210, theme.aura.s / 100, theme.aura.l / 100);
@@ -285,6 +303,14 @@ export function accentAura(theme: Theme): Rgb {
 /** An existing colour's hue, retuned to the theme's aura vividness, with optional per-id jitter. */
 export function vividAura(theme: Theme, color: string, id = ''): Rgb {
   return hslToRgb((colorHue(color) ?? AURA_HUE.marker) + auraJitter(id), theme.aura.s / 100, theme.aura.l / 100);
+}
+
+/** A signal with no real output or no real input: black on a light canvas, gray on a dark one. */
+export function idleWire(theme: Theme): string {
+  const rgb = parseRgb(theme.bg);
+  if (!rgb) return '#111111';
+  const lum = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+  return lum < 140 ? '#9aa0aa' : '#111111';
 }
 
 export function parseRgb(color: string): Rgb | null {

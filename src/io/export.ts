@@ -1,4 +1,4 @@
-import { boxesOuterFirst, netRoots, pinMasks } from '../model/doc';
+import { boxesOuterFirst, liveChannels, netRoots, pinMasks } from '../model/doc';
 import {
   cableStripe,
   CABLE_PITCH,
@@ -14,7 +14,7 @@ import {
 import { avoidMap, routedWire, type WireStyle } from '../model/route';
 import { partInfo, partLabel, type PartContext } from '../model/parts';
 import { componentOps, textRect, type DrawOp } from '../model/shapes';
-import { wireColors, type Theme } from '../model/themes';
+import { idleWire, wireColors, type Theme } from '../model/themes';
 import type { Doc, Rect } from '../model/types';
 import { laneCount } from '../model/types';
 import type { Simulator } from '../sim/simulator';
@@ -81,7 +81,8 @@ export function buildSvg(
     components: new Map(comps.map((c) => [c.id, c])),
     wires: new Map(wires.map((w) => [w.id, w])),
   };
-  const pc: PartContext = { doc, masks: pinMasks(sub), roots: netRoots(doc), colors: wireColors };
+  const pc: PartContext = { doc, masks: pinMasks(sub), roots: netRoots(doc), live: liveChannels(doc), colors: wireColors };
+  const idle = idleWire(theme);
 
   const labels = comps.map((c) => partLabel(doc, c, theme)).filter((l) => l !== null);
   const rects: Rect[] = [
@@ -122,19 +123,22 @@ export function buildSvg(
         const cols = wireColors(pc.roots.get(key) ?? w.from, theme);
         const stripe = cableStripe(curve, i, n, da, db);
         const d = stripe.map((p, k) => `${k ? 'L' : 'M'}${p.x} ${p.y}`).join(' ');
-        const on = signal(w.from, i);
-        out.push(`<path d="${d}" fill="none" stroke="${on ? cols.on : cols.off}" stroke-width="${CABLE_PITCH + 0.8}" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="2"/>`);
+        const connected = pc.live.has(i ? `${w.id}#${i}` : w.id);
+        const on = connected && signal(w.from, i);
+        const stroke = on ? cols.on : connected ? cols.off : idle;
+        out.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${CABLE_PITCH + 0.8}" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="2"/>`);
       }
       continue;
     }
     const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
     const cols = wireColors(pc.roots.get(srcKey) ?? w.from, theme);
     const d = curveSvgPath(curve);
-    if (signal(w.from, w.lane ?? 0)) {
+    const connected = pc.live.has(w.id);
+    if (connected && signal(w.from, w.lane ?? 0)) {
       out.push(`<path d="${d}" fill="none" stroke="${cols.glow}" stroke-width="9"/>`);
       out.push(`<path d="${d}" fill="none" stroke="${cols.on}" stroke-width="3"/>`);
     } else {
-      out.push(`<path d="${d}" fill="none" stroke="${cols.off}" stroke-width="${STROKE_W}"/>`);
+      out.push(`<path d="${d}" fill="none" stroke="${connected ? cols.off : idle}" stroke-width="${STROKE_W}"/>`);
     }
   }
   for (const c of comps) {

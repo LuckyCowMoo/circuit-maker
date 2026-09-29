@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyDoc, findFreeSpot, makeComponent, signalKeys } from './doc';
+import { emptyDoc, findFreeSpot, liveChannels, makeComponent, signalKeys } from './doc';
 import { rectInside, rectsOverlap } from './geometry';
 
 describe('findFreeSpot', () => {
@@ -52,5 +52,44 @@ describe('signalKeys', () => {
     expect(keys.get(and.id)).toBe(and.id);
     expect(keys.get(port.id)).toBe(and.id);
     expect(keys.get(other.id)).toBe(other.id);
+  });
+});
+
+describe('liveChannels', () => {
+  it('keeps a wire that runs from an output to an input', () => {
+    const doc = emptyDoc();
+    const and = makeComponent('and', 0, 0, 'and');
+    const or = makeComponent('or', 200, 0, 'or');
+    doc.components.set(and.id, and);
+    doc.components.set(or.id, or);
+    doc.wires.set('w1', { id: 'w1', from: and.id, to: or.id, input: 0 });
+    expect(liveChannels(doc).has('w1')).toBe(true);
+  });
+
+  it('drops a wire that never reaches an input, and both hops once a port continues', () => {
+    const doc = emptyDoc();
+    const and = makeComponent('and', 0, 0, 'and');
+    const port = makeComponent('port', 80, 0, 'p');
+    doc.components.set(and.id, and);
+    doc.components.set(port.id, port);
+    doc.wires.set('dead', { id: 'dead', from: and.id, to: port.id, input: 0 });
+    expect(liveChannels(doc).has('dead')).toBe(false);
+
+    const or = makeComponent('or', 200, 0, 'or');
+    doc.components.set(or.id, or);
+    doc.wires.set('on', { id: 'on', from: port.id, to: or.id, input: 0 });
+    const live = liveChannels(doc);
+    expect(live.has('dead')).toBe(true);
+    expect(live.has('on')).toBe(true);
+  });
+
+  it('drops a wire whose source is an undriven port', () => {
+    const doc = emptyDoc();
+    const port = makeComponent('port', 0, 0, 'p');
+    const or = makeComponent('or', 200, 0, 'or');
+    doc.components.set(port.id, port);
+    doc.components.set(or.id, or);
+    doc.wires.set('w1', { id: 'w1', from: port.id, to: or.id, input: 0 });
+    expect(liveChannels(doc).has('w1')).toBe(false);
   });
 });

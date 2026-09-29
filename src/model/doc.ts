@@ -246,6 +246,73 @@ function followSignal(doc: Doc, driver: Map<string, { id: string; lane: number }
   return { id: cur, lane: ln };
 }
 
+/**
+ * Wires and cable lanes that actually join a real output to a real input.
+ * A port only counts when the signal continues through it. Keys are the wire id,
+ * or `wireId#lane` for cable lanes after the first.
+ */
+export function liveChannels(doc: Doc): Set<string> {
+  const driver = portDrivers(doc);
+  const out = new Map<string, { to: string; lane: number }[]>();
+  const link = (from: string, lane: number, to: string, toLane: number) => {
+    const k = netKey(from, lane);
+    let list = out.get(k);
+    if (!list) out.set(k, (list = []));
+    list.push({ to, lane: toLane });
+  };
+  for (const w of doc.wires.values()) {
+    const src = doc.components.get(w.from);
+    const dst = doc.components.get(w.to);
+    if (!src || !dst) continue;
+    if (w.cable) {
+      const n = Math.min(laneCount(src), laneCount(dst));
+      for (let i = 0; i < n; i++) link(w.from, i, w.to, i);
+    } else link(w.from, w.lane ?? 0, w.to, w.input);
+  }
+
+  const reaches = new Map<string, boolean>();
+  const visiting = new Set<string>();
+  const sink = (id: string, lane: number): boolean => {
+    const c = doc.components.get(id);
+    if (!c) return false;
+    if (c.kind !== 'port') return true;
+    const k = netKey(id, lane);
+    const cached = reaches.get(k);
+    if (cached !== undefined) return cached;
+    if (visiting.has(k)) return false;
+    visiting.add(k);
+    let ok = false;
+    for (const hop of out.get(k) ?? []) {
+      if (sink(hop.to, hop.lane)) {
+        ok = true;
+        break;
+      }
+    }
+    visiting.delete(k);
+    reaches.set(k, ok);
+    return ok;
+  };
+  const driven = (id: string, lane: number) => {
+    const root = followSignal(doc, driver, id, lane);
+    const c = doc.components.get(root.id);
+    return !!c && c.kind !== 'port';
+  };
+
+  const live = new Set<string>();
+  for (const w of doc.wires.values()) {
+    const src = doc.components.get(w.from);
+    const dst = doc.components.get(w.to);
+    if (!src || !dst) continue;
+    if (w.cable) {
+      const n = Math.min(laneCount(src), laneCount(dst));
+      for (let i = 0; i < n; i++) {
+        if (driven(w.from, i) && sink(w.to, i)) live.add(i ? `${w.id}#${i}` : w.id);
+      }
+    } else if (driven(w.from, w.lane ?? 0) && sink(w.to, w.input)) live.add(w.id);
+  }
+  return live;
+}
+
 /** The component that really drives each output lane, looking back through ports and ribbons. */
 export function netRoots(doc: Doc): Map<string, string> {
   const driver = portDrivers(doc);

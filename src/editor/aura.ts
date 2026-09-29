@@ -16,12 +16,19 @@ import {
 import { floatsAboveBoxes } from '../model/parts';
 import { avoidMap, routedWire } from '../model/route';
 import { componentOutline, roundRectD } from '../model/shapes';
-import { accentAura, kindAura, parseRgb, vividAura, wireColors, type Rgb } from '../model/themes';
+import { auraPartner, idleWire, kindAura, parseRgb, vividAura, wireColors, type Rgb } from '../model/themes';
+import { AuraPass, cameraPlace, type AuraDraw } from './auraPass';
 import type { Box, Component, Rect } from '../model/types';
 import { isInput, laneCount } from '../model/types';
 
-/** How long the toolbar drag-out ripple stays up. */
-const RIPPLE_MS = 700;
+/** Toolbar goo lifetime. The shape is a continuous spread; this only stops the draw once it has thinned out. */
+const RIPPLE_MS = 2600;
+
+/**
+ * A canvas can be transferred to a worker only once. React Strict Mode disposes the overlay
+ * and builds it again on the same canvas, so the worker is kept until the unmount sticks.
+ */
+const heldAura = new WeakMap<HTMLCanvasElement, { worker: Worker; release: number }>();
 
 /**
  * How far a part's wave can reach past its outline, as a fraction of its smaller side.
@@ -34,132 +41,31 @@ const WAVE_REACH = 0.13;
 const AND2 = geomFor('and', 2, false);
 const MIN_WAVE_REACH = WAVE_REACH * Math.min(AND2.tip, AND2.h) * 2;
 
-/** Wire sleeve, past the drawn stroke, in multiples of that stroke's width. One layer only. */
+/** Wire sleeve, past the drawn stroke, in multiples of a single wire's width. Cables use this same sleeve. */
 const WIRE_SLEEVE = 2.4;
 
+/** Past this short side, extra size stretches the wave with a square root instead of linearly. */
+const REACH_KNEE = 120;
+
 function partReach(w: number, h: number): number {
-  return Math.max(MIN_WAVE_REACH, WAVE_REACH * Math.min(w, h));
+  const side = Math.min(w, h);
+  const linear = WAVE_REACH * side;
+  const grown = side <= REACH_KNEE ? linear : WAVE_REACH * REACH_KNEE * Math.sqrt(side / REACH_KNEE);
+  return Math.max(MIN_WAVE_REACH, grown);
 }
 
 export interface PlaceRipple {
   /** Viewport point on the top edge of the toolbar where the part left. */
   x: number;
   y: number;
+  /** Unit direction the pointer was moving as it crossed out, CSS y-down. */
+  dx: number;
+  dy: number;
   t0: number;
   kind: PlaceKind;
 }
 
-const VERT = `#version 300 es
-in vec2 aPos;
-out vec2 vUv;
-void main() {
-  vUv = aPos * 0.5 + 0.5;
-  gl_Position = vec4(aPos, 0.0, 1.0);
-}`;
 
-const FRAG = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 outColor;
-uniform sampler2D uHalo;
-uniform sampler2D uFlow;
-uniform sampler2D uNoise;
-uniform float uTime;
-uniform vec2 uCss;
-uniform vec4 uRipple;
-uniform vec3 uRippleColor;
-uniform vec4 uBar;
-
-vec3 hueShift(vec3 c, float rad) {
-  float s = sin(rad);
-  float co = cos(rad);
-  vec3 k = vec3(0.57735027);
-  return clamp(c * co + cross(k, c) * s + k * dot(k, c) * (1.0 - co), 0.0, 1.0);
-}
-
-/** Hue shift that keeps the colour saturated, so a red gate's partner stays a bright orange. */
-vec3 vividShift(vec3 c, float rad) {
-  vec3 shifted = hueShift(c, rad);
-  float l = dot(shifted, vec3(0.299, 0.587, 0.114));
-  return clamp(l + (shifted - l) * 1.9, 0.0, 1.0);
-}
-
-void main() {
-  vec4 halo = texture(uHalo, vUv);
-  vec3 flow = texture(uFlow, vUv).rgb;
-  float strength = flow.b;
-  float t = uTime;
-  vec2 css = vec2(vUv.x, 1.0 - vUv.y) * uCss;
-  // Two-layer parts store red at half of blue. One-layer wires store red at a quarter. Opacity auras store 0 or 1.
-  float two = step(0.03, strength) * step(abs(flow.r * 2.0 - strength), 0.12);
-  float one = step(0.03, strength) * step(abs(flow.r * 4.0 - strength), 0.12);
-  float nOuter = texture(uNoise, css * 0.0018 + vec2(t * 0.04, t * 0.024)).r;
-  float nInner = texture(uNoise, css * 0.0018 - vec2(t * 0.032, t * 0.02) + 7.1).r;
-  float wGate = min(max(fwidth(nOuter), fwidth(nInner)), 0.05);
-  float wave = 0.0;
-  vec3 col = vec3(0.0);
-  if (two + one > 0.5) {
-    // Edge pixels are blended toward black, which would otherwise look like a mid distance and draw a ring.
-    float dist = clamp(flow.g / strength, 0.0, 1.0);
-    float cOuter = smoothstep(0.2, 1.0, dist) * 1.02;
-    float aOuter = smoothstep(cOuter - wGate, cOuter, nOuter);
-    float gain = clamp(strength, 0.0, 1.0);
-    if (one > two) {
-      wave = aOuter * gain;
-      col = halo.rgb;
-    } else {
-      float cInner = smoothstep(0.05, 0.55, dist) * 1.02;
-      float aInner = smoothstep(cInner - wGate, cInner, nInner);
-      vec3 top = vividShift(halo.rgb, 0.66);
-      wave = (aInner + aOuter * (1.0 - aInner)) * gain;
-      col = (top * aInner + halo.rgb * aOuter * (1.0 - aInner)) / max(wave, 0.001);
-    }
-  } else {
-    float envelope = flow.g;
-    float band = step(0.04, strength) * step(0.02, envelope);
-    float innerM = step(0.75, flow.r);
-    float outerM = band * (1.0 - innerM);
-    float n1 = texture(uNoise, css * 0.00092 + vec2(t * 0.012, t * 0.007)).r;
-    float n2 = texture(uNoise, css * 0.00145 - vec2(t * 0.02, t * 0.011) + 9.2).r;
-    float dye = texture(uNoise, css * 0.0013 + vec2(t * 0.008, 4.0)).r;
-    float showO = step(0.5, n1);
-    float showI = step(0.52, n2);
-    vec3 base = halo.rgb;
-    vec3 cOuter = mix(hueShift(base, 0.2), vec3(1.0), 0.12 + 0.28 * dye);
-    vec3 cInner = mix(hueShift(base, -0.16), vec3(1.0), 0.08 * dye);
-    float mO = outerM * showO;
-    float mI = innerM * showI;
-    wave = max(mO, mI) * envelope * strength;
-    col = cOuter * mO + cInner * mI;
-  }
-
-  float rip = 0.0;
-  if (uRipple.w > 0.5) {
-    float age = clamp(uRipple.z, 0.0, 1.0);
-    float fade = pow(1.0 - age, 1.2);
-    float dist = abs(css.x - uRipple.x);
-    float spread = mix(48.0, max(uBar.z * 0.85, 120.0), smoothstep(0.0, 0.8, age));
-    float reach = exp(-dist * dist / (spread * spread * 0.7));
-    float above = max(0.0, uRipple.y - css.y);
-    float rise = mix(10.0, 64.0, age);
-    float plume = exp(-dist * dist / 980.0) * exp(-above * above / (rise * rise));
-    float fromTop = css.y - uBar.y;
-    float inX = smoothstep(uBar.x - 10.0, uBar.x, css.x) * (1.0 - smoothstep(uBar.x + uBar.z, uBar.x + uBar.z + 10.0, css.x));
-    float inBar = inX * step(-2.0, fromTop) * step(fromTop, uBar.w + 2.0);
-    float edge = exp(-fromTop * fromTop / 220.0);
-    float along = inBar * reach * edge;
-    float rn = step(0.48, texture(uNoise, vec2(css.x * 0.0035 - age * 1.6, 0.17)).r);
-    rip = (plume * 1.25 + along * 1.7) * fade * rn;
-  }
-
-  float alpha = wave;
-  if (rip > 0.004) {
-    float sum = min(1.0, alpha + rip);
-    col = (col * alpha + uRippleColor * rip) / max(sum, 0.001);
-    alpha = sum;
-  }
-  outColor = vec4(col * alpha, alpha);
-}`;
 
 interface View {
   wx: number;
@@ -175,6 +81,10 @@ interface RippleDraw {
   y: number;
   age: number;
   color: Rgb;
+  mate: Rgb;
+  dirx: number;
+  diry: number;
+  radius: number;
   bar: DOMRect;
 }
 
@@ -217,69 +127,10 @@ function wireCore(zoom: number, dpr: number): number {
   return Math.max(3, 1.5 / zoom);
 }
 
-function smoothstep(e0: number, e1: number, x: number): number {
-  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0 || 1)));
-  return t * t * (3 - 2 * t);
-}
-
-
 function toolbarEl(): Element | null {
   return document.querySelector('.tb-row .toolbar:not(.tb-measure)');
 }
 
-function liveRect(sel: string): DOMRect | null {
-  const root = toolbarEl();
-  const el = root?.querySelector(sel);
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return r.width > 2 && r.height > 2 ? r : null;
-}
-
-function placeRect(): DOMRect | null {
-  return liveRect('[data-aura-place]') ?? liveRect('[data-aura-armed]');
-}
-
-function toastRect(): DOMRect | null {
-  const el = document.querySelector('[data-aura-toast]');
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return r.width > 2 && r.height > 2 ? r : null;
-}
-
-function domSig(ed: Editor): string {
-  const pack = (r: DOMRect | null) => (r ? `${r.x.toFixed(0)},${r.y.toFixed(0)},${r.width.toFixed(0)},${r.height.toFixed(0)}` : '');
-  const building = ed.toastMessage?.startsWith('Building ') ? pack(toastRect()) : '';
-  return `${ed.placing ?? ''}|${pack(placeRect())}|${building}`;
-}
-
-function noiseBytes(): Uint8Array {
-  const n = 16;
-  const size = 256;
-  const data = new Uint8Array(size * size);
-  const hash = (ix: number, iy: number) => {
-    const x = ((ix % n) + n) % n;
-    const y = ((iy % n) + n) % n;
-    let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263);
-    h = Math.imul(h ^ (h >>> 13), 1274126177);
-    return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
-  };
-  const smooth = (t: number) => t * t * (3 - 2 * t);
-  const value = (x: number, y: number) => {
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const fx = smooth(x - x0);
-    const fy = smooth(y - y0);
-    const v00 = hash(x0, y0);
-    const v10 = hash(x0 + 1, y0);
-    const v01 = hash(x0, y0 + 1);
-    const v11 = hash(x0 + 1, y0 + 1);
-    return v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy;
-  };
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) data[y * size + x] = Math.round(value((x / size) * n, (y / size) * n) * 255);
-  }
-  return data;
-}
 
 function partHidden(ed: Editor, c: Component, covered: Box[]): boolean {
   if (!covered.length) return false;
@@ -292,38 +143,37 @@ function partHidden(ed: Editor, c: Component, covered: Box[]): boolean {
   return covered.some((b) => componentInBox(ed.doc, c, b));
 }
 
-function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader | null {
-  const shader = gl.createShader(type);
-  if (!shader) return null;
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    console.warn(gl.getShaderInfoLog(shader));
-    gl.deleteShader(shader);
-    return null;
-  }
-  return shader;
+
+const GL_ATTRS = {
+  alpha: true,
+  premultipliedAlpha: true,
+  antialias: false,
+  depth: false,
+  stencil: false,
+} as const;
+
+/**
+ * Firefox often refuses a WebGL context once the canvas has moved to a worker.
+ * The overlay then never starts, and selection stays on the blue box. Drawing
+ * on the page thread still shows the wave, in the same frame as the parts.
+ */
+function workerAuraSupported(): boolean {
+  return typeof navigator === 'undefined' || !/firefox\//i.test(navigator.userAgent);
 }
 
 /**
- * Screen-space selection aura. One static noise texture scrolls through a half-resolution
- * stamp of every highlighted outline, so many selections still cost a single composite.
+ * Screen-space selection aura. The stamp is built here; a worker owns the WebGL canvas and
+ * keeps the waves moving while the page is busy loading.
  */
 export class AuraOverlay {
   ok = false;
-  private gl: WebGL2RenderingContext | null = null;
-  private prog: WebGLProgram | null = null;
-  private vao: WebGLVertexArrayObject | null = null;
-  private haloTex: WebGLTexture | null = null;
-  private flowTex: WebGLTexture | null = null;
-  private noiseTex: WebGLTexture | null = null;
-  private loc: {
-    uTime: WebGLUniformLocation | null;
-    uCss: WebGLUniformLocation | null;
-    uRipple: WebGLUniformLocation | null;
-    uRippleColor: WebGLUniformLocation | null;
-    uBar: WebGLUniformLocation | null;
-  } = { uTime: null, uCss: null, uRipple: null, uRippleColor: null, uBar: null };
+  private pass: AuraPass | null = null;
+  private worker: Worker | null = null;
+  private stampGen = 0;
+  private bufW = 0;
+  private bufH = 0;
+  private failed = false;
+  private onStatus?: (ok: boolean) => void;
   private colorCanvas = document.createElement('canvas');
   private flowCanvas = document.createElement('canvas');
   private colorCtx: CanvasRenderingContext2D | null = null;
@@ -337,128 +187,217 @@ export class AuraOverlay {
   private stampW = 1;
   private stampH = 1;
   private hasStamp = false;
+  /** Camera baked into the stamp currently being drawn. */
+  private stampCam: { x: number; y: number; zoom: number } | null = null;
+  /** Camera the stamp is built in. Scrolling places this picture; it is not rebuilt every frame. */
+  private basis: { x: number; y: number; zoom: number } | null = null;
+  /** Camera of the picture currently drawn on the lock canvas. */
+  private bitmap: ImageBitmap | null = null;
+  private bitmapBasis: { x: number; y: number; zoom: number } | null = null;
+  private picSeq = 0;
+  /** Pictures that arrive after the wave was cleared are dropped. */
+  private acceptPictures = false;
+  private lockCanvas: HTMLCanvasElement | null = null;
+  private lockCtx: CanvasRenderingContext2D | null = null;
+  /** Camera last placed. A still view while a build blocks the page keeps the worker canvas on screen. */
+  private lastPresented: { x: number; y: number; zoom: number } | null = null;
+  /** Camera of the stamp the worker has actually received. The fallback pass slides that one. */
+  private postedCam: { x: number; y: number; zoom: number } | null = null;
   private shown = false;
   private sizeDirty = true;
-  private domSig = '';
+  /** Camera, selection, and powered inputs. The animated waves live in the shader, so a scene redraw does not restamp. */
+  private fieldSig = '';
+  private activeSig = '';
+  private activeVer = -1;
+  private activeSel = '';
+  private heldCanvas: HTMLCanvasElement | null = null;
 
-  constructor(private canvas: HTMLCanvasElement) {
-    const gl = canvas.getContext('webgl2', {
-      alpha: true,
-      premultipliedAlpha: true,
-      antialias: false,
-      depth: false,
-      stencil: false,
-    });
-    if (!gl) return;
+  constructor(canvas: HTMLCanvasElement, onStatus?: (ok: boolean) => void) {
+    this.onStatus = onStatus;
     this.colorCtx = this.colorCanvas.getContext('2d', { willReadFrequently: true });
     this.flowCtx = this.flowCanvas.getContext('2d', { willReadFrequently: true });
     this.gateColorCtx = this.gateColor.getContext('2d', { willReadFrequently: true });
     this.gateFlowCtx = this.gateFlow.getContext('2d', { willReadFrequently: true });
-    if (!this.colorCtx || !this.flowCtx || !this.gateColorCtx || !this.gateFlowCtx || !this.link(gl)) return;
-    this.gl = gl;
-    this.ok = true;
+    if (!this.colorCtx || !this.flowCtx || !this.gateColorCtx || !this.gateFlowCtx) return;
+    if (this.startWorker(canvas)) return;
+    let gl: WebGL2RenderingContext | null = null;
+    try {
+      gl = canvas.getContext('webgl2', GL_ATTRS) as WebGL2RenderingContext | null;
+    } catch {
+      return;
+    }
+    if (!gl) return;
+    this.pass = new AuraPass(gl);
+    this.ok = this.pass.ok;
   }
 
   resize(cssW: number, cssH: number, dpr: number): void {
-    if (!this.gl) return;
+    if (!this.ok) return;
     const w = Math.max(1, Math.round(cssW * dpr));
     const h = Math.max(1, Math.round(cssH * dpr));
-    if (this.canvas.width !== w || this.canvas.height !== h) {
-      this.canvas.width = w;
-      this.canvas.height = h;
-      this.sizeDirty = true;
+    if (this.bufW === w && this.bufH === h) return;
+    this.bufW = w;
+    this.bufH = h;
+    this.sizeDirty = true;
+    if (this.lockCanvas) {
+      this.lockCanvas.width = w;
+      this.lockCanvas.height = h;
     }
+    if (this.worker) this.worker.postMessage({ type: 'resize', width: w, height: h, cssW, cssH });
+    else this.pass?.resize(w, h);
   }
 
-  frame(ed: Editor, now: number, sceneDrawn: boolean): void {
-    if (!this.ok || !this.gl || !this.colorCtx) return;
+  /** Push uniforms before a long load so the worker can keep drawing through it. */
+  nudge(ed: Editor, now: number): void {
+    if (!this.ok || !this.worker) return;
+    const building = !!ed.toastMessage?.startsWith('Building ');
+    this.postState(ed, building, this.hasStamp, this.rippleOf(ed, now));
+    if (building) this.present(ed, true);
+  }
+
+  frame(ed: Editor, now: number, _sceneDrawn: boolean): void {
+    if (!this.ok || !this.colorCtx) return;
     const ripple = this.rippleOf(ed, now);
-    const dom = domSig(ed);
-    const rebuild = sceneDrawn || this.sizeDirty || dom !== this.domSig;
+    const building = !!ed.toastMessage?.startsWith('Building ');
+    const rebase = !building && this.wantsRebase(ed);
+    if (rebase) this.basis = { x: ed.cam.x, y: ed.cam.y, zoom: ed.cam.zoom || 1 };
+    const fields = this.fieldKey(ed);
+    const rebuild = this.sizeDirty || rebase || fields !== this.fieldSig;
     if (rebuild) {
-      this.domSig = dom;
+      this.fieldSig = fields;
       this.sizeDirty = false;
       this.rebuild(ed);
     }
-    if (!this.hasStamp && !ripple) {
+    const show = this.hasStamp;
+    if (!show && !ripple && !building) {
       if (this.shown) this.clearGl();
       this.shown = false;
+      this.bitmap?.close();
+      this.bitmap = null;
+      this.bitmapBasis = null;
+      this.acceptPictures = false;
+      this.postState(ed, false, false, null);
+      this.present(ed, false);
       return;
     }
-    if (rebuild) this.upload();
-    this.draw(ed, now, ripple);
+    this.acceptPictures = true;
+    if (rebuild) this.upload(ed);
+    this.publish(ed, now, ripple, building, show);
+    this.present(ed, building);
     this.shown = true;
   }
 
   dispose(): void {
     this.ok = false;
-    this.gl = null;
+    this.stampGen++;
+    this.bitmap?.close();
+    this.bitmap = null;
+    this.bitmapBasis = null;
+    this.lockCanvas?.remove();
+    this.lockCanvas = null;
+    this.lockCtx = null;
+    if (this.heldCanvas) {
+      this.heldCanvas.style.visibility = '';
+      this.heldCanvas.style.transform = '';
+    }
+    const canvas = this.heldCanvas;
+    const held = canvas ? heldAura.get(canvas) : undefined;
+    this.worker = null;
+    this.heldCanvas = null;
+    if (held && canvas) {
+      window.clearTimeout(held.release);
+      held.release = window.setTimeout(() => {
+        if (heldAura.get(canvas) !== held) return;
+        held.worker.postMessage({ type: 'stop' });
+        held.worker.terminate();
+        heldAura.delete(canvas);
+      }, 0);
+    }
+    this.pass?.dispose();
+    this.pass = null;
   }
 
-  private link(gl: WebGL2RenderingContext): boolean {
-    const vs = compile(gl, gl.VERTEX_SHADER, VERT);
-    const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG);
-    if (!vs || !fs) return false;
-    const prog = gl.createProgram();
-    if (!prog) return false;
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      console.warn(gl.getProgramInfoLog(prog));
-      return false;
+  private startWorker(canvas: HTMLCanvasElement): boolean {
+    if (!workerAuraSupported()) return false;
+    if (typeof Worker === 'undefined' || !('transferControlToOffscreen' in canvas)) return false;
+    const existing = heldAura.get(canvas);
+    if (existing) {
+      window.clearTimeout(existing.release);
+      existing.release = 0;
+      this.attachWorker(canvas, existing.worker);
+      return true;
     }
-    this.prog = prog;
-    const vao = gl.createVertexArray();
-    const buf = gl.createBuffer();
-    const halo = gl.createTexture();
-    const flow = gl.createTexture();
-    const noise = gl.createTexture();
-    if (!vao || !buf || !halo || !flow || !noise) return false;
-    this.vao = vao;
-    this.haloTex = halo;
-    this.flowTex = flow;
-    this.noiseTex = noise;
-    gl.bindVertexArray(vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
-    const at = gl.getAttribLocation(prog, 'aPos');
-    gl.enableVertexAttribArray(at);
-    gl.vertexAttribPointer(at, 2, gl.FLOAT, false, 0, 0);
-    gl.bindVertexArray(null);
+    let transferred = false;
+    try {
+      const off = canvas.transferControlToOffscreen();
+      transferred = true;
+      const worker = new Worker(new URL('./auraWorker.ts', import.meta.url), { type: 'module' });
+      heldAura.set(canvas, { worker, release: 0 });
+      this.attachWorker(canvas, worker);
+      worker.postMessage({ type: 'init', canvas: off }, [off]);
+      return true;
+    } catch (err) {
+      console.warn(err);
+      if (transferred) this.fail();
+      return transferred;
+    }
+  }
 
-    const blank = (tex: WebGLTexture, pixel: Uint8Array) => {
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+  private attachWorker(canvas: HTMLCanvasElement, worker: Worker): void {
+    this.heldCanvas = canvas;
+    this.worker = worker;
+    this.ok = true;
+    this.ensureLock(canvas);
+    worker.onmessage = (ev: MessageEvent<{ type?: string; bitmap?: ImageBitmap; basis?: { x: number; y: number; zoom: number }; seq?: number }>) => {
+      const data = ev.data;
+      if (data?.type === 'fail') this.fail();
+      if (data?.type === 'picture' && data.bitmap && data.basis) {
+        const seq = data.seq ?? 0;
+        if (!this.acceptPictures || seq < this.picSeq) {
+          data.bitmap.close();
+          return;
+        }
+        this.picSeq = seq;
+        this.bitmap?.close();
+        this.bitmap = data.bitmap;
+        this.bitmapBasis = { x: data.basis.x, y: data.basis.y, zoom: data.basis.zoom };
+      }
     };
-    blank(halo, new Uint8Array([0, 0, 0, 0]));
-    blank(flow, new Uint8Array([128, 128, 0, 255]));
-    gl.bindTexture(gl.TEXTURE_2D, noise);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 256, 256, 0, gl.RED, gl.UNSIGNED_BYTE, noiseBytes());
+    worker.onerror = () => this.fail();
+  }
 
-    gl.useProgram(prog);
-    gl.uniform1i(gl.getUniformLocation(prog, 'uHalo'), 0);
-    gl.uniform1i(gl.getUniformLocation(prog, 'uFlow'), 1);
-    gl.uniform1i(gl.getUniformLocation(prog, 'uNoise'), 2);
-    this.loc = {
-      uTime: gl.getUniformLocation(prog, 'uTime'),
-      uCss: gl.getUniformLocation(prog, 'uCss'),
-      uRipple: gl.getUniformLocation(prog, 'uRipple'),
-      uRippleColor: gl.getUniformLocation(prog, 'uRippleColor'),
-      uBar: gl.getUniformLocation(prog, 'uBar'),
-    };
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    return true;
+  /** The page canvas stays on the worker. This one is drawn in the same frame as the parts. */
+  private ensureLock(source: HTMLCanvasElement): void {
+    if (this.lockCanvas) return;
+    const lock = document.createElement('canvas');
+    lock.className = 'aura';
+    lock.setAttribute('aria-hidden', 'true');
+    source.after(lock);
+    this.lockCanvas = lock;
+    this.lockCtx = lock.getContext('2d', { alpha: true });
+    source.style.visibility = 'hidden';
+  }
+
+  private fail(): void {
+    if (this.failed) return;
+    this.failed = true;
+    const canvas = this.heldCanvas;
+    const worker = this.worker ?? (canvas ? heldAura.get(canvas)?.worker : undefined);
+    this.ok = false;
+    this.worker = null;
+    this.heldCanvas = null;
+    this.bitmap?.close();
+    this.bitmap = null;
+    this.lockCanvas?.remove();
+    this.lockCanvas = null;
+    this.lockCtx = null;
+    if (canvas) {
+      canvas.style.visibility = '';
+      canvas.style.transform = '';
+      heldAura.delete(canvas);
+    }
+    worker?.terminate();
+    this.onStatus?.(false);
   }
 
   private rippleOf(ed: Editor, now: number): RippleDraw | null {
@@ -469,9 +408,23 @@ export class AuraOverlay {
       ed.placeRipple = null;
       return null;
     }
-    const bar = toolbarEl()?.getBoundingClientRect();
-    if (!bar || bar.width < 2) return null;
-    return { x: rip.x, y: rip.y, age, color: kindAura(ed.theme, rip.kind), bar };
+    const el = toolbarEl();
+    const bar = el?.getBoundingClientRect();
+    if (!bar || bar.width < 2 || bar.height < 2) return null;
+    const raw = el ? parseFloat(getComputedStyle(el).borderTopLeftRadius) : 16;
+    const radius = Math.min(Number.isFinite(raw) ? raw : 16, bar.width * 0.5, bar.height * 0.5);
+    const color = kindAura(ed.theme, rip.kind);
+    return {
+      x: rip.x,
+      y: rip.y,
+      age,
+      color,
+      mate: auraPartner(color),
+      dirx: rip.dx,
+      diry: rip.dy,
+      bar,
+      radius,
+    };
   }
 
   private ensureStamp(cssW: number, cssH: number, dpr: number): boolean {
@@ -496,6 +449,49 @@ export class AuraOverlay {
     return true;
   }
 
+  /**
+   * Everything the distance stamp depends on. Signal colours and the moving noise
+   * are not in here: those stay in the shader, so a live circuit does not rebuild the field.
+   */
+  private fieldKey(ed: Editor): string {
+    const ids = [...ed.selection].sort();
+    const sel = ids.join(',');
+    if (ed.getSimVersion() !== this.activeVer || sel !== this.activeSel) {
+      this.activeVer = ed.getSimVersion();
+      this.activeSel = sel;
+      const on: string[] = [];
+      for (const c of ed.doc.components.values()) {
+        if (!isInput(c.kind) || ed.selection.has(c.id) || !ed.isActive(c)) continue;
+        on.push(c.id);
+      }
+      this.activeSig = on.join(',');
+    }
+    const bits = [
+      ed.dpr,
+      ed.width,
+      ed.height,
+      ed.theme.id,
+      ed.wireStyle,
+      ed.waveSelection ? 1 : 0,
+      ed.getVersion(),
+      sel,
+      this.activeSig,
+    ];
+    for (const id of ids) {
+      const c = ed.doc.components.get(id);
+      if (c) {
+        bits.push(c.x.toFixed(1), c.y.toFixed(1), c.w, c.h, c.rot);
+        continue;
+      }
+      const b = ed.doc.boxes.get(id);
+      if (b) bits.push(b.x.toFixed(1), b.y.toFixed(1), b.w, b.h, (ed.boxT.get(id) ?? 1).toFixed(3));
+    }
+    const closed: string[] = [];
+    for (const [id, t] of ed.boxT) if (t < 0.02) closed.push(id);
+    if (closed.length) bits.push(closed.sort().join(','));
+    return bits.join('|');
+  }
+
   private rebuild(ed: Editor): void {
     this.hasStamp = false;
     const cssW = ed.width;
@@ -503,22 +499,26 @@ export class AuraOverlay {
     if (cssW < 2 || cssH < 2 || !this.colorCtx || !this.flowCtx) return;
     this.ensureStamp(cssW, cssH, ed.dpr);
     const s = this.stampW / cssW;
-    const zoom = ed.cam.zoom || 1;
+    const cam = this.basis ?? ed.cam;
+    const zoom = cam.zoom || 1;
     this.view = {
       wx: zoom * s,
       wy: zoom * s,
-      tx: -ed.cam.x * zoom * s,
-      ty: -ed.cam.y * zoom * s,
+      tx: -cam.x * zoom * s,
+      ty: -cam.y * zoom * s,
       s,
       zoom,
     };
+    this.stampCam = { x: cam.x, y: cam.y, zoom };
     this.clearStamp();
-    const view = inflate(ed.viewRect, 40 / zoom);
+    const view = inflate({ x: cam.x, y: cam.y, w: cssW / zoom, h: cssH / zoom }, 40 / zoom);
     const covered: Box[] = [];
     for (const b of ed.doc.boxes.values()) if ((ed.boxT.get(b.id) ?? 1) < 0.02) covered.push(b);
 
     for (const c of ed.doc.components.values()) {
       const selected = ed.selection.has(c.id);
+      if (c.kind === 'note' || c.kind === 'marker') continue;
+      if (selected && !ed.waveSelection) continue;
       const powered = !selected && isInput(c.kind) && ed.isActive(c);
       if (!selected && !powered) continue;
       if (!rectsOverlap(componentBounds(c), view)) continue;
@@ -533,40 +533,35 @@ export class AuraOverlay {
         selected ? 1 : 0.5,
         local.w,
         local.h,
-        c.kind === 'note',
       );
     }
 
-    for (const b of ed.doc.boxes.values()) {
-      if (!ed.selection.has(b.id)) continue;
-      if (!rectsOverlap(b, view)) continue;
-      if (covered.some((o) => o !== b && boxInBox(b, o))) continue;
-      const reach = partReach(b.w, b.h);
-      this.paintWorldField(
-        cachedPath(roundRectD(b.x, b.y, b.w, b.h, 8)),
-        vividAura(ed.theme, b.color ?? ed.theme.box, b.id),
-        reach,
-        0,
-        1,
-        'two',
-        b,
-        true,
-      );
+    if (ed.waveSelection) {
+      for (const b of ed.doc.boxes.values()) {
+        if (!ed.selection.has(b.id)) continue;
+        const open = 1 - (ed.boxT.get(b.id) ?? 1);
+        if (open < 0.02) continue;
+        if (!rectsOverlap(b, view)) continue;
+        if (covered.some((o) => o !== b && boxInBox(b, o))) continue;
+        const reach = partReach(b.w, b.h);
+        this.paintWorldField(
+          cachedPath(roundRectD(b.x, b.y, b.w, b.h, 8)),
+          vividAura(ed.theme, b.color ?? ed.theme.box, b.id),
+          reach,
+          0,
+          open,
+          'two',
+          b,
+          true,
+        );
+      }
     }
 
     this.paintWires(ed, covered, view);
-
-    if (ed.placing) {
-      const rect = placeRect();
-      if (rect) this.paintCss(rect, 10, kindAura(ed.theme, ed.placing), 18, 0.35);
-    }
-    if (ed.toastMessage?.startsWith('Building ')) {
-      const rect = toastRect();
-      if (rect) this.paintCss(rect, 10, accentAura(ed.theme), 22, 1);
-    }
   }
 
   private paintWires(ed: Editor, covered: Box[], view: Rect): void {
+    if (!ed.waveSelection) return;
     let picked = false;
     for (const id of ed.selection) {
       if (ed.doc.wires.has(id)) {
@@ -593,6 +588,7 @@ export class AuraOverlay {
     const map = ed.routeMap ?? avoidMap(doc);
     const zoom = this.view.zoom;
     const core = wireCore(zoom, ed.dpr);
+    const idle = parseRgb(idleWire(ed.theme));
     for (const w of doc.wires.values()) {
       if (w.cable) continue;
       if (!onNet(w.from, w.lane ?? 0)) continue;
@@ -604,7 +600,7 @@ export class AuraOverlay {
       if (!rectsOverlap(inflate(curveBounds(curve), 8), view)) continue;
       if (covered.length && covered.some((bx) => pointInRect(curve.a, bx) && pointInRect(curve.b, bx))) continue;
       const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
-      const rgb = parseRgb(wireColors(ed.parts.roots.get(srcKey) ?? w.from, ed.theme).on);
+      const rgb = ed.parts.live.has(w.id) ? parseRgb(wireColors(ed.parts.roots.get(srcKey) ?? w.from, ed.theme).on) : idle;
       if (!rgb) continue;
       this.paintWireField(curve, rgb, core);
     }
@@ -624,9 +620,11 @@ export class AuraOverlay {
       if (!curve) continue;
       if (!rectsOverlap(inflate(curveBounds(curve), n * CABLE_PITCH), view)) continue;
       const key = hit ? `${w.from}#${hit}` : w.from;
-      const rgb = parseRgb(wireColors(ed.parts.roots.get(key) ?? w.from, ed.theme).on);
+      const laneLive = ed.parts.live.has(hit ? `${w.id}#${hit}` : w.id);
+      const rgb = laneLive ? parseRgb(wireColors(ed.parts.roots.get(key) ?? w.from, ed.theme).on) : idle;
       if (!rgb) continue;
-      this.paintWireField(curve, rgb, n * CABLE_PITCH + 0.8);
+      const sleeve = Math.max(core, 0.5) * WIRE_SLEEVE;
+      this.paintWireField(curve, rgb, n * CABLE_PITCH + 0.8, sleeve);
     }
   }
 
@@ -648,60 +646,10 @@ export class AuraOverlay {
     }
   }
 
-  private both(fn: (ctx: CanvasRenderingContext2D) => void): void {
-    fn(this.colorCtx!);
-    fn(this.flowCtx!);
-  }
-
-  private setCss(): void {
-    const { s } = this.view;
-    this.both((ctx) => ctx.setTransform(s, 0, 0, s, 0, 0));
-  }
-
-  /**
-   * Full strength at the outline, then a smooth falloff.
-   * The fade runs out to 5× the previous reach: a smoothstep's amplitude-weighted
-   * middle sits at 30% of that span, which is 1.5× the old maximum distance.
-   * `holePx` is the wire body; parts pass 0 and the silhouette is the edge.
-   */
-  private strokeBands(path: Path2D, rgb: Rgb, outerPx: number, strength: number, zoomDiv: number, holePx = 0): void {
-    const c = this.colorCtx!;
-    const f = this.flowCtx!;
-    const oldReach = Math.max(0.5, (outerPx - holePx) / 2);
-    const far = oldReach * 5;
-    const edge0 = holePx / 2;
-    const blue = Math.round(strength * 255);
-    const steps = 12;
-    c.strokeStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
-    c.globalAlpha = 1;
-    f.globalAlpha = 1;
-    for (let i = steps; i >= 1; i--) {
-      const dist = (i / steps) * far;
-      const env = 1 - smoothstep(0, far, dist);
-      const lw = ((edge0 + dist) * 2) / zoomDiv;
-      c.lineWidth = lw;
-      c.stroke(path);
-      const layer = dist <= oldReach * 1.5 ? 255 : 0;
-      f.strokeStyle = `rgb(${layer},${Math.round(env * 255)},${blue})`;
-      f.lineWidth = lw;
-      f.stroke(path);
-    }
-    this.hasStamp = true;
-  }
-
-  private eraseFill(path: Path2D): void {
-    this.both((ctx) => {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = '#000';
-      ctx.fill(path);
-      ctx.globalCompositeOperation = 'source-over';
-    });
-  }
-
   /**
    * Distance measured in the part's own units, so zooming scales the wave with the part.
    * 0 on the outline, 1 at `reach` past it. Two layers store red at half of blue; a wire's single layer stores a quarter.
-   * Notes and boxes are hollow so the wave stays outside the shape. Each field is merged by the closer outline.
+   * The interior stays filled so the cover's anti-aliased edge blends into the wave. Each field is merged by the closer outline.
    */
   private paintLocalField(
     m: Xf,
@@ -711,7 +659,6 @@ export class AuraOverlay {
     strength: number,
     bodyW: number,
     bodyH: number,
-    hollow: boolean,
   ): void {
     const pad = reach * 1.2 + 16;
     const rect = this.gateStampRect(m, bodyW, bodyH, pad);
@@ -722,7 +669,7 @@ export class AuraOverlay {
       ctx.setTransform(wx * m.a, wy * m.b, wx * m.c, wy * m.d, wx * m.e + tx - rect.x, wy * m.f + ty - rect.y);
       this.readyStroke(ctx);
     };
-    this.strokeField(place, path, rgb, reach, 0, strength, 'two', hollow);
+    this.strokeField(place, path, rgb, reach, 0, strength, 'two', false);
     this.keepCloserField(rect);
     this.hasStamp = true;
   }
@@ -751,8 +698,7 @@ export class AuraOverlay {
     this.hasStamp = true;
   }
 
-  private paintWireField(curve: WireCurve, rgb: Rgb, core: number): void {
-    const reach = Math.max(core, 0.5) * WIRE_SLEEVE;
+  private paintWireField(curve: WireCurve, rgb: Rgb, core: number, reach = Math.max(core, 0.5) * WIRE_SLEEVE): void {
     this.paintWorldField(curvePath(curve), rgb, reach, core / 2, 0.5, 'one', curveBounds(curve), false);
   }
 
@@ -916,59 +862,175 @@ export class AuraOverlay {
     this.colorCtx!.putImageData(dstC, rect.x, rect.y);
   }
 
-  private paintCss(r: DOMRect, radius: number, rgb: Rgb, outer: number, strength: number): void {
-    const rad = Math.min(radius, r.width / 2, r.height / 2);
-    const path = new Path2D(roundRectD(r.x, r.y, r.width, r.height, rad));
-    this.setCss();
-    this.strokeBands(path, rgb, outer, strength, 1);
-    this.eraseFill(path);
+  /** Slide a stamp drawn at `from` onto the camera on screen now. */
+  private mapBetween(from: { x: number; y: number; zoom: number } | null, ed: Editor): [number, number, number] {
+    if (!from) return [1, 0, 0];
+    const zoom = ed.cam.zoom || 1;
+    const cssW = ed.width || 1;
+    const cssH = ed.height || 1;
+    return [from.zoom / zoom, ((ed.cam.x - from.x) * from.zoom) / cssW, ((ed.cam.y - from.y) * from.zoom) / cssH];
   }
 
-  private upload(): void {
-    const gl = this.gl;
-    if (!gl || !this.haloTex || !this.flowTex) return;
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.haloTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.colorCanvas);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.flowTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.flowCanvas);
+  /** Where the picture the worker is showing sits in this frame. */
+  private stampMap(ed: Editor): [number, number, number] {
+    return this.mapBetween(this.postedCam, ed);
+  }
+
+  private upload(ed: Editor): void {
+    if (!this.worker) {
+      this.postedCam = this.stampCam ? { ...this.stampCam } : null;
+      this.pass?.upload(this.colorCanvas, this.flowCanvas);
+      return;
+    }
+    const built = this.stampCam ? { ...this.stampCam } : null;
+    const gen = ++this.stampGen;
+    const copy = (src: HTMLCanvasElement) => {
+      const c = document.createElement('canvas');
+      c.width = src.width;
+      c.height = src.height;
+      const ctx = c.getContext('2d');
+      if (!ctx) return Promise.reject(new Error('stamp copy'));
+      ctx.drawImage(src, 0, 0);
+      return createImageBitmap(c);
+    };
+    void Promise.all([copy(this.colorCanvas), copy(this.flowCanvas)])
+      .then(([colorBmp, flowBmp]) => {
+        if (gen !== this.stampGen || !this.worker || !built) {
+          colorBmp.close();
+          flowBmp.close();
+          return;
+        }
+        this.postedCam = built;
+        this.worker.postMessage(
+          { type: 'stamps', color: colorBmp, flow: flowBmp, basis: built },
+          [colorBmp, flowBmp],
+        );
+      })
+      .catch((err) => console.warn(err));
   }
 
   private clearGl(): void {
-    const gl = this.gl;
-    if (!gl) return;
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    this.pass?.clear();
   }
 
-  private draw(ed: Editor, now: number, ripple: RippleDraw | null): void {
-    const gl = this.gl;
-    if (!gl || !this.prog || !this.vao) return;
-    gl.useProgram(this.prog);
-    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.haloTex);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.flowTex);
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.noiseTex);
-    gl.uniform1f(this.loc.uTime, now / 1000);
-    gl.uniform2f(this.loc.uCss, ed.width, ed.height);
-    if (ripple) {
-      gl.uniform4f(this.loc.uRipple, ripple.x, ripple.y, ripple.age, 1);
-      gl.uniform3f(this.loc.uRippleColor, ripple.color.r / 255, ripple.color.g / 255, ripple.color.b / 255);
-      gl.uniform4f(this.loc.uBar, ripple.bar.x, ripple.bar.y, ripple.bar.width, ripple.bar.height);
-    } else {
-      gl.uniform4f(this.loc.uRipple, 0, 0, 0, 0);
-      gl.uniform3f(this.loc.uRippleColor, 0, 0, 0);
-      gl.uniform4f(this.loc.uBar, 0, 0, 1, 1);
+  private publish(ed: Editor, now: number, ripple: RippleDraw | null, building: boolean, show: boolean): void {
+    if (this.worker) {
+      this.postState(ed, building, show, ripple);
+      return;
     }
-    gl.bindVertexArray(this.vao);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    this.pass?.draw(now / 1000, this.drawOf(ed, building, ripple));
+  }
+
+  private postState(ed: Editor, building: boolean, show: boolean, ripple: RippleDraw | null): void {
+    const rip = ed.placeRipple;
+    this.worker?.postMessage({
+      type: 'state',
+      cssW: ed.width,
+      cssH: ed.height,
+      building,
+      show,
+      cam: { x: ed.cam.x, y: ed.cam.y, zoom: ed.cam.zoom || 1 },
+      ripple:
+        ripple && rip
+          ? {
+              x: ripple.x,
+              y: ripple.y,
+              dirx: ripple.dirx,
+              diry: ripple.diry,
+              radius: ripple.radius,
+              color: [ripple.color.r / 255, ripple.color.g / 255, ripple.color.b / 255],
+              mate: [ripple.mate.r / 255, ripple.mate.g / 255, ripple.mate.b / 255],
+              bar: [ripple.bar.x, ripple.bar.y, ripple.bar.width, ripple.bar.height],
+              startAbs: performance.timeOrigin + rip.t0,
+            }
+          : null,
+    });
+  }
+
+  private drawOf(ed: Editor, building: boolean, ripple: RippleDraw | null): AuraDraw {
+    return {
+      cssW: ed.width,
+      cssH: ed.height,
+      building,
+      map: this.stampMap(ed),
+      place: [1, 0, 0] as [number, number, number],
+      ripple: ripple
+        ? {
+            x: ripple.x,
+            y: ripple.y,
+            age: ripple.age,
+            dirx: ripple.dirx,
+            diry: ripple.diry,
+            radius: ripple.radius,
+            color: [ripple.color.r / 255, ripple.color.g / 255, ripple.color.b / 255],
+            mate: [ripple.mate.r / 255, ripple.mate.g / 255, ripple.mate.b / 255],
+            bar: [ripple.bar.x, ripple.bar.y, ripple.bar.width, ripple.bar.height],
+          }
+          : null,
+    };
+  }
+
+  /** A fresh stamp once the placed picture no longer covers the view. */
+  private wantsRebase(ed: Editor): boolean {
+    const basis = this.basis;
+    if (!basis) return true;
+    const zoom = ed.cam.zoom || 1;
+    const dx = (ed.cam.x - basis.x) * zoom;
+    const dy = (ed.cam.y - basis.y) * zoom;
+    if (Math.hypot(dx, dy) > Math.min(ed.width, ed.height) * 0.35) return true;
+    const ratio = zoom / (basis.zoom || 1);
+    return ratio < 0.8 || ratio > 1.25;
+  }
+
+  private stillView(ed: Editor): boolean {
+    const prev = this.lastPresented;
+    if (!prev) return false;
+    const zoom = ed.cam.zoom || 1;
+    const dx = (ed.cam.x - prev.x) * zoom;
+    const dy = (ed.cam.y - prev.y) * zoom;
+    if (Math.hypot(dx, dy) > 0.5) return false;
+    const ratio = zoom / (prev.zoom || 1);
+    return ratio > 0.999 && ratio < 1.001;
+  }
+
+  /**
+   * While the page is still and a build is blocking the main thread, the worker canvas stays
+   * visible so the wave can keep moving. Scrolling draws the worker's picture here instead,
+   * in the same frame as the parts.
+   */
+  private present(ed: Editor, building: boolean): void {
+    const source = this.heldCanvas;
+    const lock = this.lockCanvas;
+    if (!this.worker || !source || !lock) return;
+    const from = this.bitmapBasis;
+    const sameSpace = !!from && !!this.basis && from.x === this.basis.x && from.y === this.basis.y && from.zoom === this.basis.zoom;
+    if (building && from && sameSpace && this.stillView(ed)) {
+      const [s, tx, ty] = cameraPlace(from, ed.cam);
+      source.style.visibility = 'visible';
+      source.style.transformOrigin = '0 0';
+      source.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+      lock.style.visibility = 'hidden';
+    } else {
+      source.style.visibility = 'hidden';
+      source.style.transform = 'none';
+      lock.style.visibility = 'visible';
+      this.blit(ed);
+    }
+    this.lastPresented = { x: ed.cam.x, y: ed.cam.y, zoom: ed.cam.zoom || 1 };
+  }
+
+  private blit(ed: Editor): void {
+    const ctx = this.lockCtx;
+    const canvas = this.lockCanvas;
+    if (!ctx || !canvas) return;
+    const dpr = ed.dpr || 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const bmp = this.bitmap;
+    const from = this.bitmapBasis;
+    if (!bmp || !from) return;
+    const [s, tx, ty] = cameraPlace(from, ed.cam);
+    ctx.setTransform(s * dpr, 0, 0, s * dpr, tx * dpr, ty * dpr);
+    ctx.drawImage(bmp, 0, 0, ed.width || 1, ed.height || 1);
   }
 }

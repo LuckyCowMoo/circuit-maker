@@ -73,7 +73,8 @@ button {
   align-items: stretch;
   gap: 8px;
   pointer-events: none;
-  z-index: 10;
+  /* Above the selection waves, so a part's colour slides under the toolbar. */
+  z-index: 12;
 }
 
 .dock > * {
@@ -284,6 +285,10 @@ button {
   width: 34px;
   height: 24px;
   overflow: visible;
+}
+
+canvas.icon-shape {
+  display: block;
 }
 
 /* ---------------------------------------------------------------- selection properties */
@@ -757,6 +762,26 @@ kbd {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.toast.building {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 13;
+  transform: translate(-50%, -50%);
+  max-width: 320px;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  font-size: 22px;
+  font-weight: 700;
+  pointer-events: none;
+  animation: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 0 14px rgba(0, 0, 0, 0.35);
 }
 
 .icon-chip {

@@ -12,6 +12,8 @@ export interface PartContext {
   masks: Map<string, string>;
   /** The real driver behind each component's output (see `netRoots`). */
   roots: Map<string, string>;
+  /** Wire ids, and `wireId#lane` cable lanes, that join a real output to a real input. */
+  live: Set<string>;
   colors: (net: string, theme: Theme) => WireColors;
 }
 

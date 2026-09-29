@@ -8,6 +8,7 @@ import {
   findFreeSpot,
   idTaken,
   itemsBounds,
+  liveChannels,
   makeComponent,
   netRoots,
   nextLabel,
@@ -192,6 +193,7 @@ const KEEP_TABS = 6;
 const THEME_KEY = 'circuit-maker:theme';
 const BEND_KEY = 'circuit-maker:bend-wires';
 const PROPS_KEY = 'circuit-maker:props-near';
+const WAVE_KEY = 'circuit-maker:wave-selection';
 const DEFAULT_BOX = { w: 240, h: 160 };
 /** Space kept between a resized box and the walls of the boxes around it. */
 const BOX_GAP = 20;
@@ -334,6 +336,8 @@ export class Editor {
   wireStyle: WireStyle = wireStyleOf(storage.get(BEND_KEY));
   /** When set, the selection menu sits beside the part instead of above the toolbar. */
   propsNear = storage.get(PROPS_KEY) === '1';
+  /** Colour-wave selection. Off uses the flat blue outline. Notes and markers always use blue. */
+  waveSelection = storage.get(WAVE_KEY) !== '0';
   tool: Tool = 'select';
   selection = new Set<string>();
   sim = new Simulator();
@@ -348,7 +352,7 @@ export class Editor {
   /** Parts redrawn above the aura so the wave sits behind them. */
   cover: HTMLCanvasElement | null = null;
   coverCtx: CanvasRenderingContext2D | null = null;
-  /** One-shot wave along the toolbar after a part is dragged out of it. */
+  /** One-shot goo along the toolbar outline after a part is dragged out of it. */
   placeRipple: PlaceRipple | null = null;
   /** Wire routes from the last scene draw, shared with the aura stamp. */
   routeMap: AvoidMap | null = null;
@@ -364,8 +368,6 @@ export class Editor {
   hoverEdge: BoxEdges | null = null;
   /** Edge of a text box under the pointer, which a drag would move. */
   hoverNote: { id: string; l: boolean; t: boolean; r: boolean; b: boolean } | null = null;
-  /** A text box is close enough to the pointer to draw its inner shadow. */
-  private noteLit = false;
   /** Note or marker whose label is being typed on the canvas. */
   editingId: string | null = null;
   /** Viewport point of the click that opened a text box, so the caret can land there. */
@@ -376,7 +378,7 @@ export class Editor {
   toastAction: { label: string; run: () => void } | null = null;
   arrows: Arrow[] = [];
   /** Wiring-derived drawing data, refreshed whenever the topology changes. */
-  parts: PartContext = { doc: this.doc, masks: new Map(), roots: new Map(), colors: colorsFor };
+  parts: PartContext = { doc: this.doc, masks: new Map(), roots: new Map(), live: new Set(), colors: colorsFor };
   /** Bumped when any signal changes, for UI that shows live values. */
   simVersion = 0;
   /** Box openness from the last frame: 1 = contents visible, 0 = covered. */
@@ -459,7 +461,10 @@ export class Editor {
 
   attachAura(canvas: HTMLCanvasElement): void {
     this.aura?.dispose();
-    this.aura = new AuraOverlay(canvas);
+    this.aura = new AuraOverlay(canvas, (ok) => {
+      this.auraOn = ok;
+      this.needsRender = true;
+    });
     this.auraOn = this.aura.ok;
     if (this.width) this.aura.resize(this.width, this.height, this.dpr);
   }
@@ -548,9 +553,16 @@ export class Editor {
 
   private async advanceFrame(): Promise<void> {
     const now = this.latestNow;
+    this.aura?.nudge(this, now);
     if (this.topologyDirty) {
       this.sim.compile(this.doc);
-      this.parts = { doc: this.doc, masks: pinMasks(this.doc), roots: netRoots(this.doc), colors: colorsFor };
+      this.parts = {
+        doc: this.doc,
+        masks: pinMasks(this.doc),
+        roots: netRoots(this.doc),
+        live: liveChannels(this.doc),
+        colors: colorsFor,
+      };
       this.topologyDirty = false;
     }
     this.sim.tickTime(now);
@@ -622,10 +634,12 @@ export class Editor {
         this.toastMessage = null;
         this.toastAction = null;
         this.emit();
+        this.aura?.nudge(this, performance.now());
       },
       action ? 10000 : 4000,
     );
     this.emit();
+    this.aura?.nudge(this, performance.now());
   }
 
   // ---------------------------------------------------------------- persistence
@@ -802,11 +816,6 @@ export class Editor {
     return { x: (w.x - this.cam.x) * this.cam.zoom, y: (w.y - this.cam.y) * this.cam.zoom };
   }
 
-  /** Pointer in world coordinates. The text-box well treats this as the light. */
-  pointerWorld(): Point {
-    return this.toWorld(this.mouse);
-  }
-
   get viewRect(): Rect {
     const z = this.cam.zoom;
     return { x: this.cam.x, y: this.cam.y, w: this.width / z, h: this.height / z };
@@ -911,6 +920,13 @@ export class Editor {
     this.emit();
   }
 
+  setWaveSelection(on: boolean): void {
+    this.waveSelection = on;
+    storage.set(WAVE_KEY, on ? '1' : '0');
+    this.needsRender = true;
+    this.emit();
+  }
+
   setDocName(name: string): void {
     this.doc.name = name;
     this.scheduleAutosave();
@@ -988,16 +1004,32 @@ export class Editor {
     const sy = e.clientY;
     const homeTop = placeHomeTop(e);
     let left = false;
+    let lastX = sx;
+    let lastY = sy;
     const move = (ev: PointerEvent) => {
       if (this.placing !== kind) return;
       this.updateGhost(this.toWorld(this.screenPoint(ev)));
-      if (left || homeTop == null || ev.clientY >= homeTop - 4) return;
-      const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
-      const br = bar?.getBoundingClientRect();
-      if (!br) return;
-      left = true;
-      const x = Math.max(br.left, Math.min(ev.clientX, br.right));
-      this.placeRipple = { x, y: br.top, t0: performance.now(), kind };
+      if (!left && homeTop != null && ev.clientY < homeTop - 4) {
+        const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
+        const br = bar?.getBoundingClientRect();
+        if (br) {
+          left = true;
+          const x = Math.max(br.left, Math.min(ev.clientX, br.right));
+          const vx = ev.clientX - lastX;
+          const vy = ev.clientY - lastY;
+          const len = Math.hypot(vx, vy);
+          this.placeRipple = {
+            x,
+            y: br.top,
+            dx: len > 2 ? vx / len : 0,
+            dy: len > 2 ? vy / len : -1,
+            t0: performance.now(),
+            kind,
+          };
+        }
+      }
+      lastX = ev.clientX;
+      lastY = ev.clientY;
     };
     const up = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', move);
@@ -2316,7 +2348,6 @@ export class Editor {
     this.mouse = s;
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, s);
     const w = this.toWorld(s);
-    this.trackNoteLight(w);
     if (this.placing) {
       this.updateGhost(w);
     }
@@ -2517,10 +2548,10 @@ export class Editor {
         if (d.r) x1 = Math.max(snap(o.x + o.w + dx), x0 + IO_MIN);
         if (d.t) y0 = Math.min(snap(o.y + dy), y1 - IO_MIN);
         if (d.b) y1 = Math.max(snap(o.y + o.h + dy), y0 + IO_MIN);
-        const ww = clamp(x1 - x0, IO_MIN, IO_MAX);
-        const hh = clamp(y1 - y0, IO_MIN, IO_MAX);
-        c.x = ww !== x1 - x0 && d.l ? x1 - ww : x0;
-        c.y = hh !== y1 - y0 && d.t ? y1 - hh : y0;
+        const ww = x1 - x0;
+        const hh = y1 - y0;
+        c.x = x0;
+        c.y = y0;
         if (c.rot % 2) {
           c.w = hh;
           c.h = ww;
@@ -2627,24 +2658,6 @@ export class Editor {
     }
     this.needsRender = true;
     this.updateCursor();
-  }
-
-  /** Redraw while a text box is near the pointer, and once more when the light falls out of range. */
-  private trackNoteLight(w: Point): void {
-    const far = 560 / this.cam.zoom;
-    let near = false;
-    for (const c of this.doc.components.values()) {
-      if (c.kind !== 'note') continue;
-      const r = bodyRect(c);
-      const dx = Math.max(Math.abs(w.x - (r.x + r.w / 2)) - r.w / 2, 0);
-      const dy = Math.max(Math.abs(w.y - (r.y + r.h / 2)) - r.h / 2, 0);
-      if (dx * dx + dy * dy < far * far) {
-        near = true;
-        break;
-      }
-    }
-    if (near || this.noteLit) this.needsRender = true;
-    this.noteLit = near;
   }
 
   private updateHover(w: Point, s: Point): void {

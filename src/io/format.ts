@@ -322,7 +322,7 @@ export function parseCircuit(text: string): ParseResult {
     if (c.kind === 'marker') c.name = str(o.name) ?? 'Marker';
     if (c.kind === 'note') {
       c.name = str(o.name) ?? 'Text';
-      const size = (v: unknown, fallback: number) => Math.max(IO_MIN, Math.min(IO_MAX, snap(num(v, fallback)) || fallback));
+      const size = (v: unknown, fallback: number) => Math.max(IO_MIN, snap(num(v, fallback)) || fallback);
       c.w = size(o.w, 180);
       c.h = size(o.h, 80);
     }

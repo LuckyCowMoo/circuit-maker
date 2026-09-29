@@ -23,8 +23,8 @@ import {
 import { floatsAboveBoxes, partInfo, partLabel } from '../model/parts';
 import { avoidMap, bendAround, blockRects, routeSeed, routedWire, squareWire } from '../model/route';
 import { placePort } from '../model/ports';
-import { componentOps, noteHole, textRect, type DrawOp, type TextOp } from '../model/shapes';
-import { contrastText, wireColors, type Theme, type WireColors } from '../model/themes';
+import { componentOps, textRect, type DrawOp, type TextOp } from '../model/shapes';
+import { contrastText, idleWire, wireColors, type Theme, type WireColors } from '../model/themes';
 import type { Box, Component, Point, Rect } from '../model/types';
 import { bundleSource, isInput, laneCount } from '../model/types';
 import { FONT_STACK } from '../io/export';
@@ -402,48 +402,6 @@ function drawHandles(ctx: CanvasRenderingContext2D, r: Rect, theme: Theme, px: n
   }
 }
 
-const WELL_FAR = 560;
-
-/** Soft inner shadow of a text-box hole. Blur is scaled into the box's units so zoom does not change it. */
-function drawNoteWells(ctx: CanvasRenderingContext2D, list: Component[], ed: Editor): void {
-  const light = ed.pointerWorld();
-  const z = ed.cam.zoom;
-  // Canvas shadow offsets ignore the camera transform, so convert box units into device pixels.
-  const px = ed.dpr * z;
-  for (const c of list) {
-    if (c.kind !== 'note') continue;
-    const r = bodyRect(c);
-    const dx = Math.max(Math.abs(light.x - (r.x + r.w / 2)) - r.w / 2, 0);
-    const dy = Math.max(Math.abs(light.y - (r.y + r.h / 2)) - r.h / 2, 0);
-    if (Math.hypot(dx, dy) * z >= WELL_FAR) continue;
-    const m = xformOf(c);
-    const det = m.a * m.d - m.b * m.c || 1;
-    const lx = light.x - m.e;
-    const ly = light.y - m.f;
-    const localX = (m.d * lx - m.c * ly) / det;
-    const localY = (-m.b * lx + m.a * ly) / det;
-    const vx = localX - c.w / 2;
-    const vy = localY - c.h / 2;
-    const len = Math.hypot(vx, vy) || 1;
-    const band = Math.min(c.w, c.h) * 0.05;
-    const blur = Math.min(c.w, c.h) * 0.08;
-    const hole = new Path2D(noteHole(c.w, c.h, c.id));
-    const outside = new Path2D(noteHole(c.w, c.h, c.id));
-    const pad = band + blur + 12;
-    outside.rect(-pad, -pad, c.w + pad * 2, c.h + pad * 2);
-    ctx.save();
-    ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f);
-    ctx.clip(hole);
-    ctx.shadowColor = 'rgba(28, 16, 4, 0.62)';
-    ctx.shadowBlur = blur * px;
-    ctx.shadowOffsetX = (-vx / len) * band * px;
-    ctx.shadowOffsetY = (-vy / len) * band * px;
-    ctx.fillStyle = '#000';
-    ctx.fill(outside, 'evenodd');
-    ctx.restore();
-  }
-}
-
 export function renderScene(ed: Editor): void {
   const ctx = ed.ctx;
   if (!ctx) return;
@@ -512,6 +470,8 @@ export function renderScene(ed: Editor): void {
     }
   }
   const onNet = (from: string, lane: number) => picked.has(signals.get(laneKey(from, lane)) ?? laneKey(from, lane));
+  const idle = idleWire(theme);
+  const flatPick = !ed.auraOn || !ed.waveSelection;
   const selectedCurves: WireCurve[] = [];
   const coverWires: { curve: WireCurve; color: string; width: number }[] = [];
   for (const w of doc.wires.values()) {
@@ -525,22 +485,24 @@ export function renderScene(ed: Editor): void {
     if (covered.length && covered.some((bx) => pointInRect(curve.a, bx) && pointInRect(curve.b, bx))) continue;
     const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
     const cols = colorsFor(pc.roots.get(srcKey) ?? w.from, theme);
+    const connected = pc.live.has(w.id);
+    const on = connected && sim.value(w.from, w.lane ?? 0);
+    const ink = on ? cols.on : connected ? cols.off : idle;
     if (onNet(w.from, w.lane ?? 0)) {
       selectedCurves.push(curve);
-      const on = sim.value(w.from, w.lane ?? 0);
       coverWires.push({
         curve,
-        color: on ? cols.on : cols.off,
+        color: ink,
         width: on ? (far ? dp : Math.max(3, 1.5 * px)) : Math.max(STROKE_W, dp),
       });
     }
-    if (sim.value(w.from, w.lane ?? 0)) {
+    if (on) {
       let entry = onPaths.get(cols.on);
       if (!entry) onPaths.set(cols.on, (entry = { cols, path: new Path2D() }));
       addCurve(entry.path, curve);
     } else {
-      let p = offPaths.get(cols.off);
-      if (!p) offPaths.set(cols.off, (p = new Path2D()));
+      let p = offPaths.get(ink);
+      if (!p) offPaths.set(ink, (p = new Path2D()));
       addCurve(p, curve);
     }
   }
@@ -549,7 +511,7 @@ export function renderScene(ed: Editor): void {
     ctx.strokeStyle = color;
     ctx.stroke(p);
   }
-  if (!ed.auraOn && selectedCurves.length) {
+  if (flatPick && selectedCurves.length) {
     ctx.strokeStyle = theme.selection;
     ctx.globalAlpha = 0.45;
     ctx.lineWidth = Math.max(8, 6 * px);
@@ -593,12 +555,13 @@ export function renderScene(ed: Editor): void {
       ctx.beginPath();
       ctx.moveTo(stripe[0].x, stripe[0].y);
       for (let k = 1; k < stripe.length; k++) ctx.lineTo(stripe[k].x, stripe[k].y);
-      ctx.strokeStyle = sim.value(w.from, i) ? cols.on : cols.off;
+      const connected = pc.live.has(i ? `${w.id}#${i}` : w.id);
+      ctx.strokeStyle = connected ? (sim.value(w.from, i) ? cols.on : cols.off) : idle;
       ctx.stroke();
     }
     let cableHit = false;
     for (let i = 0; i < n; i++) if (onNet(w.from, i)) cableHit = true;
-    if (cableHit && !ed.auraOn) {
+    if (cableHit && flatPick) {
       ctx.strokeStyle = theme.selection;
       ctx.globalAlpha = 0.35;
       ctx.lineWidth = n * CABLE_PITCH + 4;
@@ -641,7 +604,6 @@ export function renderScene(ed: Editor): void {
     } else if (!(covered.length && componentCoveredBy(ed, c, covered))) lower.push(c);
   }
   drawParts(lower);
-  drawNoteWells(ctx, lower, ed);
 
   // Box overlays, innermost first so outer boxes cover inner ones.
   const labels: TextOp[] = [];
@@ -657,37 +619,15 @@ export function renderScene(ed: Editor): void {
   for (let i = visible.length - 1; i >= 0; i--) drawBoxOverlay(ctx, ed, visible[i], px, obstacles);
 
   drawParts(floating);
-  drawNoteWells(ctx, floating, ed);
   for (const l of labels) if (l.size * z >= 5) drawText(ctx, l);
 
-  // Flat selection rectangles stay only when the wave overlay is unavailable.
-  if (!ed.auraOn) {
-    ctx.strokeStyle = theme.selection;
-    ctx.lineWidth = 1.5 * px;
-    for (const id of ed.selection) {
-      const c = doc.components.get(id);
-      if (!c) continue;
-      const r = inflate(bodyRect(c), 5);
-      ctx.beginPath();
-      ctx.roundRect(r.x, r.y, r.w, r.h, 4);
-      ctx.stroke();
-    }
-  }
+  // Flat rectangles when the wave overlay is off. With waves on, notes and markers still use them, drawn on the cover.
+  if (!ed.auraOn) drawFlatSelection(ctx, ed, px, false);
   const sized = ed.resizeTarget();
   if (sized) drawHandles(ctx, bodyRect(sized), theme, px);
 
   // Selected boxes and their resize handles.
-  for (const b of ed.selectedBoxes()) {
-    if (!ed.auraOn) {
-      ctx.strokeStyle = theme.selection;
-      ctx.lineWidth = 2 * px;
-      ctx.setLineDash([6 * px, 4 * px]);
-      roundRectPath(ctx, inflate(b, 3 * px), 9);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-    drawHandles(ctx, b, theme, px);
-  }
+  for (const b of ed.selectedBoxes()) drawHandles(ctx, b, theme, px);
 
   // Text box or bulb edge under the pointer, which can be dragged to resize.
   const noteEdge = ed.drag?.kind === 'note' ? null : ed.hoverNote;
@@ -925,7 +865,6 @@ function paintAuraCover(
   }
 
   const batch = new OpBatcher();
-  const notes: Component[] = [];
   const ends = wireEndIds(ed);
   for (const c of parts) {
     if (c.id === ed.editingId) continue;
@@ -945,10 +884,10 @@ function paintAuraCover(
     });
     const ops = componentOps(c, theme, info).filter((op) => op.t === 'text' || op.alpha === undefined || op.alpha >= 0.99);
     batch.add(ops, xformOf(c));
-    if (c.kind === 'note') notes.push(c);
   }
   batch.flush(ctx, dp);
-  drawNoteWells(ctx, notes, ed);
+
+  if (ed.auraOn) drawFlatSelection(ctx, ed, px, ed.waveSelection);
 
   for (const b of boxes) {
     if (!ed.selection.has(b.id)) continue;
@@ -970,6 +909,34 @@ function paintAuraCover(
     ctx.globalCompositeOperation = 'source-over';
   }
   ctx.globalAlpha = 1;
+}
+
+/** Blue selection rectangles. `notesOnly` keeps markers and text boxes on the blue box while everything else uses waves. */
+function drawFlatSelection(ctx: CanvasRenderingContext2D, ed: Editor, px: number, notesOnly: boolean): void {
+  ctx.save();
+  ctx.strokeStyle = ed.theme.selection;
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 1.5 * px;
+  ctx.setLineDash([]);
+  for (const id of ed.selection) {
+    const c = ed.doc.components.get(id);
+    if (!c) continue;
+    if (notesOnly && c.kind !== 'note' && c.kind !== 'marker') continue;
+    const r = inflate(bodyRect(c), 5);
+    ctx.beginPath();
+    ctx.roundRect(r.x, r.y, r.w, r.h, 4);
+    ctx.stroke();
+  }
+  if (!notesOnly) {
+    ctx.lineWidth = 2 * px;
+    ctx.setLineDash([6 * px, 4 * px]);
+    for (const b of ed.selectedBoxes()) {
+      roundRectPath(ctx, inflate(b, 3 * px), 9);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
 }
 
 function componentCoveredBy(ed: Editor, c: Component, covered: Box[]): boolean {

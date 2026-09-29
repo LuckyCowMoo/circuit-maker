@@ -31,7 +31,6 @@ function Btn(props: {
   disabled?: boolean;
   children: ReactNode;
   className?: string;
-  auraArmed?: boolean;
 }) {
   return (
     <button
@@ -41,7 +40,6 @@ function Btn(props: {
       aria-label={props.title}
       aria-pressed={props.active}
       disabled={props.disabled}
-      data-aura-armed={props.auraArmed ? '' : undefined}
       onClick={props.onClick}
     >
       {props.children}
@@ -851,7 +849,6 @@ export function Toolbar({ editor }: { editor: Editor }) {
       className={`tb-btn place ${editor.placing === kind ? 'active' : ''}`}
       title={KIND_LABEL[kind]}
       aria-label={KIND_LABEL[kind]}
-      data-aura-place={editor.placing === kind ? '' : undefined}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         e.preventDefault();
@@ -859,7 +856,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
         else editor.beginPlace(kind, e.nativeEvent);
       }}
     >
-      <ComponentIcon kind={kind} theme={theme} />
+      <ComponentIcon kind={kind} theme={theme} wave={editor.placing === kind} />
     </button>
   );
 
@@ -940,7 +937,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
   return (
     <div className="dock" ref={dockRef}>
       {editor.toastMessage && (
-        <div className="toast" role="status" data-aura-toast={editor.toastMessage.startsWith('Building ') ? '' : undefined}>
+        <div className={`toast${editor.toastMessage.startsWith('Building ') ? ' building' : ''}`} role="status">
           {editor.toastMessage}
           {editor.toastAction && (
             <button
@@ -1079,6 +1076,13 @@ export function Toolbar({ editor }: { editor: Editor }) {
             </div>
           </div>
           <div className="wire-style">
+            <span>Selection</span>
+            <div className="seg">
+              <button type="button" className={editor.waveSelection ? 'active' : ''} onClick={() => editor.setWaveSelection(true)}>Colour wave</button>
+              <button type="button" className={!editor.waveSelection ? 'active' : ''} onClick={() => editor.setWaveSelection(false)}>Blue box</button>
+            </div>
+          </div>
+          <div className="wire-style">
             <span>Component menu</span>
             <div className="seg">
               <button type="button" className={!editor.propsNear ? 'active' : ''} onClick={() => editor.setPropsNear(false)}>Above toolbar</button>
@@ -1194,7 +1198,6 @@ export function Toolbar({ editor }: { editor: Editor }) {
                     <Btn
                       title={seg.title}
                       className={mode === 'inline' ? 'tb-slot-icon' : undefined}
-                      auraArmed={seg.active}
                       active={mode === 'thin' && (openSeg === seg.id || seg.active)}
                       onClick={() => {
                         if (mode === 'thin') {
