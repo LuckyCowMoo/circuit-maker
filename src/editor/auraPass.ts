@@ -6,6 +6,8 @@ export interface AuraRipple {
   age: number;
   dirx: number;
   diry: number;
+  /** Exit speed, CSS pixels per millisecond. */
+  speed: number;
   radius: number;
   color: [number, number, number];
   mate: [number, number, number];
@@ -16,6 +18,8 @@ export interface AuraDraw {
   cssW: number;
   cssH: number;
   building: boolean;
+  /** Selection distance field. Off leaves a toolbar ripple without painting a stale stamp. */
+  field: boolean;
   /** zoomRatio, panX, panY. Slides a stamp drawn for an older camera onto the current one. */
   map: [number, number, number];
   /**
@@ -60,6 +64,7 @@ uniform vec3 uRippleColor;
 uniform vec3 uRippleMate;
 uniform vec4 uBar;
 uniform float uBuild;
+uniform float uField;
 uniform vec3 uMap;
 uniform vec3 uPlace;
 
@@ -125,15 +130,37 @@ float roundBoxArc(vec2 p, vec2 b, float r) {
 }
 
 /**
- * Density of one packet. 1 on the outline at the crest, then an exponential falloff
- * out to the edge and along the bar. sigma and reach are the diffusion state.
+ * Solid bump standing on the outline. The crest is the graph of a rounded hump, so the
+ * sides settle flat onto the toolbar instead of meeting it on a steep wall.
+ * curve 0 is a sharper tip; curve 1 is a broad smooth crown.
  */
-float gooPacket(float ds, float center, float sd, float sigma, float reach, float shear) {
-  float along = ds - center;
-  float leaned = along - shear * clamp(sd / max(reach, 1.0), 0.0, 1.0);
-  float spine = exp(-pow(abs(leaned) / max(sigma, 1.0), 1.55));
-  float local = max(reach * spine, 0.45);
-  return exp(-max(sd, 0.0) / local) * spine;
+float waveRand(float id, float seed) {
+  return fract(sin(seed + id * 12.9898) * 43758.5453);
+}
+
+/** Distance along the outline. A shorter wave starts slower. Drag time still varies a little on its own. */
+float paced(float pace, float size) {
+  return mix(1.0, pace, mix(0.15, 1.0, size));
+}
+
+float waveRun(float id, float seed, float sim, float size) {
+  float tauR = 0.12;
+  float tau = 0.7 * mix(0.82, 1.18, waveRand(id + 4.0, seed));
+  float v = 2000.0 * mix(0.2, 1.22, size);
+  return v * (tau * (1.0 - exp(-sim / tau)) - tauR * (1.0 - exp(-sim / tauR)));
+}
+
+float gooPacket(float pixelArc, float waveArc, float peri, float sd, float sigma, float reach, float shear, float curve) {
+  float along = mod(pixelArc - waveArc + peri * 0.5, peri) - peri * 0.5;
+  float lift = clamp(max(sd, 0.0) / max(reach, 1.0), 0.0, 1.15);
+  float leaned = along - shear * (0.62 * lift + 0.38 * lift * lift);
+  float u = abs(leaned) / max(sigma, 1.0);
+  float tip = mix(1.35, 3.15, curve);
+  float cap = exp(-pow(u, tip));
+  float skirt = exp(-u * u * 0.62);
+  float height = reach * (0.74 * cap + 0.26 * skirt);
+  float gap = sd - height;
+  return exp(-max(gap, 0.0) / 5.0);
 }
 
 void main() {
@@ -194,15 +221,15 @@ void main() {
   float rip = 0.0;
   vec3 ripCol = vec3(0.0);
   if (uRipple.w > 0.5 && uBar.z > 2.0 && uBar.w > 2.0) {
-    // Seconds since the exit. Two packets share one deposit: constant speed along the
-    // outline, width grows like diffusion, height falls so the spread stays one motion.
-    float sim = clamp(uRipple.z, 0.0, 1.0) * 2.6;
+    // Seconds since the exit. Volume climbs out of the bar, runs the outline under drag,
+    // then shrinks and sinks back under the toolbar.
+    float sim = clamp(uRipple.z, 0.0, 1.0) * 3.2;
     vec2 halfB = vec2(uBar.z, uBar.w) * 0.5;
     float rad = min(max(uRippleDir.z, 1.0), max(min(halfB.x, halfB.y) - 0.75, 1.0));
     vec2 center = vec2(uBar.x, uBar.y) + halfB;
-      vec2 rel = screen - center;
+    vec2 rel = screen - center;
     float sd = sdRoundBox(rel, halfB, rad);
-    if (sd < 280.0 && sd > -8.0) {
+    if (sd < 460.0 && sd > -8.0) {
       float ix = max(halfB.x - rad, 0.0);
       float iy = max(halfB.y - rad, 0.0);
       float arcLen = 1.5707963 * rad;
@@ -210,35 +237,70 @@ void main() {
       float side = iy * 2.0;
       float P = top * 2.0 + side * 2.0 + arcLen * 4.0;
       vec2 exitP = vec2(clamp(uRipple.x, uBar.x, uBar.x + uBar.z), uBar.y) - center;
-      float ds = mod(roundBoxArc(rel, halfB, rad) - roundBoxArc(exitP, halfB, rad) + P * 0.5, P) - P * 0.5;
+      float pixelArc = mod(roundBoxArc(rel, halfB, rad) - roundBoxArc(exitP, halfB, rad) + P, P);
 
-      float sigma0 = 168.0;
-      float reach0 = 108.0;
-      float sigma = sigma0 * sqrt(1.0 + sim * 0.55);
-      float reach = reach0 * pow(sigma0 / sigma, 0.32) * exp(-sim * 0.22);
-      float travel = 300.0 * sim;
+      float emerge = 1.0 - exp(-sim * 18.0);
+      // Pixels per millisecond. A slow leave stays small; a flick grows the bulge.
+      float haste = clamp(uRippleDir.w, 0.0, 8.0);
+      float pace = clamp(haste / 1.15, 0.0, 5.0);
+      float burst = mix(0.28, 2.05, 1.0 - exp(-pace));
+      float curve = 1.0 - exp(-sim * 0.38);
+      float reach = 56.0 * burst * emerge * exp(-sim * 0.36);
+      float sigma = 92.0 * burst * mix(1.0, 1.32, curve);
+      float submerge = 38.0 * burst * (1.0 - exp(-sim * 0.32));
+      float seed = uRipple.x + uRippleDir.x * 40.0;
 
-      float up = clamp(-uRippleDir.y, 0.0, 1.0);
-      float trust = smoothstep(0.2, 0.82, up);
-      float lean = clamp(uRippleDir.x, -1.0, 1.0) * trust;
-      float shear = lean * 78.0 * (sigma0 / sigma);
-      float sideSign = lean < -0.18 ? -1.0 : 1.0;
-      float cMate = sideSign * (travel + 72.0);
-      float cBase = -sideSign * travel;
+      // Signed horizontal pointer speed, CSS pixels per millisecond.
+      float horiz = clamp(uRippleDir.x, -1.0, 1.0) * haste;
+      float shear = horiz * reach * 0.18 * emerge * exp(-sim * 0.55);
+      float sideSign = horiz < -0.08 ? -1.0 : 1.0;
+      float slip = horiz * 5.0 * emerge * exp(-sim * 1.1);
+      float push = horiz * 0.32;
+      float posPace = clamp(1.0 + push, 0.4, 1.9);
+      float negPace = clamp(1.0 - push, 0.4, 1.9);
+      float head = max(sideSign * slip, 0.0);
+      float headPos = sideSign > 0.0 ? head : 0.0;
+      float headNeg = sideSign < 0.0 ? head : 0.0;
+      float gap = 32.0;
 
-      float n = texture(uNoise, screen * 0.00042 + vec2(t * 0.008, t * 0.005)).r;
-      float n2 = texture(uNoise, screen * 0.00026 - vec2(t * 0.005, t * 0.003) + 2.2).r;
+      float n = texture(uNoise, screen * 0.00038 + vec2(t * 0.007, t * 0.004)).r;
+      float n2 = texture(uNoise, screen * 0.00022 - vec2(t * 0.004, t * 0.003) + 2.2).r;
       float jag = (n - 0.5) * 0.65 + (n2 - 0.5) * 0.35;
-      float sdN = sd - jag * 46.0 * (1.0 - exp(-max(sd, 0.0) / 55.0));
+      float sdN = sd + submerge - jag * 5.0;
 
-      float fMate = gooPacket(ds, cMate, sdN, sigma * 0.92, reach * 0.9, shear);
-      float fBase = gooPacket(ds, cBase, sdN, sigma, reach, shear);
-      float mass = (fBase + fMate) * smoothstep(-6.0, 1.8, sd);
-      rip = clamp(mass, 0.0, 1.0);
-      ripCol = (uRippleColor * fBase + uRippleMate * fMate) / max(fBase + fMate, 0.001);
+      float narrow = sigma * 0.7;
+      float r1 = waveRand(1.0, seed);
+      float r2 = waveRand(2.0, seed);
+      float r3 = waveRand(3.0, seed);
+      float r4 = waveRand(4.0, seed);
+      // Same-colour crests stop when they meet, instead of crossing the far side and being cut off.
+      float run1 = headPos + waveRun(1.0, seed, sim, r1) * paced(posPace, r1);
+      float run3 = headNeg + waveRun(3.0, seed, sim, r3) * paced(negPace, r3);
+      float fitB = min(1.0, P / max(run1 + run3, 1.0));
+      run1 *= fitB;
+      run3 *= fitB;
+      float run2 = headPos + gap + waveRun(2.0, seed, sim, r2) * paced(posPace, r2);
+      float run4 = headNeg + gap + waveRun(4.0, seed, sim, r4) * paced(negPace, r4);
+      float fitM = min(1.0, P / max(run2 + run4, 1.0));
+      run2 *= fitM;
+      run4 *= fitM;
+      float fBase = max(
+        gooPacket(pixelArc, run1, P, sdN, narrow * mix(0.92, 1.08, r1), reach * mix(0.82, 1.22, r1), shear, curve),
+        gooPacket(pixelArc, -run3, P, sdN, narrow * mix(0.92, 1.08, r3), reach * mix(0.82, 1.22, r3), shear, curve)
+      );
+      float fMate = max(
+        gooPacket(pixelArc, run2, P, sdN, narrow * 0.94 * mix(0.92, 1.08, r2), reach * mix(0.82, 1.22, r2), shear, curve),
+        gooPacket(pixelArc, -run4, P, sdN, narrow * 0.94 * mix(0.92, 1.08, r4), reach * mix(0.82, 1.22, r4), shear, curve)
+      );
+      float cover = max(fBase, fMate) * smoothstep(-2.0, 0.0, sd);
+      float aa = clamp(fwidth(cover), 0.012, 0.055);
+      rip = smoothstep(0.48 - aa, 0.48 + aa, cover);
+      float split = smoothstep(-0.05, 0.05, fMate - fBase);
+      ripCol = mix(uRippleColor, uRippleMate, split);
     }
   }
 
+  wave *= uField;
   float alpha = wave;
   if (rip > 0.004) {
     float sum = min(1.0, alpha + rip);
@@ -343,6 +405,7 @@ export class AuraPass {
     uRippleMate: WebGLUniformLocation | null;
     uBar: WebGLUniformLocation | null;
     uBuild: WebGLUniformLocation | null;
+    uField: WebGLUniformLocation | null;
     uMap: WebGLUniformLocation | null;
     uPlace: WebGLUniformLocation | null;
   } = {
@@ -354,6 +417,7 @@ export class AuraPass {
     uRippleMate: null,
     uBar: null,
     uBuild: null,
+    uField: null,
     uMap: null,
     uPlace: null,
   };
@@ -386,6 +450,18 @@ export class AuraPass {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, flowSrc);
   }
 
+  /** Drop the selection distance field so a later ripple cannot replay a deleted part. */
+  clearField(): void {
+    const gl = this.gl;
+    if (!this.haloTex || !this.flowTex) return;
+    const blank = (tex: WebGLTexture, pixel: Uint8Array) => {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+    };
+    blank(this.haloTex, new Uint8Array([0, 0, 0, 0]));
+    blank(this.flowTex, new Uint8Array([0, 0, 0, 255]));
+  }
+
   clear(): void {
     const gl = this.gl;
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
@@ -411,10 +487,11 @@ export class AuraPass {
     gl.uniform3f(this.loc.uMap, state.map[0], state.map[1], state.map[2]);
     gl.uniform3f(this.loc.uPlace, state.place[0], state.place[1], state.place[2]);
     gl.uniform1f(this.loc.uBuild, state.building ? 1 : 0);
+    gl.uniform1f(this.loc.uField, state.field ? 1 : 0);
     const ripple = state.ripple;
     if (ripple) {
       gl.uniform4f(this.loc.uRipple, ripple.x, ripple.y, ripple.age, 1);
-      gl.uniform4f(this.loc.uRippleDir, ripple.dirx, ripple.diry, ripple.radius, 0);
+      gl.uniform4f(this.loc.uRippleDir, ripple.dirx, ripple.diry, ripple.radius, ripple.speed);
       gl.uniform3f(this.loc.uRippleColor, ripple.color[0], ripple.color[1], ripple.color[2]);
       gl.uniform3f(this.loc.uRippleMate, ripple.mate[0], ripple.mate[1], ripple.mate[2]);
       gl.uniform4f(this.loc.uBar, ripple.bar[0], ripple.bar[1], ripple.bar[2], ripple.bar[3]);
@@ -500,6 +577,7 @@ export class AuraPass {
       uRippleMate: gl.getUniformLocation(prog, 'uRippleMate'),
       uBar: gl.getUniformLocation(prog, 'uBar'),
       uBuild: gl.getUniformLocation(prog, 'uBuild'),
+      uField: gl.getUniformLocation(prog, 'uField'),
       uMap: gl.getUniformLocation(prog, 'uMap'),
       uPlace: gl.getUniformLocation(prog, 'uPlace'),
     };

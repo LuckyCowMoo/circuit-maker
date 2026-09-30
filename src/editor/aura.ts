@@ -21,8 +21,8 @@ import { AuraPass, cameraPlace, type AuraDraw } from './auraPass';
 import type { Box, Component, Rect } from '../model/types';
 import { isInput, laneCount } from '../model/types';
 
-/** Toolbar goo lifetime. The shape is a continuous spread; this only stops the draw once it has thinned out. */
-const RIPPLE_MS = 2600;
+/** Toolbar goo lifetime. The draw stops once the volume has sunk back into the bar. */
+const RIPPLE_MS = 3200;
 
 /**
  * A canvas can be transferred to a worker only once. React Strict Mode disposes the overlay
@@ -61,6 +61,8 @@ export interface PlaceRipple {
   /** Unit direction the pointer was moving as it crossed out, CSS y-down. */
   dx: number;
   dy: number;
+  /** Exit speed in CSS pixels per millisecond. A fast leave grows the first bulge. */
+  speed: number;
   t0: number;
   kind: PlaceKind;
 }
@@ -84,6 +86,7 @@ interface RippleDraw {
   mate: Rgb;
   dirx: number;
   diry: number;
+  speed: number;
   radius: number;
   bar: DOMRect;
 }
@@ -269,6 +272,7 @@ export class AuraOverlay {
       this.rebuild(ed);
     }
     const show = this.hasStamp;
+    if (rebuild && !show) this.dropField();
     if (!show && !ripple && !building) {
       if (this.shown) this.clearGl();
       this.shown = false;
@@ -281,7 +285,7 @@ export class AuraOverlay {
       return;
     }
     this.acceptPictures = true;
-    if (rebuild) this.upload(ed);
+    if (rebuild && show) this.upload(ed);
     this.publish(ed, now, ripple, building, show);
     this.present(ed, building);
     this.shown = true;
@@ -422,6 +426,7 @@ export class AuraOverlay {
       mate: auraPartner(color),
       dirx: rip.dx,
       diry: rip.dy,
+      speed: rip.speed,
       bar,
       radius,
     };
@@ -918,7 +923,7 @@ export class AuraOverlay {
       this.postState(ed, building, show, ripple);
       return;
     }
-    this.pass?.draw(now / 1000, this.drawOf(ed, building, ripple));
+    this.pass?.draw(now / 1000, this.drawOf(ed, building, ripple, show));
   }
 
   private postState(ed: Editor, building: boolean, show: boolean, ripple: RippleDraw | null): void {
@@ -937,6 +942,7 @@ export class AuraOverlay {
               y: ripple.y,
               dirx: ripple.dirx,
               diry: ripple.diry,
+              speed: ripple.speed,
               radius: ripple.radius,
               color: [ripple.color.r / 255, ripple.color.g / 255, ripple.color.b / 255],
               mate: [ripple.mate.r / 255, ripple.mate.g / 255, ripple.mate.b / 255],
@@ -947,11 +953,19 @@ export class AuraOverlay {
     });
   }
 
-  private drawOf(ed: Editor, building: boolean, ripple: RippleDraw | null): AuraDraw {
+  /** The GPU still holds the last selection stamp until this replaces it. */
+  private dropField(): void {
+    if (this.worker) this.worker.postMessage({ type: 'clearField' });
+    else this.pass?.clearField();
+    this.postedCam = null;
+  }
+
+  private drawOf(ed: Editor, building: boolean, ripple: RippleDraw | null, field: boolean): AuraDraw {
     return {
       cssW: ed.width,
       cssH: ed.height,
       building,
+      field,
       map: this.stampMap(ed),
       place: [1, 0, 0] as [number, number, number],
       ripple: ripple
@@ -961,6 +975,7 @@ export class AuraOverlay {
             age: ripple.age,
             dirx: ripple.dirx,
             diry: ripple.diry,
+            speed: ripple.speed,
             radius: ripple.radius,
             color: [ripple.color.r / 255, ripple.color.g / 255, ripple.color.b / 255],
             mate: [ripple.mate.r / 255, ripple.mate.g / 255, ripple.mate.b / 255],

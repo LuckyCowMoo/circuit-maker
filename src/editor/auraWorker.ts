@@ -1,7 +1,7 @@
 import { AuraPass, cameraPlace, type AuraRipple } from './auraPass';
 
 /** Matches the toolbar goo on the main thread. The worker clock is absolute, so age does not depend on performance.now(). */
-const RIPPLE_MS = 2600;
+const RIPPLE_MS = 3200;
 
 interface RippleMsg extends Omit<AuraRipple, 'age'> {
   startAbs: number;
@@ -29,6 +29,8 @@ let live: Live = { cssW: 1, cssH: 1, building: false, show: false, cam: { x: 0, 
 /** Camera baked into the stamp. Pictures are labelled with this so the main thread can place them. */
 let basis: Cam | null = null;
 let painted = false;
+/** False after the selection stamp is dropped, until a new one is uploaded. */
+let fieldReady = false;
 let raf = 0;
 let snapBusy = false;
 let snapSeq = 0;
@@ -47,6 +49,7 @@ function rippleNow(): AuraRipple | null {
     age,
     dirx: rip.dirx,
     diry: rip.diry,
+    speed: rip.speed,
     radius: rip.radius,
     color: rip.color,
     mate: rip.mate,
@@ -69,6 +72,7 @@ function paint(): void {
     cssW: live.cssW,
     cssH: live.cssH,
     building: live.building,
+    field: live.show && fieldReady,
     map: [1, 0, 0],
     place: cameraPlace(basis, live.cam),
     ripple,
@@ -146,7 +150,13 @@ self.onmessage = (event: MessageEvent) => {
     pass.upload(msg.color, msg.flow);
     msg.color.close();
     msg.flow.close();
+    fieldReady = true;
     if (msg.basis) basis = { x: msg.basis.x, y: msg.basis.y, zoom: msg.basis.zoom };
+    paint();
+  } else if (msg.type === 'clearField') {
+    pass.clearField();
+    fieldReady = false;
+    basis = null;
     paint();
   } else if (msg.type === 'state') {
     live.cssW = msg.cssW ?? live.cssW;

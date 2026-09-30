@@ -1006,30 +1006,37 @@ export class Editor {
     let left = false;
     let lastX = sx;
     let lastY = sy;
+    let lastT = performance.now();
+    let speedEma = 0;
     const move = (ev: PointerEvent) => {
       if (this.placing !== kind) return;
       this.updateGhost(this.toWorld(this.screenPoint(ev)));
+      const now = performance.now();
+      const vx = ev.clientX - lastX;
+      const vy = ev.clientY - lastY;
+      const len = Math.hypot(vx, vy);
+      const dt = Math.max(now - lastT, 8);
+      speedEma = speedEma * 0.35 + (len / dt) * 0.65;
       if (!left && homeTop != null && ev.clientY < homeTop - 4) {
         const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
         const br = bar?.getBoundingClientRect();
         if (br) {
           left = true;
           const x = Math.max(br.left, Math.min(ev.clientX, br.right));
-          const vx = ev.clientX - lastX;
-          const vy = ev.clientY - lastY;
-          const len = Math.hypot(vx, vy);
           this.placeRipple = {
             x,
             y: br.top,
             dx: len > 2 ? vx / len : 0,
             dy: len > 2 ? vy / len : -1,
-            t0: performance.now(),
+            speed: Math.min(speedEma, 8),
+            t0: now,
             kind,
           };
         }
       }
       lastX = ev.clientX;
       lastY = ev.clientY;
+      lastT = now;
     };
     const up = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', move);
