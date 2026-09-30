@@ -11,7 +11,7 @@ describe('aura colours', () => {
     expect(auraHueOf('and')).toBe(4);
     expect(auraHueOf('or')).toBe(214);
     expect(auraHueOf('xor')).toBe(278);
-    expect(auraHueOf('buffer')).toBe(22);
+    expect(auraHueOf('buffer')).toBe(228);
     expect(auraHueOf('not')).toBe(332);
   });
 

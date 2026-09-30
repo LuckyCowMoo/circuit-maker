@@ -243,7 +243,7 @@ void main() {
       // Pixels per millisecond. A slow leave stays small; a flick grows the bulge.
       float haste = clamp(uRippleDir.w, 0.0, 8.0);
       float pace = clamp(haste / 1.15, 0.0, 5.0);
-      float burst = mix(0.28, 2.05, 1.0 - exp(-pace));
+      float burst = mix(0.28, 1.15, 1.0 - exp(-pace));
       float curve = 1.0 - exp(-sim * 0.38);
       float reach = 56.0 * burst * emerge * exp(-sim * 0.36);
       float sigma = 92.0 * burst * mix(1.0, 1.32, curve);
@@ -295,6 +295,8 @@ void main() {
       float cover = max(fBase, fMate) * smoothstep(-2.0, 0.0, sd);
       float aa = clamp(fwidth(cover), 0.012, 0.055);
       rip = smoothstep(0.48 - aa, 0.48 + aa, cover);
+      // Opaque at the exit, easing to about half transparent as the wave finishes.
+      rip *= mix(1.0, 0.5, sim / 3.2);
       float split = smoothstep(-0.05, 0.05, fMate - fBase);
       ripCol = mix(uRippleColor, uRippleMate, split);
     }
