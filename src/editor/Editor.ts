@@ -319,6 +319,17 @@ function bulbRgb(c: Component, fallback: string, sim: { value(id: string, lane?:
   return parseCss(c.color ?? fallback);
 }
 
+const EXIT_SPEED_CAP = 8;
+
+/**
+ * CSS px/ms for one stretch of pointer travel.
+ * A flick faster than the clock has no positive interval; 1ms is the shortest one we count.
+ */
+function exitStepSpeed(dist: number, dt: number): number {
+  if (!(dist > 0)) return 0;
+  return Math.min(dist / (dt > 0 ? dt : 1), EXIT_SPEED_CAP);
+}
+
 /** Top of the toolbar control the pointer went down on, including a popped group. */
 function placeHomeTop(e: PointerEvent): number | null {
   const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
@@ -1006,37 +1017,49 @@ export class Editor {
     let left = false;
     let lastX = sx;
     let lastY = sy;
-    let lastT = performance.now();
+    let pending = 0;
+    let pendingT = e.timeStamp;
+    let path = 0;
     let speedEma = 0;
+    const downT = e.timeStamp;
     const move = (ev: PointerEvent) => {
       if (this.placing !== kind) return;
       this.updateGhost(this.toWorld(this.screenPoint(ev)));
-      const now = performance.now();
       const vx = ev.clientX - lastX;
       const vy = ev.clientY - lastY;
       const len = Math.hypot(vx, vy);
-      const dt = Math.max(now - lastT, 8);
-      speedEma = speedEma * 0.35 + (len / dt) * 0.65;
-      if (!left && homeTop != null && ev.clientY < homeTop - 4) {
+      // Steps that share a timestamp are one flick. Flush when the clock moves, or when the pointer leaves.
+      pending += len;
+      path += len;
+      const dt = ev.timeStamp - pendingT;
+      const leaving = !left && homeTop != null && ev.clientY < homeTop - 4;
+      let step = 0;
+      if (pending > 0 && (dt > 0 || leaving)) {
+        step = exitStepSpeed(pending, dt);
+        speedEma = speedEma * 0.35 + step * 0.65;
+        pending = 0;
+        if (dt > 0) pendingT = ev.timeStamp;
+      }
+      if (leaving) {
         const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
         const br = bar?.getBoundingClientRect();
         if (br) {
           left = true;
           const x = Math.max(br.left, Math.min(ev.clientX, br.right));
+          const gesture = exitStepSpeed(path, ev.timeStamp - downT);
           this.placeRipple = {
             x,
             y: br.top,
             dx: len > 2 ? vx / len : 0,
             dy: len > 2 ? vy / len : -1,
-            speed: Math.min(speedEma, 8),
-            t0: now,
+            speed: Math.min(EXIT_SPEED_CAP, Math.max(speedEma, step, gesture)),
+            t0: performance.now(),
             kind,
           };
         }
       }
       lastX = ev.clientX;
       lastY = ev.clientY;
-      lastT = now;
     };
     const up = (ev: PointerEvent) => {
       window.removeEventListener('pointermove', move);
