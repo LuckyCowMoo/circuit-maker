@@ -90,7 +90,7 @@ function snapshot(): void {
   createImageBitmap(canvas)
     .then((bitmap) => {
       snapBusy = false;
-      postMessage({ type: 'picture', bitmap, basis: shot, seq }, [bitmap]);
+      postMessage({ type: 'picture', bitmap, basis: shot, seq }, { transfer: [bitmap] });
     })
     .catch(() => {
       snapBusy = false;

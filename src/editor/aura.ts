@@ -285,7 +285,7 @@ export class AuraOverlay {
       return;
     }
     this.acceptPictures = true;
-    if (rebuild && show) this.upload(ed);
+    if (rebuild && show) this.upload();
     this.publish(ed, now, ripple, building, show);
     this.present(ed, building);
     this.shown = true;
@@ -881,7 +881,7 @@ export class AuraOverlay {
     return this.mapBetween(this.postedCam, ed);
   }
 
-  private upload(ed: Editor): void {
+  private upload(): void {
     if (!this.worker) {
       this.postedCam = this.stampCam ? { ...this.stampCam } : null;
       this.pass?.upload(this.colorCanvas, this.flowCanvas);
