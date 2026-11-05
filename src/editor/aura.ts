@@ -16,7 +16,7 @@ import {
 import { floatsAboveBoxes } from '../model/parts';
 import { avoidMap, routedWire } from '../model/route';
 import { componentOutline, roundRectD } from '../model/shapes';
-import { auraPartner, idleWire, kindAura, parseRgb, vividAura, wireColors, type Rgb } from '../model/themes';
+import { auraPartner, idleWire, kindAura, parseRgb, vividAura, waveGain, wireColors, type Rgb } from '../model/themes';
 import { AuraPass, cameraPlace, type AuraDraw } from './auraPass';
 import type { Box, Component, Rect } from '../model/types';
 import { isInput, laneCount } from '../model/types';
@@ -115,13 +115,8 @@ function waveLayer(r: number, b: number, a: number): number {
 }
 
 function componentAura(ed: Editor, c: Component): Rgb {
-  if (isInput(c.kind)) {
-    const root = ed.parts.roots.get(c.id) ?? c.id;
-    return parseRgb(wireColors(root, ed.theme).on) ?? kindAura(ed.theme, c.kind, c.id);
-  }
-  if (c.kind === 'marker') return vividAura(ed.theme, c.color ?? ed.theme.marker, c.id);
   const kind = c.kind === 'port' && c.inputs > 1 ? 'ribbon-port' : c.kind;
-  return kindAura(ed.theme, kind, c.id);
+  return kindAura(ed.theme, kind);
 }
 
 /** Drawn width of a selected signal wire, in world units. Matches the scene stroke. */
@@ -551,7 +546,7 @@ export class AuraOverlay {
         const reach = partReach(b.w, b.h);
         this.paintWorldField(
           cachedPath(roundRectD(b.x, b.y, b.w, b.h, 8)),
-          vividAura(ed.theme, b.color ?? ed.theme.box, b.id),
+          vividAura(ed.theme, b.color ?? ed.theme.box),
           reach,
           0,
           open,
@@ -934,6 +929,7 @@ export class AuraOverlay {
       cssH: ed.height,
       building,
       show,
+      ink: waveGain(ed.theme),
       cam: { x: ed.cam.x, y: ed.cam.y, zoom: ed.cam.zoom || 1 },
       ripple:
         ripple && rip
@@ -966,6 +962,7 @@ export class AuraOverlay {
       cssH: ed.height,
       building,
       field,
+      ink: waveGain(ed.theme),
       map: this.stampMap(ed),
       place: [1, 0, 0] as [number, number, number],
       ripple: ripple

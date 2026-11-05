@@ -3,8 +3,24 @@ export type GateKind = (typeof GATE_KINDS)[number];
 export const IO_KINDS = ['switch', 'button', 'timer', 'bulb', 'rgb'] as const;
 export type IOKind = (typeof IO_KINDS)[number];
 /** `port` is the connector where a wire passes through the wall of a box. */
-export type ComponentKind = GateKind | IOKind | 'marker' | 'note' | 'port';
-export const COMPONENT_KINDS: readonly ComponentKind[] = [...GATE_KINDS, ...IO_KINDS, 'marker', 'note', 'port'];
+export type ComponentKind = GateKind | IOKind | 'marker' | 'note' | 'port' | 'table';
+export const COMPONENT_KINDS: readonly ComponentKind[] = [...GATE_KINDS, ...IO_KINDS, 'marker', 'note', 'port', 'table'];
+
+/**
+ * Truth table recorded on a component.
+ * `rows` has one entry per input combination (length 2^inputs), leftmost input as the high bit.
+ * A null row has not been seen. A string is one character per output: `0`, `1`, or `.` (not yet recorded).
+ * `names` is the column titles captured at conversion, inputs then outputs.
+ * `marks`, when present, is parallel to `rows`: `p` pass, `f` fail, `.` not graded.
+ */
+export interface TableData {
+  mode: 'discovery' | 'solution';
+  inputs: number;
+  outputs: number;
+  rows: (string | null)[];
+  names: string[];
+  marks?: (string | null)[];
+}
 
 export interface Point {
   x: number;
@@ -68,6 +84,8 @@ export interface Component {
   outputBundle?: boolean;
   /** Ports placed from the toolbar stay when unwired. */
   placed?: boolean;
+  /** Truth table columns, rows, and last test marks. */
+  table?: TableData;
 }
 
 export interface Wire {
@@ -140,9 +158,13 @@ export const bundleOutput = (c: Component): boolean =>
 export const bundleSource = bundleOutput;
 export const bundleDest = bundleInput;
 
+/** Input-pin slots on a truth table. Columns use 0..7 and outputs use 8..15; unused slots are inactive. */
+export const TABLE_PIN_SLOTS = 16;
+
 export const inputCount = (c: Component): number => {
   // Ribbon ports accept one wire per lane (input index = lane), whether the plug faces in or out.
   if (c.kind === 'port' && c.inputs > 1) return Math.max(1, c.inputs);
+  if (c.kind === 'table') return TABLE_PIN_SLOTS;
   if (c.kind === 'buffer') return 1;
   if (isGate(c.kind)) return Math.max(1, c.inputs);
   if (c.kind === 'rgb') return 3;

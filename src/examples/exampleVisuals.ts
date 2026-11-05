@@ -1,11 +1,14 @@
 import { boxesOuterFirst } from '../model/doc';
 import type { Doc } from '../model/types';
 import { type Theme } from '../model/themes';
+import { PUZZLES } from './puzzles';
 
 /** 0 = lightest (1-bit glue), 4 = hero / heavy cards. */
 export type ExampleComplexity = 0 | 1 | 2 | 3 | 4;
 
 export const GROUP_HUE: Record<string, number> = {
+  // Chartreuse, the truth-table wave. Open between the other section hues.
+  Puzzles: 88,
   Arithmetic: 168,
   Memory: 278,
   Displays: 38,
@@ -46,7 +49,13 @@ const COMPLEXITY: Record<string, ExampleComplexity> = {
   stress: 4,
 };
 
-export function exampleComplexity(id: string): ExampleComplexity {
+/**
+ * 0 matches the lightest cards. 3 matches an 8-bit card. 4 is the black hero card.
+ * Puzzles walk from 0 to 3 in even steps so each one is darker than the last.
+ */
+export function exampleComplexity(id: string): number {
+  const step = PUZZLES.findIndex((p) => p.id === id);
+  if (step >= 0) return (step / (PUZZLES.length - 1)) * 3;
   return COMPLEXITY[id] ?? 2;
 }
 

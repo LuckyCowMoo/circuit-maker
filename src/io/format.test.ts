@@ -105,4 +105,45 @@ describe('file format', () => {
     expect(() => parseCircuit('hello')).toThrow();
     expect(() => parseCircuit('{"format":"something-else"}')).toThrow();
   });
+
+  it('round-trips a truth table and drops a wire from a gate', () => {
+    const text = JSON.stringify({
+      format: 'circuit-maker',
+      version: 1,
+      name: 'table',
+      components: [
+        { id: 'a', type: 'switch', x: 0, y: 0, name: 'A' },
+        { id: 'g', type: 'and', x: 80, y: 0 },
+        { id: 'l', type: 'bulb', x: 160, y: 0, name: '1' },
+        {
+          id: 'tt',
+          type: 'table',
+          x: 40,
+          y: 120,
+          table: {
+            mode: 'discovery',
+            inputs: 1,
+            outputs: 1,
+            names: ['A', '1'],
+            rows: ['0', null],
+            marks: ['p', null],
+          },
+        },
+      ],
+      wires: [
+        { from: 'a', to: 'tt', input: 0 },
+        { from: 'g', to: 'tt', input: 9 },
+        { from: 'l', to: 'tt', input: 8 },
+      ],
+    });
+    const first = parseCircuit(text);
+    expect(first.warnings.some((w) => w.includes('bulbs'))).toBe(true);
+    const table = first.doc.components.get('tt')!;
+    expect(table.kind).toBe('table');
+    expect(table.table).toMatchObject({ mode: 'discovery', inputs: 1, outputs: 1, rows: ['0', null], marks: ['p', null] });
+    expect([...first.doc.wires.values()].map((w) => w.from).sort()).toEqual(['a', 'l']);
+    const again = parseCircuit(docToText(first.doc));
+    expect(again.warnings).toEqual([]);
+    expect(docToText(again.doc)).toBe(docToText(first.doc));
+  });
 });

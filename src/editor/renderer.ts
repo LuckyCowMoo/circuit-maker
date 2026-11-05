@@ -1,11 +1,12 @@
-﻿import { boxesOuterFirst, boxInBox, componentInBox, makeComponent, signalKeys } from '../model/doc';
+﻿import { boxesOuterFirst, boxInBox, componentInBox, liveChannels, makeComponent, netRoots, pinMasks, signalKeys } from '../model/doc';
+import { columnTitleColors, columnTitles } from '../model/table';
 import {
   attachPos,
   bodyRect,
   componentBounds,
+  curveBounds,
   cableStripe,
   CABLE_PITCH,
-  curveBounds,
   inflate,
   pinDir,
   pointInRect,
@@ -15,16 +16,18 @@ import {
   snap,
   STROKE_W,
   wireCurve,
+  unionRects,
   wireEndPin,
   xformOf,
   type WireCurve,
   type Xf,
 } from '../model/geometry';
 import { floatsAboveBoxes, partInfo, partLabel } from '../model/parts';
-import { avoidMap, bendAround, blockRects, routeSeed, routedWire, squareWire } from '../model/route';
+import { avoidMap, bendAround, blockRects, routeSeed, routedWire, squareWire, type WireStyle } from '../model/route';
 import { placePort } from '../model/ports';
 import { componentOps, textRect, type DrawOp, type TextOp } from '../model/shapes';
 import { contrastText, idleWire, wireColors, type Theme, type WireColors } from '../model/themes';
+import type { RowPreviewModel } from '../model/tablePreview';
 import type { Box, Component, Point, Rect } from '../model/types';
 import { bundleSource, isInput, laneCount } from '../model/types';
 import { FONT_STACK } from '../io/export';
@@ -590,6 +593,12 @@ export function renderScene(ed: Editor): void {
       info.lanes?.forEach((lane, i) => {
         lane.on = ed.sim.value(c.id, i);
       });
+      if (c.kind === 'table') {
+        info.tableScroll = ed.tableScrollOf(c.id);
+        info.tableTitles = columnTitles(doc, c);
+        info.tableTitleColors = columnTitleColors(doc, c, theme, pc.roots, pc.live, (id, lane) => ed.sim.value(id, lane ?? 0));
+        info.tableHold = ed.convertHoldOf(c.id);
+      }
       const ops = componentOps(c, theme, info);
       batch.add(c.id === ed.editingId ? ops.filter((op) => op.t !== 'text') : ops, xformOf(c));
     }
@@ -785,12 +794,30 @@ export function renderScene(ed: Editor): void {
     ctx.globalAlpha = 1;
   }
 
+  drawConfetti(ctx, ed);
+
   // Screen-space navigation arrows.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ed.arrows = computeArrows(ed, view);
   drawArrows(ctx, ed.arrows, theme);
 
   paintAuraCover(ed, [...lower, ...floating], visible, coverWires, px);
+}
+
+/** Rectangles leaving every side of a truth table that just passed. */
+function drawConfetti(ctx: CanvasRenderingContext2D, ed: Editor): void {
+  if (!ed.confetti.length) return;
+  ctx.save();
+  for (const p of ed.confetti) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.rot);
+    ctx.globalAlpha = p.alpha;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    ctx.restore();
+  }
+  ctx.restore();
 }
 
 /** Components a selected wire runs into. Their bodies are redrawn above the wire wave. */
@@ -882,7 +909,17 @@ function paintAuraCover(
     info.lanes?.forEach((lane, i) => {
       lane.on = ed.sim.value(c.id, i);
     });
-    const ops = componentOps(c, theme, info).filter((op) => op.t === 'text' || op.alpha === undefined || op.alpha >= 0.99);
+    if (c.kind === 'table') {
+      info.tableScroll = ed.tableScrollOf(c.id);
+      info.tableTitles = columnTitles(ed.doc, c);
+      info.tableTitleColors = columnTitleColors(ed.doc, c, theme, ed.parts.roots, ed.parts.live, (id, lane) =>
+        ed.sim.value(id, lane ?? 0),
+      );
+      info.tableHold = ed.convertHoldOf(c.id);
+    }
+    const ops = componentOps(c, theme, info).filter(
+      (op) => c.kind === 'table' || op.t === 'text' || op.alpha === undefined || op.alpha >= 0.99,
+    );
     batch.add(ops, xformOf(c));
   }
   batch.flush(ctx, dp);
@@ -950,4 +987,75 @@ function portHidden(doc: Editor['doc'], port: Component, covered: Box[]): boolea
   if (!own) return false;
   for (const b of covered) if (b !== own && boxInBox(own, b)) return true;
   return false;
+}
+
+/** Draws a solution-row popup: the connected parts, in the state that row forces. */
+export function paintCircuitPreview(canvas: HTMLCanvasElement, model: RowPreviewModel, theme: Theme, wireStyle: WireStyle): void {
+  const { doc, parts, sim } = model;
+  const ids = new Set(parts.map((p) => p.id));
+  const avoid = avoidMap(doc);
+  const rects: Rect[] = [];
+  const curves: { from: string; on: boolean; connected: boolean; curve: WireCurve }[] = [];
+  const pc = { doc, masks: pinMasks(doc), roots: netRoots(doc), live: liveChannels(doc), colors: wireColors };
+  for (const c of parts) {
+    rects.push(componentBounds(c));
+    const label = partLabel(doc, c, theme);
+    if (label) rects.push(textRect(label));
+  }
+  for (const w of doc.wires.values()) {
+    if (w.cable || !ids.has(w.from) || !ids.has(w.to)) continue;
+    const src = doc.components.get(w.from);
+    const dst = doc.components.get(w.to);
+    if (!src || !dst) continue;
+    const curve = routedWire(avoid, src, dst, w.input, w.lane ?? 0, 10, wireStyle);
+    if (!curve) continue;
+    const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
+    const connected = pc.live.has(w.id);
+    curves.push({
+      from: pc.roots.get(srcKey) ?? w.from,
+      on: connected && sim.value(w.from, w.lane ?? 0),
+      connected,
+      curve,
+    });
+    rects.push(curveBounds(curve));
+  }
+  const bounds = inflate(unionRects(rects) ?? { x: 0, y: 0, w: 80, h: 60 }, 16);
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 300;
+  const cssH = canvas.clientHeight || 180;
+  canvas.width = Math.max(1, Math.round(cssW * dpr));
+  canvas.height = Math.max(1, Math.round(cssH * dpr));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = theme.bg;
+  ctx.fillRect(0, 0, cssW, cssH);
+  const z = Math.min(1.6, (cssW - 20) / Math.max(1, bounds.w), (cssH - 20) / Math.max(1, bounds.h));
+  ctx.setTransform(dpr * z, 0, 0, dpr * z, ((cssW - bounds.w * z) / 2 - bounds.x * z) * dpr, ((cssH - bounds.h * z) / 2 - bounds.y * z) * dpr);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  const idle = idleWire(theme);
+  for (const item of curves) {
+    const cols = colorsFor(item.from, theme);
+    ctx.strokeStyle = item.on ? cols.on : item.connected ? cols.off : idle;
+    ctx.lineWidth = item.on ? 3 : STROKE_W;
+    strokeCurve(ctx, item.curve);
+  }
+  const lit = (c: Component) =>
+    c.kind === 'rgb' ? sim.value(c.id) || sim.value(c.id, 1) || sim.value(c.id, 2) : sim.value(c.id);
+  const batch = new OpBatcher();
+  for (const c of parts) {
+    const on = c.kind === 'switch' || c.kind === 'button' || c.kind === 'timer' || c.kind === 'bulb' || c.kind === 'rgb' || c.kind === 'port' ? lit(c) : false;
+    const info = partInfo(pc, c, theme, on);
+    info.lanes?.forEach((lane, i) => {
+      lane.on = sim.value(c.id, i);
+    });
+    if (c.kind === 'bulb' || c.kind === 'rgb') info.bulbPower = on ? 1 : 0;
+    batch.add(componentOps(c, theme, info), xformOf(c));
+  }
+  batch.flush(ctx, 1 / Math.max(z, 0.05));
+  for (const c of parts) {
+    const label = partLabel(doc, c, theme);
+    if (label) drawText(ctx, label);
+  }
 }

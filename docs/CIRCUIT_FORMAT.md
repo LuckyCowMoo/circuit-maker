@@ -93,12 +93,31 @@ Every component has `id`, `type`, `x`, `y`. Other fields depend on the type.
 | `rgb`    | 3 in, 0 out               | RGB indicator: inputs `0`, `1`, `2` control red, green and blue.         |
 | `marker` | none                      | Non-functional navigation flag with a `name` and `color`.                 |
 | `port`   | 1 or N in, 1 or N out     | Wire/ribbon connector. Ribbon input and output faces can independently be a cable socket or an array of lane pins. |
+| `table`  | probes along the top      | Truth table. See below. |
 
 Inverted gates are written with `"not": true`. These shorthand types are also accepted
 and are converted automatically: `nand`, `nor`, `xnor`, `not` (buffer with a bubble),
 `lamp`/`light`/`led`/`output` (bulb), `rgbbulb` (RGB bulb), `clock`/`pulse` (timer),
 `toggle`/`input` (switch), `pushbutton` (button),
-`label`/`flag` (marker). Prefer the canonical form above.
+`label`/`flag` (marker), `truthtable` (table). Prefer the canonical form above.
+
+### Truth table
+
+A `table` component carries a `table` object:
+
+```json
+{"id":"tt","type":"table","x":0,"y":200,"table":{"mode":"discovery","inputs":2,"outputs":1,"names":["A","B","1"],"rows":[null,"0","1",null]}}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `mode` | `"discovery"` or `"solution"`. |
+| `inputs`, `outputs` | Column counts, from 0 to 8. Input pins are `0 .. inputs-1`. Output pins are `8 .. 8+outputs-1`. Discovery tables also accept one spare pin on each half (`inputs`, and `8+outputs`) which adds a column. |
+| `names` | Column titles, inputs then outputs. While a wire is connected the app shows that part's name instead. |
+| `rows` | One entry per input combination (`2^inputs`). `null` means that combination has not been seen. A string is one character per output: `"0"`, `"1"`, or `"."` if that output is not recorded yet. The leftmost input is the high bit, so row 1 of a 3-input table is `0 0 1`. |
+| `marks` | Optional. Parallel to `rows`. Each string uses `p` for a pass, `f` for a fail, and `.` for a cell the last test has not coloured. |
+
+Wires into a table must come straight from a switch, button, or timer (an input column) or, for an output column, from a bulb's input or from the single part that feeds that bulb. A bulb wire is only a probe: the bulb does not drive other parts through it.
 
 ### Component sizes and pin positions
 

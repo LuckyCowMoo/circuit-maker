@@ -231,6 +231,8 @@ export const AURA_HUE: Record<AuraKind, number> = {
   port: 188,
   'ribbon-port': 204,
   box: 262,
+  // Chartreuse: the open sector between AND's red and the note's green, clear of bulb gold.
+  table: 88,
 };
 
 export interface Rgb {
@@ -241,20 +243,9 @@ export interface Rgb {
 
 const wrap360 = (h: number) => ((h % 360) + 360) % 360;
 
-/** Stable hue offset in [-24, 24]. An empty id is the pure kind colour used by toolbar buttons. */
-export function auraJitter(id: string): number {
-  if (!id) return 0;
-  let h = 2166136261;
-  for (let i = 0; i < id.length; i++) {
-    h ^= id.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (((h >>> 0) / 4294967295) * 2 - 1) * 24;
-}
-
-/** Hue for a kind, plus a small stable shift when `id` is set. */
-export function auraHueOf(kind: AuraKind, id = ''): number {
-  return wrap360(AURA_HUE[kind] + auraJitter(id));
+/** Hue for a kind. Same for every part of that kind. */
+export function auraHueOf(kind: AuraKind): number {
+  return wrap360(AURA_HUE[kind]);
 }
 
 export function hslToRgb(h: number, s: number, l: number): Rgb {
@@ -273,8 +264,8 @@ export function hslToRgb(h: number, s: number, l: number): Rgb {
 }
 
 /** Kind colour at this theme's aura vividness. */
-export function kindAura(theme: Theme, kind: AuraKind, id = ''): Rgb {
-  return hslToRgb(auraHueOf(kind, id), theme.aura.s / 100, theme.aura.l / 100);
+export function kindAura(theme: Theme, kind: AuraKind): Rgb {
+  return hslToRgb(auraHueOf(kind), theme.aura.s / 100, theme.aura.l / 100);
 }
 
 /**
@@ -300,9 +291,9 @@ export function accentAura(theme: Theme): Rgb {
   return hslToRgb(colorHue(theme.selection) ?? 210, theme.aura.s / 100, theme.aura.l / 100);
 }
 
-/** An existing colour's hue, retuned to the theme's aura vividness, with optional per-id jitter. */
-export function vividAura(theme: Theme, color: string, id = ''): Rgb {
-  return hslToRgb((colorHue(color) ?? AURA_HUE.marker) + auraJitter(id), theme.aura.s / 100, theme.aura.l / 100);
+/** An existing colour's hue, retuned to the theme's aura vividness. */
+export function vividAura(theme: Theme, color: string): Rgb {
+  return hslToRgb(colorHue(color) ?? AURA_HUE.marker, theme.aura.s / 100, theme.aura.l / 100);
 }
 
 /** A signal with no real output or no real input: black on a light canvas, gray on a dark one. */
@@ -311,6 +302,18 @@ export function idleWire(theme: Theme): string {
   if (!rgb) return '#111111';
   const lum = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
   return lum < 140 ? '#9aa0aa' : '#111111';
+}
+
+/**
+ * Luminance ceiling for a selection wave, 0–1. Dark canvases hold component and wire
+ * halos to the same deeper level, so a bright green wire does not glow harder than a red gate.
+ * Light themes stay at 1, which leaves the colour alone.
+ */
+export function waveGain(theme: Theme): number {
+  const rgb = parseRgb(theme.bg);
+  if (!rgb) return 1;
+  const lum = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+  return lum < 140 ? 0.32 : 1;
 }
 
 export function parseRgb(color: string): Rgb | null {

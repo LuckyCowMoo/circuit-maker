@@ -18,6 +18,8 @@ interface Live {
   cssH: number;
   building: boolean;
   show: boolean;
+  /** Selection colour scale. 1 on a light canvas. */
+  ink: number;
   /** Camera the page is showing. The stamp stays in `basis` space; placement happens on the main thread. */
   cam: Cam;
   ripple: RippleMsg | null;
@@ -25,7 +27,7 @@ interface Live {
 
 let pass: AuraPass | null = null;
 let canvas: OffscreenCanvas | null = null;
-let live: Live = { cssW: 1, cssH: 1, building: false, show: false, cam: { x: 0, y: 0, zoom: 1 }, ripple: null };
+let live: Live = { cssW: 1, cssH: 1, building: false, show: false, ink: 1, cam: { x: 0, y: 0, zoom: 1 }, ripple: null };
 /** Camera baked into the stamp. Pictures are labelled with this so the main thread can place them. */
 let basis: Cam | null = null;
 let painted = false;
@@ -73,6 +75,7 @@ function paint(): void {
     cssH: live.cssH,
     building: live.building,
     field: live.show && fieldReady,
+    ink: live.ink,
     map: [1, 0, 0],
     place: cameraPlace(basis, live.cam),
     ripple,
@@ -114,6 +117,7 @@ self.onmessage = (event: MessageEvent) => {
     flow?: ImageBitmap;
     building?: boolean;
     show?: boolean;
+    ink?: number;
     basis?: Cam;
     cam?: Cam;
     ripple?: RippleMsg | null;
@@ -163,6 +167,7 @@ self.onmessage = (event: MessageEvent) => {
     live.cssH = msg.cssH ?? live.cssH;
     live.building = !!msg.building;
     live.show = !!msg.show;
+    if (typeof msg.ink === 'number') live.ink = msg.ink;
     if (msg.cam) live.cam = { x: msg.cam.x, y: msg.cam.y, zoom: msg.cam.zoom };
     live.ripple = msg.ripple ?? null;
     paint();

@@ -333,6 +333,8 @@ export function normalizePorts(doc: Doc): boolean {
       const s = doc.components.get(w.from);
       const t = doc.components.get(w.to);
       if (!s || !t) continue;
+      // Truth-table probes stay a direct wire. A port in the middle would no longer be the part itself.
+      if (s.kind === 'table' || t.kind === 'table') continue;
       const S = outScope(s);
       // A lane wire lands on the wire pins. Those sit on the output face when the cable socket is the input.
       const lanePinsOut = t.kind === 'port' && !w.cable && bundleInput(t) && !bundleOutput(t);

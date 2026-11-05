@@ -1,4 +1,5 @@
 import { bodyRect, componentBounds, geomFor, inflate, IO_SIZE, pointInRect, rectInside, rectsOverlap } from './geometry';
+import { freshTable, layoutTable } from './table';
 import type { Box, Component, ComponentKind, Doc, Rect } from './types';
 import { bundleDest, bundleSource, inputCount, isGate, isInput, laneCount } from './types';
 
@@ -42,6 +43,12 @@ export function makeComponent(kind: ComponentKind, x: number, y: number, id: str
     c.pulse = 1;
   }
   if (kind === 'rgb') c.inputBundle = false;
+  if (kind === 'table') {
+    c.table = freshTable();
+    const size = layoutTable(c.table);
+    c.w = size.w;
+    c.h = size.h;
+  }
   return c;
 }
 

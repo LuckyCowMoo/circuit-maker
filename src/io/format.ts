@@ -1,8 +1,9 @@
 import { componentCenter, IO_MAX, IO_MIN, IO_SIZE, MAX_INPUTS, snap } from '../model/geometry';
 import { emptyDoc, idTaken, makeComponent, uid } from '../model/doc';
 import { normalizePorts, placePort, portInward } from '../model/ports';
-import type { Box, Component, ComponentKind, Doc, Rotation, Wire } from '../model/types';
-import { bundleInput, bundleOutput, canRotate, hasOutput, inputCount, isGate, isIO } from '../model/types';
+import { bulbsDrivenBy, normalizeTable, pinSide } from '../model/table';
+import type { Box, Component, ComponentKind, Doc, Rotation, TableData, Wire } from '../model/types';
+import { bundleInput, bundleOutput, canRotate, hasOutput, inputCount, isGate, isInput, isIO } from '../model/types';
 
 export const FORMAT_ID = 'circuit-maker';
 export const FORMAT_VERSION = 1;
@@ -45,6 +46,8 @@ export interface FileComponent {
   outputSide?: 'cable' | 'wires';
   /** Ports placed from the toolbar stay when unwired. */
   placed?: boolean;
+  /** Truth table mode, columns, recorded rows, and the last test marks. */
+  table?: TableData;
 }
 
 export interface FileWire {
@@ -132,6 +135,17 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
       }
     }
     if (c.kind === 'rgb') fc.inputSide = bundleInput(c) ? 'cable' : 'wires';
+    if (c.kind === 'table' && c.table) {
+      const table: TableData = {
+        mode: c.table.mode,
+        inputs: c.table.inputs,
+        outputs: c.table.outputs,
+        names: c.table.names.slice(),
+        rows: c.table.rows.slice(),
+      };
+      if (c.table.marks) table.marks = c.table.marks.slice();
+      fc.table = table;
+    }
     components.push(fc);
   }
   const wires: FileWire[] = [];
@@ -217,6 +231,8 @@ const TYPE_ALIASES: Record<string, { kind: ComponentKind; not?: boolean }> = {
   text: { kind: 'note' },
   port: { kind: 'port' },
   connector: { kind: 'port' },
+  table: { kind: 'table' },
+  truthtable: { kind: 'table' },
 };
 
 export interface ParseResult {
@@ -339,6 +355,7 @@ export function parseCircuit(text: string): ParseResult {
       c.rot = ((((Math.round(num(o.rotate, 0) / 90) % 4) + 4) % 4) as Rotation);
       c.flip = o.flip === true;
     }
+    if (c.kind === 'table') c.table = normalizeTable(o.table);
     if (c.kind === 'port') {
       const boxId = str(o.box);
       const box = boxId ? doc.boxes.get(boxId) : undefined;
@@ -391,7 +408,10 @@ export function parseCircuit(text: string): ParseResult {
     const dst = doc.components.get(to.id);
     if (!src) return warnings.push(`wires[${i}]: no component "${from}".`);
     if (!dst) return warnings.push(`wires[${i}]: no component "${to.id}".`);
-    if (!hasOutput(src.kind)) return warnings.push(`wires[${i}]: "${from}" (${src.kind}) has no output.`);
+    // A bulb wired into a truth table is a probe, not a driver. The simulator ignores it.
+    if (!hasOutput(src.kind) && !(src.kind === 'bulb' && dst.kind === 'table')) {
+      return warnings.push(`wires[${i}]: "${from}" (${src.kind}) has no output.`);
+    }
     const input = Math.round(num(o.input, to.pin ?? 0));
     if (input < 0) return warnings.push(`wires[${i}]: negative input index.`);
     if (isGate(dst.kind) && dst.kind !== 'buffer' && input >= dst.inputs) {
@@ -413,6 +433,22 @@ export function parseCircuit(text: string): ParseResult {
     doc.wires.set(w.id, w);
     taken.set(key, w.id);
   });
+
+  for (const w of [...doc.wires.values()]) {
+    const dst = doc.components.get(w.to);
+    const src = doc.components.get(w.from);
+    if (!dst || dst.kind !== 'table' || !dst.table || !src) continue;
+    const side = pinSide(dst.table, w.input);
+    const bad =
+      !side ? `wires: "${dst.id}" has no pin ${w.input}.` :
+      side === 'in' && !isInput(src.kind) ? `wires: truth table inputs only connect to switches, buttons, and timers.` :
+      side === 'out' && src.kind !== 'bulb' && bulbsDrivenBy(doc, src.id).length !== 1
+        ? `wires: truth table outputs connect to bulbs, or to the part that feeds one bulb.` :
+      null;
+    if (!bad) continue;
+    warnings.push(bad);
+    doc.wires.delete(w.id);
+  }
 
   normalizePorts(doc);
 

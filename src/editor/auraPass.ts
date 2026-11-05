@@ -20,6 +20,8 @@ export interface AuraDraw {
   building: boolean;
   /** Selection distance field. Off leaves a toolbar ripple without painting a stale stamp. */
   field: boolean;
+  /** Luminance ceiling. 1 leaves a light theme alone; dark themes hold the wave lower. */
+  ink: number;
   /** zoomRatio, panX, panY. Slides a stamp drawn for an older camera onto the current one. */
   map: [number, number, number];
   /**
@@ -65,6 +67,7 @@ uniform vec3 uRippleMate;
 uniform vec4 uBar;
 uniform float uBuild;
 uniform float uField;
+uniform float uInk;
 uniform vec3 uMap;
 uniform vec3 uPlace;
 
@@ -302,6 +305,9 @@ void main() {
     }
   }
 
+  // Dark themes hold the selection colour to a luminance ceiling. Ripples and the build circle stay full.
+  float inkL = dot(col, vec3(0.299, 0.587, 0.114));
+  col *= min(uInk / max(inkL, 0.001), 1.0);
   wave *= uField;
   float alpha = wave;
   if (rip > 0.004) {
@@ -408,6 +414,7 @@ export class AuraPass {
     uBar: WebGLUniformLocation | null;
     uBuild: WebGLUniformLocation | null;
     uField: WebGLUniformLocation | null;
+    uInk: WebGLUniformLocation | null;
     uMap: WebGLUniformLocation | null;
     uPlace: WebGLUniformLocation | null;
   } = {
@@ -420,6 +427,7 @@ export class AuraPass {
     uBar: null,
     uBuild: null,
     uField: null,
+    uInk: null,
     uMap: null,
     uPlace: null,
   };
@@ -490,6 +498,7 @@ export class AuraPass {
     gl.uniform3f(this.loc.uPlace, state.place[0], state.place[1], state.place[2]);
     gl.uniform1f(this.loc.uBuild, state.building ? 1 : 0);
     gl.uniform1f(this.loc.uField, state.field ? 1 : 0);
+    gl.uniform1f(this.loc.uInk, state.ink);
     const ripple = state.ripple;
     if (ripple) {
       gl.uniform4f(this.loc.uRipple, ripple.x, ripple.y, ripple.age, 1);
@@ -580,11 +589,13 @@ export class AuraPass {
       uBar: gl.getUniformLocation(prog, 'uBar'),
       uBuild: gl.getUniformLocation(prog, 'uBuild'),
       uField: gl.getUniformLocation(prog, 'uField'),
+      uInk: gl.getUniformLocation(prog, 'uInk'),
       uMap: gl.getUniformLocation(prog, 'uMap'),
       uPlace: gl.getUniformLocation(prog, 'uPlace'),
     };
     gl.uniform3f(this.loc.uMap, 1, 0, 0);
     gl.uniform3f(this.loc.uPlace, 1, 0, 0);
+    gl.uniform1f(this.loc.uInk, 1);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     return true;

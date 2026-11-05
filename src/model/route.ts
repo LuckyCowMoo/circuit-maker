@@ -497,11 +497,12 @@ function squareLanes(doc: Doc): Map<string, number> {
     if (!src || !dst || w.cable) continue;
     const lane = w.lane ?? 0;
     const input = w.input;
-    const a = attachPos(src, wireEndPin(src, -1 - lane, !!w.cable));
+    const srcPin = !w.cable && src.kind === 'bulb' && dst.kind === 'table' ? 0 : wireEndPin(src, -1 - lane, !!w.cable);
+    const a = attachPos(src, srcPin);
     const b = attachPos(dst, wireEndPin(dst, input, !!w.cable));
     if (!a || !b) continue;
     const end = wireEndPin(dst, input, !!w.cable);
-    const trunk = trunkOf(a, pinDir(src, -1), b, pinDir(dst, end));
+    const trunk = trunkOf(a, pinDir(src, srcPin), b, pinDir(dst, end));
     const item = { key: wireKey(w.from, w.to, input, lane), pos: trunk.pos, lo: trunk.lo, hi: trunk.hi };
     (trunk.horizontal ? rows : cols).push(item);
   }
@@ -588,13 +589,14 @@ export function squareWire(a: Point, da: Point, b: Point, db: Point, lane = 0): 
 /** Wire or cable curve in the chosen style. Cached until the layout changes. */
 export function routedWire(map: AvoidMap, src: Component, dst: Component, input: number, lane: number, pad: number, style: WireStyle = 'curve', cable = false): WireCurve | null {
   if (cable && style === 'square') style = 'avoid';
-  const a = attachPos(src, wireEndPin(src, cable ? -1 : -1 - lane, cable));
+  const srcPin = !cable && src.kind === 'bulb' && dst.kind === 'table' ? 0 : wireEndPin(src, cable ? -1 : -1 - lane, cable);
+  const a = attachPos(src, srcPin);
   const b = attachPos(dst, wireEndPin(dst, input, cable));
   if (!a || !b) return null;
   const key = `${wireKey(src.id, dst.id, input, lane)}\0${pad}\0${style}`;
   const cached = map.curves.get(key);
   if (cached) return cached;
-  const da = pinDir(src, -1);
+  const da = pinDir(src, srcPin);
   const db = pinDir(dst, wireEndPin(dst, input, cable));
   const direct = wireCurve(a, b, da, db);
   let curve = direct;

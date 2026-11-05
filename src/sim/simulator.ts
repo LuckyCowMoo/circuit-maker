@@ -25,6 +25,7 @@ const KIND_CODE: Record<ComponentKind, number> = {
   marker: K_MARKER,
   note: K_MARKER,
   port: K_BUF,
+  table: K_MARKER,
 };
 
 /**
@@ -54,6 +55,8 @@ export class Simulator {
   private inQ = new Uint8Array(0);
   private qLen = 0;
   private pressed = new Set<string>();
+  /** Timer outputs held at a fixed bit while a truth table test walks a row. */
+  private held = new Map<string, number>();
   private timers: { index: number; periodMs: number; pulseMs: number }[] = [];
   /** Set whenever an output changes; the owner clears it after redrawing. */
   changed = false;
@@ -433,11 +436,27 @@ export class Simulator {
     this.schedule(i);
   }
 
+  /**
+   * Pins a component's source bit, or releases it when `value` is null.
+   * Timer ticks will not overwrite a held source.
+   */
+  hold(id: string, value: 0 | 1 | null): void {
+    if (value == null) this.held.delete(id);
+    else this.held.set(id, value);
+    const i = this.index.get(id);
+    if (i === undefined || value == null) return;
+    if (this.src[i] === value) return;
+    this.src[i] = value;
+    this.schedule(i);
+  }
+
   /** Updates real-time timer sources. Returns true when at least one timer edge occurred. */
   tickTime(now: number): boolean {
     let moved = false;
     for (const timer of this.timers) {
-      const value = now % timer.periodMs < timer.pulseMs ? 1 : 0;
+      const id = this.ids[timer.index];
+      const held = id !== undefined ? this.held.get(id) : undefined;
+      const value = held !== undefined ? held : now % timer.periodMs < timer.pulseMs ? 1 : 0;
       if (this.src[timer.index] === value) continue;
       this.src[timer.index] = value;
       this.schedule(timer.index);

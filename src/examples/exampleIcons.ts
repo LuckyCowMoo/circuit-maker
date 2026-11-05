@@ -1,3 +1,5 @@
+import { PUZZLES } from './puzzles';
+
 /**
  * Operation marks are the Lucide plus, minus, divide, x, and percent icons (ISC).
  * Bits sit underneath: one dot with a 1, a row of four with a 4, or two rows of four with an 8.
@@ -39,6 +41,58 @@ const DIVIDE = `<circle cx="12" cy="6" r="1.7" fill="currentColor" stroke="none"
 const TIMES = `<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`;
 const PERCENT = `<line x1="19" x2="5" y1="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>`;
 
+const num = (n: number) => n.toFixed(2);
+
+/**
+ * A truth-table mark. More inputs and outputs add rows, columns, and filled answers,
+ * so a later puzzle draws a denser icon than an earlier one.
+ */
+function puzzleGlyph(step: number, inputs: number, outputs: number, rows: string[]): string {
+  const cols = inputs + outputs;
+  const n = rows.length;
+  const x0 = 10;
+  const y0 = 17;
+  const gw = 44;
+  const gh = 38;
+  const cw = gw / cols;
+  const ch = gh / n;
+  const parts: string[] = [
+    `<rect x="6" y="5" width="52" height="54" rx="7" stroke="currentColor" stroke-width="2.4" fill="none"/>`,
+  ];
+  const dots = step + 1;
+  const span = 34;
+  for (let i = 0; i < dots; i++) {
+    const cx = dots === 1 ? 32 : 32 - span / 2 + (span * i) / (dots - 1);
+    parts.push(`<circle cx="${num(cx)}" cy="10.6" r="1.7" fill="currentColor"/>`);
+  }
+  for (let r = 0; r <= n; r++) {
+    const y = num(y0 + r * ch);
+    parts.push(`<line x1="${x0}" y1="${y}" x2="${num(x0 + gw)}" y2="${y}" stroke="currentColor" stroke-width="1.1"/>`);
+  }
+  for (let c = 0; c <= cols; c++) {
+    const x = num(x0 + c * cw);
+    const heavy = c === inputs;
+    parts.push(
+      `<line x1="${x}" y1="${y0}" x2="${x}" y2="${num(y0 + gh)}" stroke="currentColor" stroke-width="${heavy ? 2 : 1.1}"/>`,
+    );
+  }
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < cols; c++) {
+      const output = c >= inputs;
+      const on = output ? rows[r][c - inputs] === '1' : ((r >> (inputs - 1 - c)) & 1) === 1;
+      if (!on) continue;
+      const pad = Math.min(cw, ch) * 0.22;
+      const x = x0 + c * cw + pad;
+      const y = y0 + r * ch + pad;
+      const w = cw - pad * 2;
+      const h = ch - pad * 2;
+      const opacity = output ? '' : ' opacity="0.35"';
+      parts.push(`<rect x="${num(x)}" y="${num(y)}" width="${num(w)}" height="${num(h)}" rx="0.8" fill="currentColor"${opacity}/>`);
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">${parts.join('')}</svg>`;
+}
+
 /** Static SVG logos for the examples list (viewBox 0 0 64 64). */
 const ICONS: Record<string, string> = {
   half: opIcon(PLUS, 1),
@@ -70,6 +124,10 @@ const ICONS: Record<string, string> = {
   snake: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="10" y="10" width="12" height="12" rx="2" fill="currentColor"/><rect x="22" y="10" width="12" height="12" rx="2" fill="currentColor" opacity="0.7"/><rect x="34" y="10" width="12" height="12" rx="2" fill="currentColor" opacity="0.5"/><rect x="34" y="22" width="12" height="12" rx="2" fill="currentColor" opacity="0.35"/><circle cx="16" cy="16" r="2" fill="#0c0c0e"/></svg>`,
   stress: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><path d="M8 32c8-12 16-12 24 0s16 12 24 0" stroke="currentColor" stroke-width="2.5" fill="none"/><path d="M8 44c8-12 16-12 24 0s16 12 24 0" stroke="currentColor" stroke-width="2.5" fill="none" opacity="0.5"/><circle cx="32" cy="20" r="6" stroke="currentColor" stroke-width="2.5"/></svg>`,
 };
+
+PUZZLES.forEach((puzzle, step) => {
+  ICONS[puzzle.id] = puzzleGlyph(step, puzzle.inputs.length, puzzle.outputs.length, puzzle.rows);
+});
 
 const DEFAULT_ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none"><rect x="12" y="12" width="40" height="40" rx="8" stroke="currentColor" stroke-width="2.5"/><path d="M24 32h16M32 24v16" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>`;
 

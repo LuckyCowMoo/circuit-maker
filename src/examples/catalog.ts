@@ -27,6 +27,7 @@ import {
   sub8Doc,
 } from './circuits';
 import { calculatorDoc } from './calculator';
+import { PUZZLES, puzzleDoc } from './puzzles';
 import { snakeDoc } from './snake';
 import { emptyDoc, makeComponent } from '../model/doc';
 
@@ -92,6 +93,10 @@ function stressDoc(): Doc {
 }
 
 export const EXAMPLES: ExampleGroup[] = [
+  {
+    name: 'Puzzles',
+    items: PUZZLES.map((spec) => ({ id: spec.id, name: spec.name, build: () => puzzleDoc(spec) })),
+  },
   {
     name: 'Arithmetic',
     items: [

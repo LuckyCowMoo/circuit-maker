@@ -227,4 +227,21 @@ describe('Simulator', () => {
     sim.settle();
     expect(sim.value(`g${n - 1}`)).toBe(true);
   });
+
+  it('holds a timer output while a truth table test forces a row', () => {
+    const doc = build([['clk', 'timer']], []);
+    const sim = run(doc);
+    sim.hold('clk', 0);
+    sim.tickTime(100);
+    sim.settle();
+    expect(sim.value('clk')).toBe(false);
+    sim.hold('clk', 1);
+    sim.tickTime(1500);
+    sim.settle();
+    expect(sim.value('clk')).toBe(true);
+    sim.hold('clk', null);
+    sim.tickTime(1500);
+    sim.settle();
+    expect(sim.value('clk')).toBe(false);
+  });
 });

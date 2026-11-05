@@ -1,5 +1,13 @@
 /** Component counts shown on example cards. Written by scripts/generate-example-previews.ts. */
 export const EXAMPLE_PIECES: Record<string, number> = {
+  solnot: 2,
+  soland: 2,
+  solor: 2,
+  solxor: 2,
+  solnand: 2,
+  solhalf: 2,
+  solmaj: 2,
+  solfull: 2,
   half: 15,
   full: 33,
   alu: 76,

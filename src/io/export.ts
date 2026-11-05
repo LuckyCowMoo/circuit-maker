@@ -13,6 +13,7 @@ import {
 } from '../model/geometry';
 import { avoidMap, routedWire, type WireStyle } from '../model/route';
 import { partInfo, partLabel, type PartContext } from '../model/parts';
+import { columnTitleColors, columnTitles } from '../model/table';
 import { componentOps, textRect, type DrawOp } from '../model/shapes';
 import { idleWire, wireColors, type Theme } from '../model/themes';
 import type { Doc, Rect } from '../model/types';
@@ -155,6 +156,10 @@ export function buildSvg(
     info.lanes?.forEach((lane, i) => {
       lane.on = signal(c.id, i);
     });
+    if (c.kind === 'table') {
+      info.tableTitles = columnTitles(doc, c);
+      info.tableTitleColors = columnTitleColors(doc, c, theme, pc.roots, pc.live, signal);
+    }
     const m = xformOf(c);
     const t = `matrix(${[m.a, m.b, m.c, m.d, m.e, m.f].map((n) => Math.round(n * 100) / 100).join(' ')})`;
     out.push(`<g transform="${t}">${componentOps(c, theme, info).map(opToSvg).join('')}</g>`);

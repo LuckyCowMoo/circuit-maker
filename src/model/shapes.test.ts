@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeComponent } from './doc';
-import { componentOps, type TextOp } from './shapes';
+import { applyXf, xformOf } from './geometry';
+import { componentOps, pointOnKnob, type TextOp } from './shapes';
 import { THEMES } from './themes';
 
 const theme = THEMES[0];
@@ -60,5 +61,31 @@ describe('key on the part', () => {
 
   it('leaves timers unlabeled', () => {
     expect(legend('timer', 'KeyA').texts).toHaveLength(0);
+  });
+});
+
+describe('switch and button knobs', () => {
+  const at = (c: ReturnType<typeof makeComponent>, local: { x: number; y: number }, t?: number, pressed?: boolean) =>
+    pointOnKnob(c, applyXf(xformOf(c), local), t, pressed);
+
+  it('hits the switch pip and misses the housing', () => {
+    const sw = makeComponent('switch', 80, 40, 's');
+    expect(at(sw, { x: 14, y: 20 }, 0)).toBe(true);
+    expect(at(sw, { x: 32, y: 20 }, 0)).toBe(false);
+    expect(at(sw, { x: 2, y: 2 }, 0)).toBe(false);
+    expect(at(sw, { x: 26, y: 20 }, 1)).toBe(true);
+    expect(at(sw, { x: 8, y: 20 }, 1)).toBe(false);
+    sw.rot = 1;
+    expect(at(sw, { x: 14, y: 20 }, 0)).toBe(true);
+    expect(at(sw, { x: 2, y: 2 }, 0)).toBe(false);
+  });
+
+  it('hits the button face and misses the housing', () => {
+    const btn = makeComponent('button', 0, 0, 'b');
+    expect(at(btn, { x: 20, y: 20 })).toBe(true);
+    expect(at(btn, { x: 3, y: 3 })).toBe(false);
+    expect(at(btn, { x: 8, y: 20 })).toBe(false);
+    expect(at(btn, { x: 8, y: 20 }, undefined, true)).toBe(false);
+    expect(at(btn, { x: 20, y: 20 }, undefined, true)).toBe(true);
   });
 });

@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accentAura, auraHueOf, auraJitter, auraPartner, kindAura, THEMES } from './themes';
-
-function hueDistance(a: number, b: number): number {
-  const d = Math.abs(a - b) % 360;
-  return Math.min(d, 360 - d);
-}
+import { accentAura, AURA_HUE, auraHueOf, auraPartner, kindAura, THEMES, waveGain } from './themes';
 
 describe('aura colours', () => {
   it('keeps each gate in its own hue family', () => {
@@ -15,16 +10,14 @@ describe('aura colours', () => {
     expect(auraHueOf('not')).toBe(332);
   });
 
-  it('jitters a placed part a little and keeps that shift', () => {
-    expect(auraJitter('')).toBe(0);
-    const ids = ['and_a', 'and_b', 'or_c', 'xor_d', 'gate_e', 'gate_f', 'gate_g', 'gate_h'];
-    const shifts = ids.map((id) => auraJitter(id));
-    for (const shift of shifts) {
-      expect(Math.abs(shift)).toBeLessThanOrEqual(24);
-      expect(auraJitter(ids[shifts.indexOf(shift)])).toBe(shift);
+  it('keeps the truth table wave out of the other families', () => {
+    const hue = auraHueOf('table');
+    expect(hue).toBe(88);
+    for (const [kind, other] of Object.entries(AURA_HUE)) {
+      if (kind === 'table') continue;
+      const d = Math.abs(hue - other);
+      expect(Math.min(d, 360 - d)).toBeGreaterThan(30);
     }
-    expect(new Set(shifts.map((n) => n.toFixed(4))).size).toBeGreaterThan(1);
-    for (const id of ids) expect(hueDistance(auraHueOf('and', id), 4)).toBeLessThanOrEqual(24);
   });
 
   it('paints kinds in the expected families and retunes them per theme', () => {
@@ -40,7 +33,7 @@ describe('aura colours', () => {
     expect(xor.b).toBeGreaterThan(xor.g);
     expect(xor.r).toBeGreaterThan(xor.g);
     expect(kindAura(solar, 'and')).not.toEqual(kindAura(midnight, 'and'));
-    expect(kindAura(solar, 'and', 'and_a')).toEqual(kindAura(solar, 'and', 'and_a'));
+    expect(kindAura(solar, 'buffer')).toEqual(kindAura(solar, 'buffer'));
     const partner = auraPartner(and);
     expect(partner).not.toEqual(and);
     for (const ch of [partner.r, partner.g, partner.b]) {
@@ -48,5 +41,13 @@ describe('aura colours', () => {
       expect(ch).toBeLessThanOrEqual(255);
     }
     expect(accentAura(solar)).not.toEqual(accentAura(midnight));
+  });
+
+  it('darkens selection waves only on the dark themes', () => {
+    expect(waveGain(THEMES[0])).toBe(1);
+    expect(waveGain(THEMES[1])).toBe(1);
+    expect(waveGain(THEMES[2])).toBe(0.32);
+    expect(waveGain(THEMES[3])).toBe(0.32);
+    expect(waveGain(THEMES[2])).toBe(waveGain(THEMES[3]));
   });
 });

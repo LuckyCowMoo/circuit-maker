@@ -53,7 +53,38 @@ import {
   wallPoint,
   type Side,
 } from '../model/ports';
-import { noteAmp } from '../model/shapes';
+import { noteAmp, pointOnKnob } from '../model/shapes';
+import {
+  addInputColumn,
+  addOutputColumn,
+  blankOutputColumn,
+  clearMarks,
+  cloneTable,
+  bulbsDrivenBy,
+  columnBulb,
+  columnTitles,
+  dropInput,
+  dropOutput,
+  gradeRow,
+  layoutTable,
+  maxScroll,
+  nameIndex,
+  observe,
+  pinIsSpare,
+  pinSide,
+  rowBit,
+  setRowMark,
+  tableComplete,
+  tablePassed,
+  wireAt,
+  wipeRows,
+  TABLE_CONVERT_MS,
+  TABLE_OUT,
+  TABLE_ROW_H,
+  TABLE_STEP_MS,
+  TABLE_VISIBLE,
+} from '../model/table';
+import { buildRowPreview, type RowPreviewModel } from '../model/tablePreview';
 import { getTheme, type Theme } from '../model/themes';
 import { isModifierOnly } from '../model/keys';
 import type { Box, Component, ComponentKind, Doc, Point, Rect, Rotation, Wire } from '../model/types';
@@ -67,6 +98,7 @@ import {
   hasOutput,
   inputCount,
   isGate,
+  isInput,
   isIO,
   isRibbonPort,
   laneCount,
@@ -124,6 +156,21 @@ export interface Arrow {
 }
 
 /** Which edges of a box a resize drag moves (two edges = a corner). */
+export interface ConfettiBit {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  rot: number;
+  vr: number;
+  w: number;
+  h: number;
+  color: string;
+  born: number;
+  life: number;
+  alpha: number;
+}
+
 export interface BoxEdges {
   box: string;
   l: boolean;
@@ -147,6 +194,7 @@ export type Drag =
       press: string | null;
       toggle: string | null;
     }
+  | { kind: 'operate'; sx: number; sy: number; id: string; press: boolean; toggle: boolean; moved: boolean }
   | { kind: 'marquee'; start: Point; cur: Point; base: Set<string>; sx: number; sy: number; moved: boolean; click: string | null; shift: boolean }
   | {
       kind: 'wire';
@@ -225,6 +273,7 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   not: 'NOT bubble',
   port: 'Wire port',
   'ribbon-port': 'Ribbon port',
+  table: 'Truth table',
 };
 
 const storage = {
@@ -375,6 +424,27 @@ export class Editor {
   /** Wire to finish after placing a ribbon port from the cable drop menu. */
   pendingConnect: PinRef | null = null;
   hoverPin: PinRef | null = null;
+  /** Solution-table row under the pointer, and where its circuit preview should sit. */
+  rowHover: { id: string; row: number; sx: number; sy: number } | null = null;
+  /** Circuit snapshot for `rowHover`, or null when that row should not pop up. */
+  rowPreview: RowPreviewModel | null = null;
+  private rowHoverKey = '';
+  private previewEpoch = 0;
+  /** First visible row of each truth table. Not saved; the header stays put either way. */
+  private tableScroll = new Map<string, number>();
+  /** Discovery button held down, waiting out the convert confirmation. */
+  private convertHold: { id: string; started: number } | null = null;
+  /** Pieces bursting off a truth table that just passed its test. */
+  confetti: ConfettiBit[] = [];
+  private confettiTime = 0;
+  /** Solution table currently walking its rows. Edits wait until it finishes. */
+  private tableTest: {
+    id: string;
+    showing: number;
+    nextAt: number;
+    inputs: { id: string; kind: 'switch' | 'button' | 'timer' }[];
+    outputs: string[];
+  } | null = null;
   /** Box edge under the pointer, which a drag would resize. */
   hoverEdge: BoxEdges | null = null;
   /** Edge of a text box under the pointer, which a drag would move. */
@@ -454,6 +524,7 @@ export class Editor {
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointercancel', this.onPointerCancel);
+    canvas.addEventListener('pointerleave', this.onPointerLeave);
     canvas.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('contextmenu', this.onContextMenu);
     canvas.addEventListener('dragover', this.onDragOver);
@@ -487,6 +558,7 @@ export class Editor {
   }
 
   detach(): void {
+    this.cancelConvertHold();
     this.aura?.dispose();
     this.aura = null;
     this.auraOn = false;
@@ -498,6 +570,7 @@ export class Editor {
     canvas.removeEventListener('pointermove', this.onPointerMove);
     canvas.removeEventListener('pointerup', this.onPointerUp);
     canvas.removeEventListener('pointercancel', this.onPointerCancel);
+    canvas.removeEventListener('pointerleave', this.onPointerLeave);
     canvas.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('contextmenu', this.onContextMenu);
     canvas.removeEventListener('dragover', this.onDragOver);
@@ -578,6 +651,10 @@ export class Editor {
     }
     this.sim.tickTime(now);
     if (this.sim.pending) await this.sim.stepLive();
+    this.tickTableTest(now);
+    this.tickConvertHold(now);
+    this.tickConfetti(now);
+    this.sampleDiscovery();
     if (this.sim.changed) {
       this.sim.changed = false;
       this.needsRender = true;
@@ -625,11 +702,18 @@ export class Editor {
 
   /** Call after any document mutation. Keeps box ports in step with the wiring. */
   private changed(topology: boolean): void {
+    if (topology) this.reconcileTables();
     if (normalizePorts(this.doc)) {
       topology = true;
       for (const id of [...this.selection]) if (!this.itemExists(id)) this.selection.delete(id);
     }
     if (topology) this.topologyDirty = true;
+    this.previewEpoch++;
+    if (this.rowHover) {
+      const hover = this.rowHover;
+      this.rowHoverKey = '';
+      this.setRowHover({ id: hover.id, row: hover.row });
+    }
     this.needsRender = true;
     this.scheduleAutosave();
     this.emit();
@@ -656,9 +740,8 @@ export class Editor {
   // ---------------------------------------------------------------- persistence
 
   /**
-   * Starts the tab: `?new` opens a fresh project on the starter circuit, `?open=<id>` a file
-   * handed over by another tab; otherwise the tab's own autosave, the most recently used
-   * project, or the starter circuit.
+   * Starts the tab: `?new` opens an empty project, `?open=<id>` a file handed over by another
+   * tab; otherwise the tab's own autosave, the most recently used project, or the starter circuit.
    */
   loadInitial(): void {
     const params = new URLSearchParams(location.search);
@@ -669,7 +752,10 @@ export class Editor {
       this.tab = tabId(true);
     }
     if (blank) {
-      this.openStarter();
+      this.doc = emptyDoc();
+      this.selection = new Set();
+      this.setView({ x: 0, y: 0, zoom: 1 });
+      this.changed(true);
       return;
     }
     if (handoff !== null) {
@@ -786,6 +872,10 @@ export class Editor {
   }
 
   undo(): void {
+    if (this.tableTest) {
+      this.toast('A truth table test is running.');
+      return;
+    }
     const prev = this.undoStack.pop();
     if (prev === undefined) return;
     this.redoStack.push(this.snapshot());
@@ -793,6 +883,10 @@ export class Editor {
   }
 
   redo(): void {
+    if (this.tableTest) {
+      this.toast('A truth table test is running.');
+      return;
+    }
     const next = this.redoStack.pop();
     if (next === undefined) return;
     this.undoStack.push(this.snapshot());
@@ -1001,6 +1095,10 @@ export class Editor {
 
   /** Arms placement mode. If `e` is given (a toolbar pointerdown), dragging onto the canvas places on release. */
   beginPlace(kind: PlaceKind, e?: PointerEvent): void {
+    if (this.tableTest) {
+      this.toast('A truth table test is running.');
+      return;
+    }
     this.closeMenu();
     if (kind === 'box' && (this.selectedComponents().length || this.selectedBoxes().length)) {
       this.wrapSelectionInBox();
@@ -1232,6 +1330,7 @@ export class Editor {
   }
 
   wrapSelectionInBox(): void {
+    if (this.editsLocked()) return;
     const ids = expandWithContents(this.doc, this.selection);
     const b = itemsBounds(this.doc, ids);
     if (!b) return;
@@ -1246,12 +1345,19 @@ export class Editor {
 
   /** Connects an output pin to an input pin (in either order). Replaces any wire already on that input. */
   private connect(a: PinRef, b: PinRef): boolean {
+    const ca = this.doc.components.get(a.comp);
+    const cb = this.doc.components.get(b.comp);
+    // A bulb input pin is not an output, but it can probe a truth-table output column.
+    if (ca?.kind === 'bulb' && cb?.kind === 'table') return this.connectTable(ca, cb, b.pin);
+    if (cb?.kind === 'bulb' && ca?.kind === 'table') return this.connectTable(cb, ca, a.pin);
     const out = a.pin < 0 ? a : b.pin < 0 ? b : null;
     const inp = out === a ? b : a;
     if (!out || !inp) return false;
     const src = this.doc.components.get(out.comp);
     const dst = this.doc.components.get(inp.comp);
-    if (!src || !dst || !hasOutput(src.kind)) return false;
+    if (!src || !dst) return false;
+    if (dst.kind === 'table') return this.connectTable(src, dst, inp.pin);
+    if (!hasOutput(src.kind)) return false;
     // A gate output dropped on a cable port's wire pins (the side opposite the cable socket).
     if (inp.pin < 0 && isRibbonPort(dst) && !bundleOutput(dst)) {
       const lane = -inp.pin - 1;
@@ -1305,7 +1411,407 @@ export class Editor {
     return null;
   }
 
+  /** First visible row of a truth table, for drawing. */
+  tableScrollOf(id: string): number {
+    return this.tableScroll.get(id) ?? 0;
+  }
+
+  private clampTableScroll(id: string): void {
+    const t = this.doc.components.get(id)?.table;
+    if (!t) return;
+    const max = maxScroll(t);
+    const cur = this.tableScroll.get(id) ?? 0;
+    if (cur > max) this.tableScroll.set(id, max);
+  }
+
+  private scrollTable(id: string, delta: number): void {
+    const t = this.doc.components.get(id)?.table;
+    if (!t) return;
+    const max = maxScroll(t);
+    const next = Math.max(0, Math.min(max, (this.tableScroll.get(id) ?? 0) + delta));
+    if (next === (this.tableScroll.get(id) ?? 0)) return;
+    this.tableScroll.set(id, next);
+    this.needsRender = true;
+  }
+
+  private hitTableButton(w: Point): Component | null {
+    let hit: Component | null = null;
+    for (const c of this.doc.components.values()) {
+      if (c.kind !== 'table' || !c.table) continue;
+      const btn = layoutTable(c.table).button;
+      if (pointInRect(w, { x: c.x + btn.x, y: c.y + btn.y, w: btn.w, h: btn.h })) hit = c;
+    }
+    return hit;
+  }
+
+  private tableUnder(w: Point): Component | null {
+    let hit: Component | null = null;
+    for (const c of this.doc.components.values()) {
+      if (c.kind === 'table' && pointInRect(w, componentBounds(c))) hit = c;
+    }
+    return hit;
+  }
+
+  /** Wires a switch, button, timer, or bulb straight into a truth-table column. */
+  private connectTable(src: Component, dst: Component, pin: number): boolean {
+    const t = dst.table;
+    if (!t) return false;
+    const side = pinSide(t, pin);
+    if (!side) return false;
+    if (side === 'in' && !isInput(src.kind)) {
+      this.toast('Connect a switch, button, or timer straight to an input column.');
+      return false;
+    }
+    if (side === 'out' && src.kind === 'rgb') {
+      this.toast("A truth table column is one bit, so it can't connect to an RGB bulb.");
+      return false;
+    }
+    const driven = src.kind === 'bulb' ? [] : bulbsDrivenBy(this.doc, src.id);
+    const watched = src.kind === 'bulb' ? src : driven.length === 1 ? driven[0] : null;
+    if (side === 'out' && !watched) {
+      this.toast('Connect a bulb, or the part that feeds one bulb.');
+      return false;
+    }
+    const prev = wireAt(this.doc, dst.id, pin);
+    if (prev?.from === src.id) return true;
+    for (let i = 0; i < t.inputs + t.outputs; i++) {
+      const otherPin = i < t.inputs ? i : TABLE_OUT + (i - t.inputs);
+      if (otherPin === pin) continue;
+      const other = this.columnSource(dst.id, otherPin);
+      if (other?.id === src.id || (watched && columnBulb(this.doc, dst.id, otherPin)?.id === watched.id)) {
+        this.toast('That part is already a column.');
+        return false;
+      }
+    }
+    if (prev) this.doc.wires.delete(prev.id);
+    const label = watched?.name || src.name;
+    let slot = pin;
+    if (t.mode === 'discovery' && pinIsSpare(t, pin)) {
+      if (side === 'in') {
+        for (const w of this.doc.wires.values()) if (w.to === dst.id && w.input >= 0 && w.input < TABLE_OUT) w.input++;
+        addInputColumn(t, label);
+        slot = 0;
+      } else addOutputColumn(t, label);
+      this.clampTableScroll(dst.id);
+    } else if (t.mode === 'discovery' && prev && prev.from !== src.id) {
+      if (side === 'in') wipeRows(t);
+      else blankOutputColumn(t, pin - TABLE_OUT);
+      const at = nameIndex(t, pin);
+      if (at >= 0 && at < t.names.length) t.names[at] = label;
+    } else if (t.mode === 'discovery') {
+      const at = nameIndex(t, pin);
+      if (at >= 0 && at < t.names.length) t.names[at] = label;
+    }
+    const wire: Wire = { id: uid(this.doc, 'w_'), from: src.id, to: dst.id, input: slot, separatePort: true };
+    this.doc.wires.set(wire.id, wire);
+    return true;
+  }
+
+  /** Drops discovery columns whose wire was removed. Solution columns stay put. */
+  private reconcileTables(): void {
+    for (const c of this.doc.components.values()) {
+      const t = c.table;
+      if (!t || t.mode !== 'discovery') continue;
+      for (const w of [...this.doc.wires.values()]) {
+        if (w.to === c.id && pinSide(t, w.input) == null) this.doc.wires.delete(w.id);
+      }
+      for (let i = t.inputs - 1; i >= 0; i--) {
+        if (wireAt(this.doc, c.id, i)) continue;
+        for (const w of this.doc.wires.values()) if (w.to === c.id && w.input > i && w.input < TABLE_OUT) w.input--;
+        dropInput(t, i);
+      }
+      for (let i = t.outputs - 1; i >= 0; i--) {
+        const pin = TABLE_OUT + i;
+        if (wireAt(this.doc, c.id, pin)) continue;
+        for (const w of this.doc.wires.values()) if (w.to === c.id && w.input > pin && w.input < TABLE_OUT * 2) w.input--;
+        dropOutput(t, i);
+      }
+      this.clampTableScroll(c.id);
+    }
+  }
+
+  private sampleDiscovery(): void {
+    if (this.sim.pending) return;
+    let changed = false;
+    for (const c of this.doc.components.values()) {
+      const t = c.table;
+      if (!t || t.mode !== 'discovery' || t.inputs < 1 || t.outputs < 1) continue;
+      const bits: boolean[] = [];
+      const outs: boolean[] = [];
+      let ok = true;
+      for (let i = 0; i < t.inputs && ok; i++) {
+        const src = this.columnSource(c.id, i);
+        if (!src || !isInput(src.kind)) ok = false;
+        else bits.push(this.sim.value(src.id));
+      }
+      for (let i = 0; i < t.outputs && ok; i++) {
+        const bulb = columnBulb(this.doc, c.id, TABLE_OUT + i);
+        if (!bulb) ok = false;
+        else outs.push(this.sim.value(bulb.id));
+      }
+      if (ok && observe(t, bits, outs)) changed = true;
+    }
+    if (!changed) return;
+    this.needsRender = true;
+    this.scheduleAutosave();
+  }
+
+  private columnSource(tableId: string, pin: number): Component | null {
+    const wire = wireAt(this.doc, tableId, pin);
+    return wire ? this.doc.components.get(wire.from) ?? null : null;
+  }
+
+  private editsLocked(): boolean {
+    if (!this.tableTest) return false;
+    this.toast('A truth table test is running.');
+    return true;
+  }
+
+  private revealTestRow(id: string, row: number): void {
+    const top = this.tableScroll.get(id) ?? 0;
+    if (row < top) this.tableScroll.set(id, row);
+    else if (row >= top + TABLE_VISIBLE) this.tableScroll.set(id, row - TABLE_VISIBLE + 1);
+  }
+
+  private onTableButton(c: Component): void {
+    const t = c.table;
+    if (!t || t.mode !== 'solution') return;
+    if (this.tableTest && this.tableTest.id !== c.id) {
+      this.toast('A truth table test is running.');
+      return;
+    }
+    this.startTableTest(c);
+  }
+
+  /** Starts the 3s confirmation. A short press, or a press on an unfinished table, does not convert. */
+  private beginConvertHold(c: Component): void {
+    const t = c.table;
+    if (!t || t.mode !== 'discovery') return;
+    if (this.tableTest) {
+      this.toast('A truth table test is running.');
+      return;
+    }
+    if (!tableComplete(t)) {
+      this.toast(t.inputs < 1 || t.outputs < 1 ? 'Connect at least one input and one output.' : 'This table still has empty rows.');
+      return;
+    }
+    this.convertHold = { id: c.id, started: performance.now() };
+    this.needsRender = true;
+  }
+
+  private cancelConvertHold(): void {
+    if (!this.convertHold) return;
+    this.convertHold = null;
+    this.needsRender = true;
+  }
+
+  /** 0–1 while this table's convert button is held, so the fill can track the finger. */
+  convertHoldOf(id: string): number {
+    const hold = this.convertHold;
+    if (!hold || hold.id !== id) return 0;
+    return Math.max(0, Math.min(1, (performance.now() - hold.started) / TABLE_CONVERT_MS));
+  }
+
+  private tickConvertHold(now: number): void {
+    const hold = this.convertHold;
+    if (!hold) return;
+    const c = this.doc.components.get(hold.id);
+    const t = c?.table;
+    if (!c || !t || t.mode !== 'discovery' || !tableComplete(t)) {
+      this.convertHold = null;
+      this.needsRender = true;
+      return;
+    }
+    if (now - hold.started < TABLE_CONVERT_MS) {
+      this.needsRender = true;
+      return;
+    }
+    this.convertHold = null;
+    this.convertTable(c);
+  }
+
+  private convertTable(c: Component): void {
+    const t = c.table;
+    if (!t) return;
+    if (!tableComplete(t)) {
+      this.toast(t.inputs < 1 || t.outputs < 1 ? 'Connect at least one input and one output.' : 'This table still has empty rows.');
+      return;
+    }
+    this.checkpoint();
+    t.names = columnTitles(this.doc, c);
+    for (const w of [...this.doc.wires.values()]) if (w.to === c.id) this.doc.wires.delete(w.id);
+    t.mode = 'solution';
+    clearMarks(t);
+    this.tableScroll.delete(c.id);
+    this.selection = new Set([c.id]);
+    this.changed(true);
+  }
+
+  private startTableTest(c: Component): void {
+    const t = c.table;
+    if (!t || t.mode !== 'solution') return;
+    const inputs: { id: string; kind: 'switch' | 'button' | 'timer' }[] = [];
+    const outputs: string[] = [];
+    for (let i = 0; i < t.inputs; i++) {
+      const src = this.columnSource(c.id, i);
+      if (!src || (src.kind !== 'switch' && src.kind !== 'button' && src.kind !== 'timer')) {
+        this.toast('Connect every input and output first.');
+        return;
+      }
+      inputs.push({ id: src.id, kind: src.kind });
+    }
+    for (let i = 0; i < t.outputs; i++) {
+      const bulb = columnBulb(this.doc, c.id, TABLE_OUT + i);
+      if (!bulb) {
+        this.toast('Connect every input and output first.');
+        return;
+      }
+      outputs.push(bulb.id);
+    }
+    if (this.tableTest && this.tableTest.id !== c.id) this.releaseTestHolds();
+    if (this.tableTest?.id !== c.id) this.checkpoint();
+    clearMarks(t);
+    this.confetti = [];
+    this.tableTest = { id: c.id, showing: 0, nextAt: performance.now() + TABLE_STEP_MS, inputs, outputs };
+    this.applyTestRow(0);
+    this.paintTestRow(c, 0);
+    this.revealTestRow(c.id, 0);
+    this.needsRender = true;
+    this.scheduleAutosave();
+    this.emit();
+  }
+
+  private applyTestRow(row: number): void {
+    const run = this.tableTest;
+    if (!run) return;
+    const n = run.inputs.length;
+    run.inputs.forEach((src, i) => {
+      const on = n > 0 && rowBit(n, row, i) === '1';
+      const comp = this.doc.components.get(src.id);
+      if (!comp) return;
+      if (comp.kind === 'switch') {
+        comp.on = on;
+        this.sim.setSwitch(comp.id, on);
+        this.publishInput({ t: 'input', kind: 'switch', id: comp.id, on });
+      } else if (comp.kind === 'button') {
+        this.sim.setPressed(comp.id, on);
+        this.publishInput({ t: 'input', kind: 'button', id: comp.id, pressed: on });
+      } else if (comp.kind === 'timer') {
+        this.sim.hold(comp.id, on ? 1 : 0);
+      }
+    });
+    this.sim.settle();
+  }
+
+  private paintTestRow(c: Component, row: number): void {
+    const run = this.tableTest;
+    const t = c.table;
+    if (!run || !t) return;
+    const actual = run.outputs.map((id) => this.sim.value(id));
+    setRowMark(t, row, gradeRow(t.rows[row] ?? '', actual));
+    if (tablePassed(t)) this.celebrate(c);
+  }
+
+  /** Sends confetti out of every side of a table that just matched its circuit. */
+  private celebrate(c: Component): void {
+    const t = c.table;
+    if (!t) return;
+    const lay = layoutTable(t);
+    const colors = [this.theme.on, this.theme.marker, this.theme.selection, this.theme.bulb, this.theme.box];
+    const now = performance.now();
+    const edges = [
+      { x: c.x, y: c.y, dx: lay.w, dy: 0, nx: 0, ny: -1 },
+      { x: c.x + lay.w, y: c.y, dx: 0, dy: lay.h, nx: 1, ny: 0 },
+      { x: c.x, y: c.y + lay.h, dx: lay.w, dy: 0, nx: 0, ny: 1 },
+      { x: c.x, y: c.y, dx: 0, dy: lay.h, nx: -1, ny: 0 },
+    ];
+    const perSide = 18;
+    for (let s = 0; s < edges.length; s++) {
+      const e = edges[s];
+      for (let i = 0; i < perSide; i++) {
+        const u = (i + Math.random()) / perSide;
+        const speed = 90 + Math.random() * 110;
+        const slip = (Math.random() - 0.5) * 80;
+        const along = e.nx === 0 ? slip : (Math.random() - 0.5) * 36;
+        const lift = e.ny === 0 ? -30 - Math.random() * 50 : (Math.random() - 0.5) * 28;
+        this.confetti.push({
+          x: e.x + e.dx * u + e.nx * 4,
+          y: e.y + e.dy * u + e.ny * 4,
+          vx: e.nx * speed + (e.nx === 0 ? along : (Math.random() - 0.5) * 24),
+          vy: e.ny * speed + (e.ny === 0 ? lift : (Math.random() - 0.5) * 24),
+          rot: Math.random() * Math.PI * 2,
+          vr: (Math.random() - 0.5) * 12,
+          w: 8 + Math.random() * 6,
+          h: 4 + Math.random() * 3,
+          color: colors[(s + i) % colors.length],
+          born: now,
+          life: 2200 + Math.random() * 900,
+          alpha: 1,
+        });
+      }
+    }
+    this.confettiTime = now;
+    this.needsRender = true;
+  }
+
+  private tickConfetti(now: number): void {
+    if (!this.confetti.length) {
+      this.confettiTime = now;
+      return;
+    }
+    const dt = Math.min(0.05, Math.max(0, (now - this.confettiTime) / 1000));
+    this.confettiTime = now;
+    const next: ConfettiBit[] = [];
+    for (const p of this.confetti) {
+      const age = (now - p.born) / p.life;
+      if (age >= 1) continue;
+      p.vy += 220 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.rot += p.vr * dt;
+      p.alpha = age < 0.7 ? 1 : (1 - age) / 0.3;
+      next.push(p);
+    }
+    this.confetti = next;
+    this.needsRender = true;
+  }
+
+  private tickTableTest(now: number): void {
+    const run = this.tableTest;
+    if (!run || now < run.nextAt) return;
+    const c = this.doc.components.get(run.id);
+    const t = c?.table;
+    if (!c || !t || t.mode !== 'solution') {
+      this.releaseTestHolds();
+      this.tableTest = null;
+      return;
+    }
+    if (run.showing >= t.rows.length - 1) {
+      this.releaseTestHolds();
+      this.tableTest = null;
+      this.needsRender = true;
+      this.scheduleAutosave();
+      return;
+    }
+    run.showing++;
+    this.applyTestRow(run.showing);
+    this.paintTestRow(c, run.showing);
+    this.revealTestRow(run.id, run.showing);
+    run.nextAt = now + TABLE_STEP_MS;
+    this.needsRender = true;
+  }
+
+  private releaseTestHolds(): void {
+    const run = this.tableTest;
+    if (!run) return;
+    for (const src of run.inputs) if (src.kind === 'timer') this.sim.hold(src.id, null);
+  }
+
   deleteSelection(): void {
+    if (this.tableTest) {
+      this.toast('A truth table test is running.');
+      return;
+    }
     if (!this.selection.size) return;
     this.checkpoint();
     const wireOnly = [...this.selection].every((id) => this.doc.wires.has(id));
@@ -1348,6 +1854,7 @@ export class Editor {
 
   /** Applies a change to every selected component and box. */
   editSelection(tag: string, fn: (item: Component | Box) => void, topology = false): void {
+    if (this.editsLocked()) return;
     const items = [...this.selectedComponents(), ...this.selectedBoxes()];
     if (!items.length) return;
     this.checkpoint(tag);
@@ -1357,6 +1864,7 @@ export class Editor {
   }
 
   setInputs(n: number): void {
+    if (this.editsLocked()) return;
     const count = clamp(Math.round(n), 1, MAX_INPUTS);
     const selected = this.selectedComponents();
     const gates = selected.filter((c) => isGate(c.kind) && c.kind !== 'buffer');
@@ -1517,6 +2025,7 @@ export class Editor {
   }
 
   toggleSwitch(id: string): void {
+    if (this.editsLocked()) return;
     const c = this.doc.components.get(id);
     if (!c || c.kind !== 'switch') return;
     c.on = !c.on;
@@ -1529,6 +2038,7 @@ export class Editor {
 
   /** Sets or clears the keyboard binding on selected switches and buttons. */
   setKeyBind(code: string | null): void {
+    if (this.editsLocked()) return;
     const inputs = this.selectedComponents().filter((c) => c.kind === 'switch' || c.kind === 'button');
     if (!inputs.length) return;
     this.checkpoint('key-bind');
@@ -1537,6 +2047,7 @@ export class Editor {
   }
 
   nudge(dx: number, dy: number): void {
+    if (this.editsLocked()) return;
     const ids = expandWithContents(this.doc, this.selection);
     if (![...ids].some((id) => this.doc.components.has(id) || this.doc.boxes.has(id))) return;
     this.checkpoint('nudge');
@@ -1571,7 +2082,14 @@ export class Editor {
           if (!box) continue;
         } else if (!c.placed) continue;
       }
-      const copy: Component = { ...c, id: newId(c.id, `${c.kind}_`), x: c.x + dx, y: c.y + dy, box };
+      const copy: Component = {
+        ...c,
+        id: newId(c.id, `${c.kind}_`),
+        x: c.x + dx,
+        y: c.y + dy,
+        box,
+        table: c.table ? cloneTable(c.table) : undefined,
+      };
       this.doc.components.set(copy.id, copy);
       map.set(id, copy.id);
     }
@@ -1599,6 +2117,7 @@ export class Editor {
 
   /** Duplicates the selection (boxes with everything inside) into the nearest free space. */
   duplicateSelection(): void {
+    if (this.editsLocked()) return;
     const ids = expandWithContents(this.doc, this.selection);
     for (const id of ids) if (this.doc.wires.has(id)) ids.delete(id);
     const bounds = itemsBounds(this.doc, ids);
@@ -1612,6 +2131,7 @@ export class Editor {
 
   /** Inserts another document's contents near `at` (or the view centre) without overlapping anything. */
   insertDoc(src: Doc, at: Point | null): number {
+    if (this.editsLocked()) return 0;
     const ids = new Set<string>([...src.components.keys(), ...src.boxes.keys()]);
     const bounds = itemsBounds(src, ids);
     if (!bounds) return 0;
@@ -1633,8 +2153,10 @@ export class Editor {
   }
 
   newDocument(): void {
+    if (this.editsLocked()) return;
     this.checkpoint();
     this.doc = emptyDoc();
+    this.confetti = [];
     this.selection = new Set();
     this.setView({ x: 0, y: 0, zoom: 1 });
     this.changed(true);
@@ -1642,6 +2164,7 @@ export class Editor {
 
   /** Opens a project file, replacing the current document or merging into it. */
   loadText(text: string, mode: 'replace' | 'merge', undoable = true): boolean {
+    if (this.editsLocked()) return false;
     let parsed;
     try {
       parsed = parseCircuit(text);
@@ -1652,6 +2175,7 @@ export class Editor {
     if (mode === 'replace') {
       if (undoable) this.checkpoint();
       this.doc = parsed.doc;
+      this.confetti = [];
       this.selection = new Set();
       this.changed(true);
       if (parsed.view) this.setView(parsed.view);
@@ -1729,6 +2253,7 @@ export class Editor {
         { label: 'RGB bulb', kind: 'rgb' },
         { label: 'Marker', kind: 'marker' },
         { label: 'Text box', kind: 'note' },
+        { label: 'Truth table', kind: 'table' },
         { label: 'Box', kind: 'box' },
       ];
     }
@@ -1739,7 +2264,9 @@ export class Editor {
         { label: 'Ribbon port (on box)', kind: 'ribbon-port', portMode: 'box' },
       ];
     }
-    if (from.pin < 0) return [...GATE_MENU, { label: 'Light bulb', kind: 'bulb' }, { label: 'RGB bulb', kind: 'rgb' }];
+    if (from.pin < 0) {
+      return [...GATE_MENU, { label: 'Light bulb', kind: 'bulb' }, { label: 'RGB bulb', kind: 'rgb' }, { label: 'Truth table', kind: 'table' }];
+    }
     return [...GATE_MENU, { label: 'Switch', kind: 'switch' }, { label: 'Button', kind: 'button' }, { label: 'Timer', kind: 'timer' }];
   }
 
@@ -1885,7 +2412,8 @@ export class Editor {
       }
       if (want !== 'out') for (let i = 0; i < g.inputs.length; i++) pins.push(i);
       for (const pin of pins) {
-        const p = pinPos(c, pin)!;
+        const p = pinPos(c, pin);
+        if (!p) continue;
         if (c.kind === 'port' && pointInRect(w, bodyRect(c))) continue;
         const d = Math.hypot(w.x - p.x, w.y - p.y);
         if (d < bestD) {
@@ -2052,11 +2580,51 @@ export class Editor {
     return this.arrows.find((a) => Math.hypot(s.x - a.x, s.y - a.y) < 20) ?? null;
   }
 
+  /** A drag that starts on a bulb input can land only on a truth-table output pin. */
+  private tableOutputTarget(w: Point): PinRef | null {
+    const reach = clamp(this.grab(14) / this.cam.zoom, this.touching ? 16 : 10, this.touching ? 48 : 30);
+    let best: PinRef | null = null;
+    let bestD = reach;
+    for (const c of this.doc.components.values()) {
+      if (c.kind !== 'table' || !c.table) continue;
+      for (const pin of layoutTable(c.table).pins) {
+        if (pin.side !== 'out') continue;
+        const p = pinPos(c, pin.pin);
+        if (!p) continue;
+        const d = Math.hypot(w.x - p.x, w.y - p.y) + (this.wireInto(c.id, pin.pin) ? 1000 : 0);
+        if (d < bestD) {
+          bestD = d;
+          best = { comp: c.id, pin: pin.pin };
+        }
+      }
+    }
+    if (best) return best;
+    const hit = this.hitComponent(w);
+    if (!hit || hit.kind !== 'table' || !hit.table) return null;
+    const lay = layoutTable(hit.table);
+    const firstOut = lay.pins.find((pin) => pin.side === 'out');
+    if (!firstOut || w.x < hit.x + firstOut.colX - 8) return null;
+    let near: PinRef | null = null;
+    let nearD = Infinity;
+    for (const pin of lay.pins) {
+      if (pin.side !== 'out') continue;
+      const p = pinPos(hit, pin.pin);
+      if (!p) continue;
+      const d = Math.hypot(w.x - p.x, w.y - p.y);
+      if (d < nearD) {
+        nearD = d;
+        near = { comp: hit.id, pin: pin.pin };
+      }
+    }
+    return near;
+  }
+
   /** Best pin to connect to while dragging a wire from `from`. */
   private wireTarget(from: PinRef, w: Point): PinRef | null {
     const src = this.doc.components.get(from.comp);
     const cableDrag = !!src && this.isCablePlug(from, src);
     const want = from.pin < 0 ? 'in' : 'out';
+    if (src?.kind === 'bulb' && from.pin >= 0) return this.tableOutputTarget(w);
     const pin = this.hitPin(w, want, clamp(this.grab(14) / this.cam.zoom, this.touching ? 16 : 10, this.touching ? 48 : 30));
     if (pin) {
       const hit = this.doc.components.get(pin.comp);
@@ -2067,12 +2635,25 @@ export class Editor {
     const c = this.hitComponent(w);
     if (!c || c.kind === 'marker') return null;
     if (!cableDrag && isRibbonPort(c) && bundleInput(c) !== bundleOutput(c)) return this.ribbonLanePin(c, w);
+    if (want === 'out' && (c.kind === 'bulb' || c.kind === 'rgb')) {
+      const fromC = this.doc.components.get(from.comp);
+      const fromTable = fromC?.kind === 'table' ? fromC.table : undefined;
+      if (fromTable && pinSide(fromTable, from.pin) === 'out') return { comp: c.id, pin: -1 };
+    }
     const g = geomOf(c);
     if (want === 'out') return g.output ? { comp: c.id, pin: -1 } : null;
     let best: PinRef | null = null;
     let bestScore = Infinity;
     for (let i = 0; i < g.inputs.length; i++) {
-      const p = pinPos(c, i)!;
+      const p = pinPos(c, i);
+      if (!p) continue;
+      if (c.kind === 'table' && c.table) {
+        const side = pinSide(c.table, i);
+        const fromC = this.doc.components.get(from.comp);
+        if (!side || !fromC) continue;
+        if (side === 'in' && !isInput(fromC.kind)) continue;
+        if (side === 'out' && fromC.kind !== 'bulb' && bulbsDrivenBy(this.doc, fromC.id).length !== 1) continue;
+      }
       const score = Math.hypot(p.x - w.x, p.y - w.y) + (this.wireInto(c.id, i) ? 1000 : 0);
       if (score < bestScore) {
         bestScore = score;
@@ -2129,6 +2710,7 @@ export class Editor {
     this.canvas?.focus({ preventScroll: true });
     this.closeMenu();
     if (this.pointers.size === 2) {
+      this.cancelConvertHold();
       this.startPinch();
       return;
     }
@@ -2140,12 +2722,23 @@ export class Editor {
     }
     const pan = e.button === 1 || e.button === 2 || (e.button === 0 && (this.tool === 'pan' || this.spaceHeld));
     if (pan) {
+      this.cancelConvertHold();
       this.camAnim = null;
       this.drag = { kind: 'pan', sx: s.x, sy: s.y, camX: this.cam.x, camY: this.cam.y, moved: false, button: e.button };
       this.updateCursor();
       return;
     }
     if (e.button !== 0) return;
+    const tableButton = this.hitTableButton(w);
+    if (tableButton) {
+      if (tableButton.table?.mode === 'discovery') this.beginConvertHold(tableButton);
+      else this.onTableButton(tableButton);
+      return;
+    }
+    if (this.tableTest) {
+      this.toast('A truth table test is running.');
+      return;
+    }
     if (this.placing) {
       const kind = this.placing;
       this.placeAt(kind, w);
@@ -2196,6 +2789,10 @@ export class Editor {
       return;
     }
     const comp = this.hitComponent(w);
+    if (comp && e.detail < 2 && this.knobAt(comp, w)) {
+      this.startOperate(comp, s);
+      return;
+    }
     if (comp) {
       this.startMove(comp.id, w, s, e.shiftKey, comp);
       if (touch) this.armHold(() => this.openHoldMenu(s));
@@ -2287,11 +2884,6 @@ export class Editor {
         return;
       }
     }
-    let press: string | null = null;
-    if (comp?.kind === 'button') {
-      press = comp.id;
-      this.notePress(comp.id, true);
-    }
     this.drag = {
       kind: 'move',
       start: w,
@@ -2302,8 +2894,29 @@ export class Editor {
       shift,
       moved: false,
       origin: null,
-      press,
-      toggle: comp?.kind === 'switch' ? comp.id : null,
+      press: null,
+      toggle: null,
+    };
+    this.needsRender = true;
+  }
+
+  /** The pip of a switch or the face of a button. The housing around it is not included. */
+  private knobAt(c: Component, w: Point): boolean {
+    if (c.kind !== 'switch' && c.kind !== 'button') return false;
+    return pointOnKnob(c, w, c.kind === 'switch' ? this.switchBlend(c.id) : 0, c.kind === 'button' && this.isActive(c));
+  }
+
+  /** Use the control without selecting it. A drag cancels the toggle or releases the button. */
+  private startOperate(comp: Component, s: Point): void {
+    if (comp.kind === 'button') this.notePress(comp.id, true);
+    this.drag = {
+      kind: 'operate',
+      sx: s.x,
+      sy: s.y,
+      id: comp.id,
+      press: comp.kind === 'button',
+      toggle: comp.kind === 'switch',
+      moved: false,
     };
     this.needsRender = true;
   }
@@ -2353,6 +2966,7 @@ export class Editor {
     const d = this.drag;
     if (!d || d.kind === 'pinch') return;
     if (d.kind === 'move' && d.press) this.notePress(d.press, false);
+    if (d.kind === 'operate' && d.press) this.notePress(d.id, false);
     if (d.kind === 'wire' && d.picked) {
       this.reloadDoc(d.picked);
       return;
@@ -2382,10 +2996,15 @@ export class Editor {
       this.updateGhost(w);
     }
     const d = this.drag;
+    if (this.convertHold) {
+      const over = this.hitTableButton(w);
+      if (d || !over || over.id !== this.convertHold.id) this.cancelConvertHold();
+    }
     if (!d) {
       this.updateHover(w, s);
       return;
     }
+    if (this.rowHover) this.setRowHover(null);
     const far = (sx: number, sy: number) => Math.hypot(s.x - sx, s.y - sy) >= DRAG_PX;
     if ('sx' in d && d.kind !== 'pan' && far(d.sx, d.sy)) this.clearHold();
     switch (d.kind) {
@@ -2454,6 +3073,13 @@ export class Editor {
         this.needsRender = true;
         break;
       }
+      case 'operate': {
+        if (!d.moved && far(d.sx, d.sy)) {
+          d.moved = true;
+          if (d.press) this.notePress(d.id, false);
+        }
+        break;
+      }
       case 'marquee': {
         if (!d.moved && !far(d.sx, d.sy)) return;
         d.moved = true;
@@ -2476,7 +3102,8 @@ export class Editor {
         if (!d.moved) {
           if (!far(d.sx, d.sy)) return;
           d.moved = true;
-          const existing = d.from.pin >= 0 ? this.wireInto(d.from.comp, d.from.pin) : null;
+          const fromComp = this.doc.components.get(d.from.comp);
+          const existing = d.from.pin >= 0 && fromComp?.kind !== 'bulb' ? this.wireInto(d.from.comp, d.from.pin) : null;
           if (existing) {
             // Dragging from a connected input picks the wire up so it can be moved or removed.
             d.picked = this.snapshot();
@@ -2620,6 +3247,7 @@ export class Editor {
     this.pointers.delete(e.pointerId);
     this.touchIds.delete(e.pointerId);
     if (!this.touchIds.size) this.clearHold();
+    this.cancelConvertHold();
     const d = this.drag;
     if (d?.kind === 'pinch') {
       if (this.pointers.size < 2) this.drag = null;
@@ -2650,6 +3278,10 @@ export class Editor {
           this.editClick = this.editingId && typed?.kind === 'note' ? { x: e.clientX, y: e.clientY } : null;
           this.emit();
         }
+        break;
+      case 'operate':
+        if (d.press) this.notePress(d.id, false);
+        if (!d.moved && !cancelled && d.toggle) this.toggleSwitch(d.id);
         break;
       case 'marquee':
         if (!d.moved && d.click && !cancelled) {
@@ -2703,6 +3335,7 @@ export class Editor {
     const corner = this.hitSizeHandle(s);
     const selecting = this.tool === 'select' && !this.spaceHeld;
     if (this.placing) cursor = 'copy';
+    else if (this.hitTableButton(w)) cursor = 'pointer';
     else if (this.hitArrow(s)) cursor = 'pointer';
     else if (corner !== null) cursor = corner === 0 || corner === 2 ? 'nwse-resize' : 'nesw-resize';
     else if (pin) cursor = 'crosshair';
@@ -2711,7 +3344,7 @@ export class Editor {
       if ((noteEdge = this.hitNoteEdge(w))) {
         const e = noteEdge;
         cursor = (e.l || e.r) && (e.t || e.b) ? ((e.l && e.t) || (e.r && e.b) ? 'nwse-resize' : 'nesw-resize') : e.l || e.r ? 'ew-resize' : 'ns-resize';
-      } else if (c) cursor = c.kind === 'switch' || c.kind === 'button' ? 'pointer' : 'move';
+      } else if (c) cursor = this.knobAt(c, w) ? 'pointer' : 'move';
       else if ((edge = this.hitBoxEdge(w))) {
         const e = edge;
         cursor = (e.l || e.r) && (e.t || e.b) ? ((e.l && e.t) || (e.r && e.b) ? 'nwse-resize' : 'nesw-resize') : e.l || e.r ? 'ew-resize' : 'ns-resize';
@@ -2733,6 +3366,62 @@ export class Editor {
       this.needsRender = true;
     }
     if (this.canvas) this.canvas.style.cursor = cursor;
+    if (this.placing) this.setRowHover(null);
+    else this.setRowHover(this.hitTableRow(w));
+  }
+
+  /** Solution row under the pointer. Discovery rows and the button row do not count. */
+  private hitTableRow(w: Point): { id: string; row: number } | null {
+    let hit: { id: string; row: number } | null = null;
+    for (const c of this.doc.components.values()) {
+      const t = c.table;
+      if (c.kind !== 'table' || t?.mode !== 'solution') continue;
+      const lay = layoutTable(t);
+      const lx = w.x - c.x;
+      const ly = w.y - c.y;
+      if (lx < 0 || lx > lay.w || ly < lay.gridTop || ly > lay.h) continue;
+      const i = Math.floor((ly - lay.gridTop) / TABLE_ROW_H);
+      if (i < 0 || i >= lay.visible) continue;
+      const row = (this.tableScroll.get(c.id) ?? 0) + i;
+      if (row < 0 || row >= lay.rows) continue;
+      hit = { id: c.id, row };
+    }
+    return hit;
+  }
+
+  /** Opens the circuit popup for a solution row, or closes it. */
+  private setRowHover(next: { id: string; row: number } | null): void {
+    const key = next ? `${next.id}:${next.row}:${this.previewEpoch}` : '';
+    if (key === this.rowHoverKey) return;
+    this.rowHoverKey = key;
+    if (!next) {
+      if (!this.rowHover && !this.rowPreview) return;
+      this.rowHover = null;
+      this.rowPreview = null;
+      this.emit();
+      return;
+    }
+    const c = this.doc.components.get(next.id);
+    const model = c ? buildRowPreview(this.doc, c, next.row) : null;
+    if (!c?.table || !model) {
+      if (!this.rowHover && !this.rowPreview) return;
+      this.rowHover = null;
+      this.rowPreview = null;
+      this.emit();
+      return;
+    }
+    const lay = layoutTable(c.table);
+    const i = next.row - (this.tableScroll.get(c.id) ?? 0);
+    const screen = this.toScreen({ x: c.x + lay.w, y: c.y + lay.gridTop + (i + 0.5) * TABLE_ROW_H });
+    const origin = this.rect ?? { left: 0, top: 0 };
+    this.rowPreview = model;
+    this.rowHover = { id: next.id, row: next.row, sx: screen.x + origin.left, sy: screen.y + origin.top };
+    this.emit();
+  }
+
+  private onPointerLeave = (): void => {
+    this.cancelConvertHold();
+    this.setRowHover(null);
   }
 
   private updateCursor(): void {
@@ -2752,6 +3441,12 @@ export class Editor {
     const dx = e.deltaX * unit;
     const dy = e.deltaY * unit;
     const s = this.screenPoint(e);
+    const under = this.tableUnder(this.toWorld(s));
+    if (under?.table && maxScroll(under.table) > 0 && !e.ctrlKey && dy !== 0) {
+      const steps = Math.max(1, Math.round(Math.abs(dy) / 40));
+      this.scrollTable(under.id, dy > 0 ? steps : -steps);
+      return;
+    }
     if (e.ctrlKey) {
       this.zoomAt(s, Math.exp(-dy * 0.01));
       return;
@@ -2799,6 +3494,27 @@ export class Editor {
     }
     if (isTyping(e.target)) return;
     const key = e.key.toLowerCase();
+    if (this.tableTest) {
+      if (e.key === ' ') {
+        if (!this.spaceHeld) {
+          this.spaceHeld = true;
+          this.updateCursor();
+        }
+        e.preventDefault();
+        return;
+      }
+      if (!mod && (key === 'f' || key === 'v' || key === 'h')) {
+        if (key === 'f') this.fitView(true, this.selection.size ? expandWithContents(this.doc, this.selection) : undefined);
+        else if (key === 'v') this.setTool('select');
+        else this.setTool('pan');
+        return;
+      }
+      if (!mod || key === 'z' || key === 'y' || key === 'd' || key === 'a') {
+        e.preventDefault();
+        this.toast('A truth table test is running.');
+      }
+      return;
+    }
     if (!mod && !e.altKey && this.handleBoundKey(e, true)) {
       e.preventDefault();
       return;
@@ -2840,7 +3556,8 @@ export class Editor {
         this.deleteSelection();
         break;
       case 'Escape':
-        if (this.menu) this.closeMenu();
+        if (this.convertHold) this.cancelConvertHold();
+        else if (this.menu) this.closeMenu();
         else if (this.placing) this.cancelPlacing();
         else this.setSelection([]);
         break;
@@ -2879,7 +3596,7 @@ export class Editor {
       this.spaceHeld = false;
       this.updateCursor();
     }
-    if (!isTyping(e.target)) this.handleBoundKey(e, false);
+    if (!this.tableTest && !isTyping(e.target)) this.handleBoundKey(e, false);
   };
 
   /** Applies keyboard bindings for switches (toggle) and buttons (hold). */
@@ -2917,6 +3634,7 @@ export class Editor {
     this.spaceHeld = false;
     this.releaseKeyHeldButtons();
     if (this.drag?.kind === 'move' && this.drag.press) this.notePress(this.drag.press, false);
+    if (this.drag?.kind === 'operate' && this.drag.press) this.notePress(this.drag.id, false);
   };
 
   /** The selection as project-file text (used for the clipboard). */
@@ -2935,6 +3653,10 @@ export class Editor {
   };
 
   private onCut = (e: ClipboardEvent): void => {
+    if (this.tableTest) {
+      this.toast('A truth table test is running.');
+      return;
+    }
     if (isTyping(e.target) || !e.clipboardData) return;
     const text = this.selectionText();
     if (!text) return;
@@ -2944,6 +3666,10 @@ export class Editor {
   };
 
   private onPaste = (e: ClipboardEvent): void => {
+    if (this.tableTest) {
+      this.toast('A truth table test is running.');
+      return;
+    }
     if (isTyping(e.target)) return;
     const text = e.clipboardData?.getData('text/plain');
     if (!text) return;
@@ -3032,6 +3758,7 @@ export class Editor {
 
   /** Presses or releases a button from outside the canvas (the inputs list). */
   setPressed(id: string, pressed: boolean): void {
+    if (this.editsLocked()) return;
     this.notePress(id, pressed);
   }
 

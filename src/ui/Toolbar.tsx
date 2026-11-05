@@ -20,7 +20,7 @@ type Panel = 'save' | 'open' | 'theme' | 'help' | 'live' | null;
 const PLACE_GROUPS: PlaceKind[][] = [
   ['and', 'or', 'xor', 'buffer', 'not'],
   ['switch', 'button', 'timer', 'bulb', 'rgb'],
-  ['marker', 'note'],
+  ['marker', 'note', 'table'],
   ['port', 'ribbon-port', 'box'],
 ];
 
@@ -1113,7 +1113,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
             <li><b>Drag</b> a part from the toolbar, or click it then click the canvas</li>
             <li><b>Drag from a pin</b> to wire it; on a touchscreen, hold the pin first. Drop on empty space to add a connected part</li>
             <li><b>Drag from a wired input</b> to move or remove that wire</li>
-            <li><b>Click</b> switches to toggle; hold buttons to press. Select one and set a <b>Key</b> to control it from the keyboard</li>
+            <li><b>Click the knob</b> of a switch to toggle it, or hold a button's knob to press it. <b>Double-click</b>, or click the housing, to select it. Select one and set a <b>Key</b> to control it from the keyboard</li>
             <li><b>Drag the NOT bubble</b> onto a gate to invert it</li>
             <li><b>Two fingers</b> to pan and <b>pinch</b> to zoom. A second finger cancels a one-finger drag. With a mouse, <b>wheel</b> zooms and <b>right-drag</b> pans</li>
             <li><b>Right-click</b> or <b>hold</b> for the add menu. On a touchscreen, one finger on empty space pans, and a hold then a drag selects a box</li>

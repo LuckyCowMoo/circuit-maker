@@ -1,7 +1,21 @@
-import { BUBBLE_D, geomFor, geomOf, IO_SIZE, MARKER_FONT, PIN_LEN, PORT_SIZE, RIBBON_PITCH, type Geom } from './geometry';
+import { BUBBLE_D, geomFor, geomOf, IO_SIZE, localPoint, MARKER_FONT, PIN_LEN, PORT_SIZE, RIBBON_PITCH, type Geom } from './geometry';
 import { keyBindLabel } from './keys';
+import {
+  freshTable,
+  layoutTable,
+  maxScroll,
+  rowBit,
+  TABLE_BTN_ROW,
+  TABLE_CONVERT_LABEL,
+  TABLE_PAD,
+  TABLE_ROW_H,
+  tableComplete,
+  tablePassed,
+  type TableLayout,
+  type TablePin,
+} from './table';
 import type { Theme } from './themes';
-import type { Component, ComponentKind, Point, Rect } from './types';
+import type { Component, ComponentKind, Point, Rect, TableData } from './types';
 import { bundleInput, bundleOutput, isGate } from './types';
 
 /** A drawing instruction in component-local coordinates, rendered by both the canvas and SVG export. */
@@ -40,6 +54,14 @@ export interface DrawInfo {
   /** Bulb glow, 0–1. Colour crossfades separately via `bulbColor`. */
   bulbPower?: number;
   bulbColor?: string;
+  /** First visible truth-table row. The header and pins stay put. */
+  tableScroll?: number;
+  /** Column titles, inputs then outputs. Live wire names when the editor has them. */
+  tableTitles?: string[];
+  /** Ink for each title: the on or off colour of the wire in that column. */
+  tableTitleColors?: string[];
+  /** 0–1 fill on the discovery button while it is held. */
+  tableHold?: number;
 }
 
 const f = (n: number) => Math.round(n * 100) / 100;
@@ -456,6 +478,53 @@ interface ShapePaths {
 
 const shapeCache = new WeakMap<Geom, ShapePaths>();
 
+function ioScale(g: Geom): number {
+  return Math.min(g.w, g.h) / IO_SIZE;
+}
+
+/** The sliding pip of a switch, in the body's local frame. `t` is 0 off, 1 on. */
+export function switchPip(g: Geom, t: number): { x: number; y: number; r: number } {
+  const s = ioScale(g);
+  const half = 6 * s + Math.max(0, g.w - g.h) * 0.25;
+  const trackR = 7 * s;
+  const cx = g.w / 2;
+  const cap = cx - half;
+  return { x: cap + 2 * half * t, y: g.h / 2, r: trackR - 0.8 };
+}
+
+/** The raised face of a button, in the body's local frame. */
+export function buttonCap(g: Geom, pressed: boolean): { x: number; y: number; w: number; h: number; r: number } {
+  const inset = (pressed ? 11.5 : 10) * ioScale(g);
+  const w = g.w - 2 * inset;
+  const h = g.h - 2 * inset;
+  return { x: inset, y: inset, w, h, r: Math.min(Math.max(w, 0), Math.max(h, 0)) / 2 };
+}
+
+function inRoundRect(px: number, py: number, x: number, y: number, w: number, h: number, rad: number): boolean {
+  if (w <= 0 || h <= 0) return false;
+  const r = Math.min(rad, w / 2, h / 2);
+  const cx = Math.max(x + r, Math.min(px, x + w - r));
+  const cy = Math.max(y + r, Math.min(py, y + h - r));
+  const dx = px - cx;
+  const dy = py - cy;
+  return dx * dx + dy * dy <= r * r;
+}
+
+/** True when the world point lands on a switch pip or a button face, not the housing. */
+export function pointOnKnob(c: Component, world: Point, switchT = c.on ? 1 : 0, pressed = false): boolean {
+  if (c.kind !== 'switch' && c.kind !== 'button') return false;
+  const g = geomOf(c);
+  const p = localPoint(c, world);
+  if (c.kind === 'switch') {
+    const pip = switchPip(g, Math.min(1, Math.max(0, switchT)));
+    const dx = p.x - pip.x;
+    const dy = p.y - pip.y;
+    return dx * dx + dy * dy <= pip.r * pip.r;
+  }
+  const cap = buttonCap(g, pressed);
+  return inRoundRect(p.x, p.y, cap.x, cap.y, cap.w, cap.h, cap.r);
+}
+
 function ioBody(g: Geom): string {
   if (g.kind === 'bulb' || g.kind === 'rgb') {
     const w = g.w - 6;
@@ -509,8 +578,180 @@ function filament(g: Geom): string {
   return pts.map(([x, y], i) => `${i ? 'L' : 'M'}${f(cx + x * s)} ${f(cy + y * s)}`).join('');
 }
 
+function fitLabel(text: string, maxPx: number, size: number): string {
+  if (!text || emWidth(text) * size <= maxPx) return text;
+  let s = text;
+  while (s.length > 1 && emWidth(`${s.slice(0, -1)}…`) * size > maxPx) s = s.slice(0, -1);
+  return s.length > 1 ? `${s.slice(0, -1)}…` : s;
+}
+
+function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
+  const t: TableData = c.table ?? freshTable();
+  const lay: TableLayout = layoutTable(t);
+  const stroke = c.stroke ?? theme.stroke;
+  const fill = c.fill ?? theme.fill;
+  const ops: DrawOp[] = [];
+  const scroll = Math.max(0, Math.min(info.tableScroll ?? 0, maxScroll(t)));
+  const titles = info.tableTitles ?? t.names;
+  const mask = info.mask ?? '';
+
+  const passed = tablePassed(t);
+  ops.push({
+    t: 'path',
+    d: roundRectD(0, 0, lay.w, lay.h, 8),
+    fill,
+    stroke: passed ? theme.on : stroke,
+    width: passed ? 4 : undefined,
+  });
+
+  let stubs = '';
+  for (const pin of lay.pins) {
+    if (mask[pin.pin + 1] === '1') continue;
+    stubs += `M${f(pin.x)} 0V${f(-PIN_LEN)}`;
+  }
+  if (stubs) ops.push({ t: 'path', d: stubs, stroke, width: 2 });
+
+  const cells: TablePin[] = lay.pins.filter((pin) => !pin.spare);
+  const colors = info.tableTitleColors;
+  for (let i = 0; i < lay.visible; i++) {
+    const row = scroll + i;
+    if (row >= lay.rows) break;
+    const y = lay.gridTop + i * TABLE_ROW_H;
+    const recorded = t.rows[row];
+    const marks = t.marks?.[row];
+    for (const pin of cells) {
+      const text = tableCell(t, row, pin, recorded);
+      const grade = pin.side === 'out' && marks ? marks[pin.index] : '';
+      if (grade === 'p' || grade === 'f') {
+        ops.push({
+          t: 'path',
+          d: roundRectD(pin.colX + 3, y + 3, pin.colW - 6, TABLE_ROW_H - 6, 3),
+          fill: grade === 'p' ? theme.on : theme.marker,
+          alpha: 0.28,
+        });
+      }
+      if (!text) continue;
+      ops.push({
+        t: 'text',
+        text,
+        x: pin.x,
+        y: y + TABLE_ROW_H / 2,
+        size: 13,
+        fill: text === '1' ? theme.on : theme.marker,
+        bold: true,
+        anchor: 'middle',
+      });
+    }
+  }
+
+  const top = lay.gridTop;
+  const inRight = lay.gapX;
+  const outLeft = lay.gapX + lay.gap;
+  let grid = `M${f(TABLE_PAD)} ${TABLE_BTN_ROW}H${f(lay.w - TABLE_PAD)}`;
+  const band = (x0: number, x1: number) => {
+    if (x1 - x0 < 1) return;
+    grid += `M${f(x0)} ${top}H${f(x1)}`;
+    for (let i = 1; i < lay.visible; i++) grid += `M${f(x0)} ${top + i * TABLE_ROW_H}H${f(x1)}`;
+    grid += `M${f(x0)} ${top}V${f(lay.h)}M${f(x1)} ${top}V${f(lay.h)}`;
+  };
+  if (t.inputs > 0) band(lay.gridLeft, inRight);
+  if (t.outputs > 0) band(outLeft, lay.gridRight);
+  for (const pin of cells) {
+    if (pin.index === 0) continue;
+    grid += `M${f(pin.colX)} ${top}V${f(lay.h)}`;
+  }
+  const divX = lay.gapX + lay.gap / 2;
+  grid += `M${f(divX)} ${f(TABLE_BTN_ROW)}V${f(lay.h)}`;
+  ops.push({ t: 'path', d: grid, stroke: theme.ui.border, width: 1 });
+  ops.push({ t: 'path', d: `M${f(divX)} ${f(TABLE_BTN_ROW)}V${f(lay.h)}`, stroke, width: 1.5 });
+
+  for (const pin of cells) {
+    const at = pin.side === 'in' ? pin.index : t.inputs + pin.index;
+    const title = fitLabel(titles[at] ?? '', pin.colW - 8, 12);
+    if (!title) continue;
+    ops.push({
+      t: 'text',
+      text: title,
+      x: pin.x,
+      y: lay.labelY,
+      size: 12,
+      fill: colors?.[at] || theme.text,
+      bold: true,
+      anchor: 'middle',
+    });
+  }
+
+  if (lay.rows > lay.visible) {
+    const trackX = lay.w - TABLE_PAD - 4;
+    const trackY = lay.gridTop + 4;
+    const trackH = lay.visible * TABLE_ROW_H - 8;
+    const thumbH = Math.max(10, (trackH * lay.visible) / lay.rows);
+    const span = lay.rows - lay.visible;
+    const thumbY = trackY + ((trackH - thumbH) * scroll) / span;
+    ops.push({ t: 'path', d: roundRectD(trackX, trackY, 3, trackH, 1.5), fill: theme.ui.border });
+    ops.push({ t: 'path', d: roundRectD(trackX, thumbY, 3, thumbH, 1.5), fill: theme.ui.muted });
+  }
+
+  const ready = t.mode === 'solution' || tableComplete(t);
+  const btn = lay.button;
+  const btnPath = roundRectD(btn.x, btn.y, btn.w, btn.h, 6);
+  ops.push({
+    t: 'path',
+    d: btnPath,
+    fill: ready ? theme.ui.active : theme.ui.hover,
+    stroke: theme.ui.border,
+    width: 1,
+  });
+  const hold = t.mode === 'discovery' ? Math.max(0, Math.min(1, info.tableHold ?? 0)) : 0;
+  if (hold > 0) {
+    const fw = btn.w * hold;
+    ops.push({
+      t: 'path',
+      d: hold >= 0.995 ? btnPath : leftRoundD(btn.x, btn.y, fw, btn.h, 6),
+      fill: theme.on,
+    });
+    ops.push({ t: 'path', d: btnPath, stroke: theme.ui.border, width: 1 });
+  }
+  ops.push({
+    t: 'text',
+    text: t.mode === 'solution' ? 'Test' : TABLE_CONVERT_LABEL,
+    x: btn.x + btn.w / 2,
+    y: btn.y + btn.h / 2,
+    size: 12,
+    fill: ready ? theme.ui.activeFg : theme.ui.muted,
+    bold: true,
+    anchor: 'middle',
+  });
+  return ops;
+}
+
+/** Button fill that keeps the left rounded cap and a square leading edge. */
+function leftRoundD(x: number, y: number, w: number, h: number, r: number): string {
+  const q = Math.max(0, Math.min(r, w / 2, h / 2));
+  if (w <= q + 0.5) return roundRectD(x, y, Math.max(w, 0.5), h, Math.min(r, w / 2));
+  return (
+    `M${f(x + q)} ${f(y)}H${f(x + w)}V${f(y + h)}H${f(x + q)}` +
+    `A${f(q)} ${f(q)} 0 0 1 ${f(x)} ${f(y + h - q)}` +
+    `V${f(y + q)}A${f(q)} ${f(q)} 0 0 1 ${f(x + q)} ${f(y)}Z`
+  );
+}
+
+function tableCell(t: TableData, row: number, pin: TablePin, recorded: string | null | undefined): string | null {
+  if (pin.spare) return null;
+  if (t.mode === 'solution') {
+    if (pin.side === 'in') return t.inputs ? rowBit(t.inputs, row, pin.index) : null;
+    const ch = recorded?.[pin.index];
+    return ch === '0' || ch === '1' ? ch : null;
+  }
+  if (recorded == null) return null;
+  if (pin.side === 'in') return t.inputs ? rowBit(t.inputs, row, pin.index) : null;
+  const ch = recorded[pin.index];
+  return ch === '0' || ch === '1' ? ch : null;
+}
+
 /** Drawing ops for a component in its unrotated local frame. The part name is drawn separately. */
 export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
+  if (c.kind === 'table') return tableOps(c, theme, info);
   const stroke = c.stroke ?? theme.stroke;
   const fill = c.fill ?? theme.fill;
   const g = geomOf(c);
@@ -630,30 +871,26 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
       const t = info.switchT ?? (active ? 1 : 0);
       const cap = cx - half;
       const trackL = cap - r;
-      const pipX = cap + 2 * half * t;
+      const pip = switchPip(g, t);
       ops.push({ t: 'path', d: shapes(g).body, fill, stroke });
       ops.push({ t: 'path', d: roundRectD(trackL, cy - r, 2 * (half + r), 2 * r, r), fill: theme.trackOff });
-      ops.push({ t: 'path', d: capsuleH(cap, pipX, cy, r - 1.2), fill: onColor });
+      ops.push({ t: 'path', d: capsuleH(cap, pip.x, cy, r - 1.2), fill: onColor });
       ops.push({ t: 'path', d: roundRectD(trackL, cy - r, 2 * (half + r), 2 * r, r), stroke, width: 1.8 });
-      const pipR = r - 0.8;
-      ops.push({ t: 'path', d: circlePath(pipX, cy, pipR), fill, stroke, width: 1.6 });
-      const pipFace = pipR * 1.4;
-      ops.push(...keyOps(c, pipX, cy, pipFace, pipFace, fill));
+      ops.push({ t: 'path', d: circlePath(pip.x, cy, pip.r), fill, stroke, width: 1.6 });
+      const pipFace = pip.r * 1.4;
+      ops.push(...keyOps(c, pip.x, cy, pipFace, pipFace, fill));
       return ops;
     }
     case 'button': {
       if (stubs) ops.push({ t: 'path', d: stubs, stroke });
       const outer = 7 * s;
-      const inner = active ? 11.5 * s : 10 * s;
-      const rr = (inset: number) => {
-        const w = g.w - 2 * inset;
-        const h = g.h - 2 * inset;
-        return roundRectD(inset, inset, w, h, Math.min(w, h) / 2);
-      };
+      const capBox = buttonCap(g, active);
+      const wellW = g.w - 2 * outer;
+      const wellH = g.h - 2 * outer;
       ops.push(
         { t: 'path', d: shapes(g).body, fill, stroke },
-        { t: 'path', d: rr(outer), fill: theme.trackOff, stroke, width: 1.8 },
-        { t: 'path', d: rr(inner), fill: active ? onColor : fill, stroke, width: 1.8 },
+        { t: 'path', d: roundRectD(outer, outer, wellW, wellH, Math.min(wellW, wellH) / 2), fill: theme.trackOff, stroke, width: 1.8 },
+        { t: 'path', d: roundRectD(capBox.x, capBox.y, capBox.w, capBox.h, capBox.r), fill: active ? onColor : fill, stroke, width: 1.8 },
       );
       const cap = Math.min(g.w, g.h) - 2 * 11.5 * s;
       ops.push(...keyOps(c, cx, cy, cap * 0.8, cap * 0.56, active ? onColor : fill));
@@ -775,6 +1012,15 @@ function wavyIcon(): DrawOp[] {
 
 /** Small preview used by toolbar icons. */
 export function iconOps(kind: ComponentKind | 'box' | 'not' | 'ribbon-port', theme: Theme, negate = false): { ops: DrawOp[]; viewBox: string } {
+  if (kind === 'table') {
+    return {
+      ops: [
+        { t: 'path', d: roundRectD(1, 4, 46, 28, 3), fill: theme.fill, stroke: theme.stroke, width: 1.6 },
+        { t: 'path', d: 'M1 14H47M16 4V32M32 4V32', stroke: theme.stroke, width: 1.4 },
+      ],
+      viewBox: '0 0 48 36',
+    };
+  }
   if (kind === 'note') {
     return {
       ops: [

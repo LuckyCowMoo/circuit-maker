@@ -1,5 +1,6 @@
-import type { Component, ComponentKind, Point, Rect, Rotation } from './types';
-import { bundleDest, bundleInput, bundleOutput, bundleSource, isGate, isRibbonPort } from './types';
+import { freshTable, layoutTable, tablePinLocal } from './table';
+import type { Component, ComponentKind, Point, Rect, Rotation, TableData } from './types';
+import { bundleDest, bundleInput, bundleOutput, bundleSource, isGate, isRibbonPort, TABLE_PIN_SLOTS } from './types';
 
 export const GRID = 10;
 export const PIN_LEN = 20;
@@ -52,6 +53,7 @@ const KIND_INDEX: Record<ComponentKind, number> = {
   marker: 9,
   note: 11,
   port: 10,
+  table: 12,
 };
 
 const cache = new Map<number, Geom>();
@@ -228,8 +230,39 @@ export function geomFor(
   return g;
 }
 
+const tableGeomCache = new Map<string, Geom>();
+
+function tableGeom(t: TableData): Geom {
+  const key = `${t.mode}:${t.inputs}:${t.outputs}`;
+  let g = tableGeomCache.get(key);
+  if (g) return g;
+  const lay = layoutTable(t);
+  const inputs: Point[] = Array.from({ length: TABLE_PIN_SLOTS }, () => ({ x: 0, y: 0 }));
+  const back = Array.from({ length: TABLE_PIN_SLOTS }, () => 0);
+  for (const pin of lay.pins) {
+    inputs[pin.pin] = { x: pin.x, y: -PIN_LEN };
+    back[pin.pin] = 0;
+  }
+  g = {
+    kind: 'table',
+    n: 0,
+    negate: false,
+    w: lay.w,
+    h: lay.h,
+    offset: 0,
+    depth: 0,
+    tip: lay.w,
+    inputs,
+    back,
+    output: null,
+    bounds: { x: 0, y: -PIN_LEN, w: lay.w, h: lay.h + PIN_LEN },
+  };
+  tableGeomCache.set(key, g);
+  return g;
+}
+
 export const geomOf = (c: Component): Geom =>
-  geomFor(c.kind, c.inputs, c.negate, c.w, c.h, bundleInput(c), bundleOutput(c));
+  c.kind === 'table' ? tableGeom(c.table ?? freshTable()) : geomFor(c.kind, c.inputs, c.negate, c.w, c.h, bundleInput(c), bundleOutput(c));
 
 export const snap = (v: number): number => Math.round(v / GRID) * GRID;
 
@@ -278,6 +311,15 @@ export function xformOf(c: Component): Xf {
 
 export const applyXf = (m: Xf, p: Point): Point => ({ x: m.a * p.x + m.c * p.y + m.e, y: m.b * p.x + m.d * p.y + m.f });
 
+/** A world point in the component's local frame. Inverse of `xformOf`. */
+export function localPoint(c: Component, w: Point): Point {
+  const m = xformOf(c);
+  const det = m.a * m.d - m.b * m.c || 1;
+  const x = w.x - m.e;
+  const y = w.y - m.f;
+  return { x: (m.d * x - m.c * y) / det, y: (-m.b * x + m.a * y) / det };
+}
+
 const applyDir = (m: Xf, v: Point): Point => ({ x: m.a * v.x + m.c * v.y, y: m.b * v.x + m.d * v.y });
 
 /** Size of the body after rotation. */
@@ -308,8 +350,19 @@ export function outputPos(c: Component): Point | null {
   return p ? applyXf(xformOf(c), p) : null;
 }
 
+/** A bulb has no output pin. Truth-table probes still leave from its right edge. */
+function bulbProbeTip(c: Component): Point {
+  return { x: c.w + PIN_LEN, y: c.h / 2 };
+}
+
 /** pin < 0 means the output pin. */
 export function pinPos(c: Component, pin: number): Point | null {
+  if (c.kind === 'bulb' && pin < 0) return applyXf(xformOf(c), bulbProbeTip(c));
+  if (c.kind === 'table') {
+    const t = c.table ?? freshTable();
+    const local = tablePinLocal(t, pin, PIN_LEN);
+    return local ? applyXf(xformOf(c), local) : null;
+  }
   if (pin >= 0) return inputPos(c, pin);
   const g = geomOf(c);
   const p = g.outputs?.[-pin - 1] ?? (pin === -1 ? g.output : null);
@@ -318,11 +371,18 @@ export function pinPos(c: Component, pin: number): Point | null {
 
 /** Unit vector pointing away from the component at a pin. */
 export function pinDir(c: Component, pin: number): Point {
+  if (c.kind === 'table' && pin >= 0) return applyDir(xformOf(c), { x: 0, y: -1 });
+  if (c.kind === 'bulb' && pin < 0) return applyDir(xformOf(c), { x: 1, y: 0 });
   return applyDir(xformOf(c), { x: pin < 0 ? 1 : -1, y: 0 });
 }
 
 /** Where a connected wire meets the body (the stub is hidden once a pin is wired). */
 export function attachPos(c: Component, pin: number): Point | null {
+  if (c.kind === 'bulb' && pin < 0) return applyXf(xformOf(c), { x: c.w, y: c.h / 2 });
+  if (c.kind === 'table') {
+    const local = tablePinLocal(c.table ?? freshTable(), pin, PIN_LEN);
+    return local ? applyXf(xformOf(c), { x: local.x, y: 0 }) : null;
+  }
   const g = geomOf(c);
   const m = xformOf(c);
   if (pin < 0) {
@@ -435,10 +495,11 @@ export function wireEndPin(c: Component, pin: number, cable = false): number {
   return pin;
 }
 export function wireBetween(src: Component, dst: Component, input: number, lane = 0): WireCurve | null {
-  const a = attachPos(src, wireEndPin(src, bundleSource(src) ? -1 : -1 - lane, false));
+  const srcPin = src.kind === 'bulb' && dst.kind === 'table' ? 0 : wireEndPin(src, bundleSource(src) ? -1 : -1 - lane, false);
+  const a = attachPos(src, srcPin);
   const b = attachPos(dst, wireEndPin(dst, input, false));
   if (!a || !b) return null;
-  return wireCurve(a, b, pinDir(src, -1), pinDir(dst, wireEndPin(dst, input, false)));
+  return wireCurve(a, b, pinDir(src, srcPin), pinDir(dst, wireEndPin(dst, input, false)));
 }
 
 export function curveBounds(c: WireCurve): Rect {

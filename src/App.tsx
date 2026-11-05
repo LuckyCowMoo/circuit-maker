@@ -3,6 +3,7 @@ import { Editor } from './editor/Editor';
 import { LabelEdit } from './ui/LabelEdit';
 import { Toolbar } from './ui/Toolbar';
 import { ContextMenu } from './ui/ContextMenu';
+import { RowPreview } from './ui/RowPreview';
 import { useEditor } from './ui/useEditor';
 
 let shared: Editor | null = null;
@@ -54,6 +55,7 @@ export default function App() {
       <canvas ref={coverRef} className="aura-cover" aria-hidden="true" />
       <LabelEdit editor={editor} />
       <ContextMenu editor={editor} />
+      <RowPreview editor={editor} />
       <Toolbar editor={editor} />
     </>
   );
