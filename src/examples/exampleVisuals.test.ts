@@ -15,7 +15,7 @@ describe('example visuals', () => {
     expect(exampleCardColors('Arithmetic', 'calc').label).toBe('#f4f4f5');
     expect(exampleCardColors('Arithmetic', 'half').label).toMatch(/^hsl\(168, 72%, (12|16|20)%\)$/);
     expect(exampleCardColors('Memory', 'reg8').label).toMatch(/^hsl\(278, 72%, (12|16|20)%\)$/);
-    expect(exampleCardColors('Puzzles', 'solnot').bg).toBe('hsl(88, 32%, 93%)');
+    expect(exampleCardColors('Puzzles', 'soland').bg).toBe('hsl(88, 32%, 93%)');
     expect(exampleCardColors('Puzzles', 'solfull').bg).toBe('hsl(88, 50%, 72%)');
   });
 

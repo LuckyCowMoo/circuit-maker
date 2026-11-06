@@ -61,9 +61,11 @@ function puzzleGlyph(step: number, inputs: number, outputs: number, rows: string
   ];
   const dots = step + 1;
   const span = 34;
+  const gap = dots === 1 ? span : span / (dots - 1);
+  const r = Math.min(1.7, gap * 0.36);
   for (let i = 0; i < dots; i++) {
-    const cx = dots === 1 ? 32 : 32 - span / 2 + (span * i) / (dots - 1);
-    parts.push(`<circle cx="${num(cx)}" cy="10.6" r="1.7" fill="currentColor"/>`);
+    const cx = dots === 1 ? 32 : 32 - span / 2 + gap * i;
+    parts.push(`<circle cx="${num(cx)}" cy="10.6" r="${r === 1.7 ? '1.7' : num(r)}" fill="currentColor"/>`);
   }
   for (let r = 0; r <= n; r++) {
     const y = num(y0 + r * ch);

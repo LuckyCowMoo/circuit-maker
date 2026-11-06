@@ -1,6 +1,7 @@
 import { emptyDoc, makeComponent } from '../model/doc';
+import { noteLayout } from '../model/shapes';
 import { layoutTable, rowCount } from '../model/table';
-import type { Doc, TableData } from '../model/types';
+import type { Component, Doc, TableData } from '../model/types';
 
 /** One solution-mode truth table the player has to build. */
 export interface PuzzleSpec {
@@ -33,21 +34,79 @@ function puzzle(
   return { id, name, hint, inputs, outputs, rows: rowsFor(inputs.length, fn) };
 }
 
-/** Easiest first. Each step adds inputs, outputs, or a less obvious gate. */
+/**
+ * Easiest first. And is the one single-gate puzzle. Each later puzzle needs a
+ * larger circuit. Full adder stays the hardest.
+ */
 export const PUZZLES: PuzzleSpec[] = [
-  puzzle('solnot', 'Not', 'Y is the opposite of A.', ['A'], ['Y'], ([a]) => [!a]),
   puzzle('soland', 'And', 'Y is 1 only when A and B are both 1.', ['A', 'B'], ['Y'], ([a, b]) => [a && b]),
-  puzzle('solor', 'Or', 'Y is 1 when A or B is 1.', ['A', 'B'], ['Y'], ([a, b]) => [a || b]),
-  puzzle('solxor', 'Exclusive or', 'Y is 1 when A and B differ.', ['A', 'B'], ['Y'], ([a, b]) => [a !== b]),
-  puzzle('solnand', 'Nand', 'Y is 0 only when A and B are both 1.', ['A', 'B'], ['Y'], ([a, b]) => [!(a && b)]),
-  puzzle('solhalf', 'Half adder', 'S is the sum bit. C is the carry.', ['A', 'B'], ['S', 'C'], ([a, b]) => [a !== b, a && b]),
-  puzzle('solmaj', 'Majority', 'Y is 1 when at least two inputs are 1.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [
+  puzzle('soleither', 'Either and both', 'X is 1 when A or B is on. Y is 1 only when both are on.', ['A', 'B'], ['X', 'Y'], ([a, b]) => [
+    a || b,
+    a && b,
+  ]),
+  puzzle('solonly', 'Only A', 'Y is 1 only when A is on and B is off.', ['A', 'B'], ['Y'], ([a, b]) => [a && !b]),
+  puzzle(
+    'solboth',
+    'Only or both',
+    'Only is 1 only when A is on and B is off. Both is 1 only when A and B are both on.',
+    ['A', 'B'],
+    ['Only', 'Both'],
+    ([a, b]) => [a && !b, a && b],
+  ),
+  puzzle('solsame', 'Same or different', 'Same is 1 when A and B match. Diff is 1 when they differ.', ['A', 'B'], ['Same', 'Diff'], ([a, b]) => [
+    a === b,
+    a !== b,
+  ]),
+  puzzle(
+    'solhigh',
+    'Which side',
+    'High is 1 only when A is on and B is off. Low is 1 only when A is off and B is on.',
+    ['A', 'B'],
+    ['High', 'Low'],
+    ([a, b]) => [a && !b, !a && b],
+  ),
+  puzzle(
+    'solhalf',
+    'Half adder',
+    'S is the sum, 1 when A and B differ. C is the carry, 1 only when both are 1.',
+    ['A', 'B'],
+    ['S', 'C'],
+    ([a, b]) => [a !== b, a && b],
+  ),
+  puzzle('solunless', 'Unless', 'Y is 1 only when A and B are on and C is off.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [a && b && !c]),
+  puzzle(
+    'solpick',
+    'Choose',
+    'Y matches A while Pick is off, and matches B while Pick is on.',
+    ['A', 'B', 'Pick'],
+    ['Y'],
+    ([a, b, pick]) => [pick ? b : a],
+  ),
+  puzzle('solmaj', 'Majority', 'Y is 1 when at least two of A, B, and C are on.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [
     Number(a) + Number(b) + Number(c) >= 2,
   ]),
-  puzzle('solfull', 'Full adder', 'Add A, B, and Ci. S is the sum, Co the carry.', ['A', 'B', 'Ci'], ['S', 'Co'], ([a, b, ci]) => {
-    const n = Number(a) + Number(b) + Number(ci);
-    return [n % 2 === 1, n >= 2];
-  }),
+  puzzle(
+    'solmost',
+    'Most or all',
+    'Most is 1 when at least two of A, B, and C are on. All is 1 only when every one is on.',
+    ['A', 'B', 'C'],
+    ['Most', 'All'],
+    ([a, b, c]) => {
+      const n = Number(a) + Number(b) + Number(c);
+      return [n >= 2, n === 3];
+    },
+  ),
+  puzzle(
+    'solfull',
+    'Full adder',
+    'S is the sum, 1 when an odd number of A, B, and Ci are on. Co is the carry, 1 when at least two are on.',
+    ['A', 'B', 'Ci'],
+    ['S', 'Co'],
+    ([a, b, ci]) => {
+      const n = Number(a) + Number(b) + Number(ci);
+      return [n % 2 === 1, n >= 2];
+    },
+  ),
 ];
 
 export function puzzleTable(spec: PuzzleSpec): TableData {
@@ -60,6 +119,18 @@ export function puzzleTable(spec: PuzzleSpec): TableData {
   };
 }
 
+/** Wide enough, and tall enough, that the plain-English hint stays readable. */
+function hintNote(hint: string, tableW: number): Component {
+  const w = Math.max(tableW, 260);
+  let h = 96;
+  while (h < 220 && noteLayout(hint, w, h).size < 15) h += 4;
+  const note = makeComponent('note', (tableW - w) / 2, -(h + 40), 'hint');
+  note.w = w;
+  note.h = h;
+  note.name = hint;
+  return note;
+}
+
 /** The question table and a note that states the goal. The circuit is left for the player. */
 export function puzzleDoc(spec: PuzzleSpec): Doc {
   const doc = emptyDoc(spec.name);
@@ -70,11 +141,7 @@ export function puzzleDoc(spec: PuzzleSpec): Doc {
   table.w = size.w;
   table.h = size.h;
   doc.components.set(table.id, table);
-  const noteW = Math.max(size.w, 220);
-  const note = makeComponent('note', (size.w - noteW) / 2, -108, 'hint');
-  note.w = noteW;
-  note.h = 76;
-  note.name = spec.hint;
+  const note = hintNote(spec.hint, size.w);
   doc.components.set(note.id, note);
   return doc;
 }
