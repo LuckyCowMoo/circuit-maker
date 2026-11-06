@@ -63,6 +63,8 @@ describe('solution puzzles', () => {
       expect(spawned?.table?.rows).toEqual(spec.rows);
       expect(note?.name).toBe(spec.hint);
       expect(noteLayout(spec.hint, note?.w ?? 0, note?.h ?? 0).size).toBeGreaterThanOrEqual(15);
+      expect((note?.w ?? 0) % 10).toBe(0);
+      expect((note?.h ?? 0) % 10).toBe(0);
       expect((note?.y ?? 0) + (note?.h ?? 0)).toBeLessThan(0);
     }
     const lights = PUZZLES.map((spec) => lightness(exampleCardColors('Puzzles', spec.id).bg));

@@ -1,4 +1,5 @@
 import { emptyDoc, makeComponent } from '../model/doc';
+import { GRID } from '../model/geometry';
 import { noteLayout } from '../model/shapes';
 import { layoutTable, rowCount } from '../model/table';
 import type { Component, Doc, TableData } from '../model/types';
@@ -119,11 +120,16 @@ export function puzzleTable(spec: PuzzleSpec): TableData {
   };
 }
 
+/** Next multiple of the file grid, so a saved puzzle loads back at the same size. */
+function onGrid(v: number): number {
+  return Math.ceil(v / GRID) * GRID;
+}
+
 /** Wide enough, and tall enough, that the plain-English hint stays readable. */
 function hintNote(hint: string, tableW: number): Component {
-  const w = Math.max(tableW, 260);
-  let h = 96;
-  while (h < 220 && noteLayout(hint, w, h).size < 15) h += 4;
+  const w = onGrid(Math.max(tableW, 260));
+  let h = onGrid(100);
+  while (h < 240 && noteLayout(hint, w, h).size < 15) h += GRID;
   const note = makeComponent('note', (tableW - w) / 2, -(h + 40), 'hint');
   note.w = w;
   note.h = h;
