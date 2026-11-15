@@ -9,6 +9,7 @@ import {
   CABLE_PITCH,
   inflate,
   pinDir,
+  pinPos,
   pointInRect,
   rectInside,
   rectsOverlap,
@@ -408,6 +409,45 @@ function drawHandles(ctx: CanvasRenderingContext2D, r: Rect, theme: Theme, px: n
   }
 }
 
+export function drawPinGrabArea(
+  ctx: CanvasRenderingContext2D,
+  c: Component,
+  pin: number,
+  strokeColor: string,
+  px: number,
+): void {
+  const tip = pinPos(c, pin);
+  if (!tip) return;
+  const base = attachPos(c, pin);
+  const dir = pinDir(c, pin);
+  const r = Math.max(7, 7 * px);
+
+  ctx.beginPath();
+  if (base && dir) {
+    const vx = tip.x - base.x;
+    const vy = tip.y - base.y;
+    const len = Math.hypot(vx, vy);
+    if (len > 0.001) {
+      const dx = vx / len;
+      const dy = vy / len;
+      const nx = -dy;
+      const ny = dx;
+      const theta = Math.atan2(dy, dx);
+      ctx.arc(tip.x, tip.y, r, theta + Math.PI / 2, theta - Math.PI / 2, true);
+      ctx.lineTo(base.x - nx * r, base.y - ny * r);
+      ctx.lineTo(base.x + nx * r, base.y + ny * r);
+      ctx.closePath();
+    } else {
+      ctx.arc(tip.x, tip.y, r, 0, Math.PI * 2);
+    }
+  } else {
+    ctx.arc(tip.x, tip.y, r, 0, Math.PI * 2);
+  }
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 2 * px;
+  ctx.stroke();
+}
+
 export function renderScene(ed: Editor): void {
   const ctx = ed.ctx;
   if (!ctx) return;
@@ -678,14 +718,8 @@ export function renderScene(ed: Editor): void {
   const drag = ed.drag;
   const pinHighlight = drag?.kind === 'wire' ? drag.target : drag ? null : ed.hoverPin;
   if (pinHighlight) {
-    const p = ed.pinPosition(pinHighlight);
-    if (p) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, Math.max(6, 6 * px), 0, Math.PI * 2);
-      ctx.strokeStyle = theme.selection;
-      ctx.lineWidth = 2 * px;
-      ctx.stroke();
-    }
+    const c = doc.components.get(pinHighlight.comp);
+    if (c) drawPinGrabArea(ctx, c, pinHighlight.pin, theme.selection, px);
   }
 
   // Wire being dragged.

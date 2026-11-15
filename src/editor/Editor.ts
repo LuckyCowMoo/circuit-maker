@@ -29,6 +29,7 @@ import {
   IO_MAX,
   IO_MIN,
   MAX_INPUTS,
+  pinDistance,
   pinPos,
   pointInRect,
   rectInside,
@@ -2415,7 +2416,7 @@ export class Editor {
         const p = pinPos(c, pin);
         if (!p) continue;
         if (c.kind === 'port' && pointInRect(w, bodyRect(c))) continue;
-        const d = Math.hypot(w.x - p.x, w.y - p.y);
+        const d = pinDistance(c, pin, w);
         if (d < bestD) {
           bestD = d;
           best = { comp: c.id, pin };
@@ -2591,7 +2592,7 @@ export class Editor {
         if (pin.side !== 'out') continue;
         const p = pinPos(c, pin.pin);
         if (!p) continue;
-        const d = Math.hypot(w.x - p.x, w.y - p.y) + (this.wireInto(c.id, pin.pin) ? 1000 : 0);
+        const d = pinDistance(c, pin.pin, w) + (this.wireInto(c.id, pin.pin) ? 1000 : 0);
         if (d < bestD) {
           bestD = d;
           best = { comp: c.id, pin: pin.pin };
@@ -2610,7 +2611,7 @@ export class Editor {
       if (pin.side !== 'out') continue;
       const p = pinPos(hit, pin.pin);
       if (!p) continue;
-      const d = Math.hypot(w.x - p.x, w.y - p.y);
+      const d = pinDistance(hit, pin.pin, w);
       if (d < nearD) {
         nearD = d;
         near = { comp: hit.id, pin: pin.pin };
@@ -2674,7 +2675,7 @@ export class Editor {
     for (const pin of pins) {
       const p = pinPos(c, pin);
       if (!p) continue;
-      const d = Math.hypot(w.x - p.x, w.y - p.y);
+      const d = pinDistance(c, pin, w);
       if (d < bestD) {
         bestD = d;
         best = { comp: c.id, pin };

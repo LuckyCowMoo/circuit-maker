@@ -393,6 +393,38 @@ export function attachPos(c: Component, pin: number): Point | null {
   return p ? applyXf(m, { x: g.back[pin] ?? 0, y: p.y }) : null;
 }
 
+/**
+ * Distance from world point `w` to the pin grab area:
+ * a capsule extending from the component body (`attachPos`) along the pin stub
+ * to the pin tip (`pinPos`), with a rounded cap at the tip.
+ */
+export function pinDistance(c: Component, pin: number, w: Point): number {
+  const tip = pinPos(c, pin);
+  if (!tip) return Infinity;
+  const base = attachPos(c, pin);
+  if (!base) return Math.hypot(w.x - tip.x, w.y - tip.y);
+
+  const vx = tip.x - base.x;
+  const vy = tip.y - base.y;
+  const len = Math.hypot(vx, vy);
+  if (len < 0.001) return Math.hypot(w.x - tip.x, w.y - tip.y);
+
+  const dx = vx / len;
+  const dy = vy / len;
+  const nx = -dy;
+  const ny = dx;
+
+  const wx = w.x - base.x;
+  const wy = w.y - base.y;
+  const u = wx * dx + wy * dy;
+  const v = Math.abs(wx * nx + wy * ny);
+
+  if (u < -2) return Infinity;
+  if (u < 0) return Math.hypot(u, v);
+  if (u <= len) return v;
+  return Math.hypot(u - len, v);
+}
+
 // ---------------------------------------------------------------- rects
 
 export const MARKER_FONT = 16;
