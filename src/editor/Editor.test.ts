@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { makeComponent } from '../model/doc';
 import { pinDistance, pinPos, attachPos } from '../model/geometry';
+import { TABLE_OUT, TABLE_STEP_MS, TABLE_SLIDE_MS } from '../model/table';
 import { Editor } from './Editor';
 import { drawPinGrabArea } from './renderer';
 
@@ -113,5 +114,61 @@ describe('Pin grab area shape and hit testing', () => {
     expect(ops).toContain('stroke');
     expect(ops.some((op) => op.startsWith('arc'))).toBe(true);
     expect(ops.some((op) => op.startsWith('lineTo'))).toBe(true);
+  });
+});
+
+describe('Truth table testing row highlight and slide animation', () => {
+  it('highlights the current test row and smoothly slides between rows', () => {
+    const editor = new Editor();
+    const sw = makeComponent('switch', 0, 0, 'sw');
+    const bulb = makeComponent('bulb', 200, 0, 'bulb');
+    const tbl = makeComponent('table', 100, 100, 'tbl');
+    tbl.table = {
+      mode: 'solution',
+      inputs: 1,
+      outputs: 1,
+      names: ['A', 'Q'],
+      rows: ['0', '1'],
+    };
+
+    editor.doc.components.set(sw.id, sw);
+    editor.doc.components.set(bulb.id, bulb);
+    editor.doc.components.set(tbl.id, tbl);
+    editor.doc.wires.set('w1', { id: 'w1', from: sw.id, to: tbl.id, input: 0 });
+    editor.doc.wires.set('w2', { id: 'w2', from: bulb.id, to: tbl.id, input: TABLE_OUT });
+
+    // Initially no test is running
+    expect(editor.testRowPosition(tbl.id)).toBeNull();
+
+    // Start table test
+    (editor as any).startTableTest(tbl);
+    expect(editor.testRowPosition(tbl.id)).toBe(0);
+
+    // After TABLE_STEP_MS (1000ms), row 0 finishes and it transitions to row 1
+    const run = (editor as any).tableTest;
+    expect(run).not.toBeNull();
+    const tNext = run.nextAt;
+    (editor as any).tickTableTest(tNext);
+
+    // Now row 1 has begun, animation is in flight
+    expect(run.showing).toBe(1);
+    expect(run.fromRow).toBe(0);
+    expect(run.toRow).toBe(1);
+
+    // Halfway through TABLE_SLIDE_MS
+    (editor as any).visNow = run.slideT0 + TABLE_SLIDE_MS / 2;
+    const midPos = editor.testRowPosition(tbl.id);
+    expect(midPos).not.toBeNull();
+    expect(midPos!).toBeGreaterThan(0.2);
+    expect(midPos!).toBeLessThan(0.8);
+
+    // At end of TABLE_SLIDE_MS
+    (editor as any).visNow = run.slideT0 + TABLE_SLIDE_MS;
+    (editor as any).tickTableTest(run.slideT0 + TABLE_SLIDE_MS);
+    expect(editor.testRowPosition(tbl.id)).toBe(1);
+
+    // When the last row finishes, test completes and highlight disappears
+    (editor as any).tickTableTest(run.nextAt);
+    expect(editor.testRowPosition(tbl.id)).toBeNull();
   });
 });

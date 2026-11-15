@@ -8,6 +8,8 @@ export const TABLE_OUT = 8;
 export const TABLE_VISIBLE = 8;
 /** How long a solution test holds each row before the next one. */
 export const TABLE_STEP_MS = 1000;
+/** How long the slide animation takes between rows during a solution test. */
+export const TABLE_SLIDE_MS = 180;
 /** How long the discovery button must be held before it converts. */
 export const TABLE_CONVERT_MS = 3000;
 export const TABLE_CONVERT_LABEL = 'convert to question';

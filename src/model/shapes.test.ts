@@ -89,3 +89,74 @@ describe('switch and button knobs', () => {
     expect(at(btn, { x: 20, y: 20 }, undefined, true)).toBe(true);
   });
 });
+
+describe('truth table test row highlight', () => {
+  it('draws a row highlight rectangle when tableTestRow is provided', () => {
+    const table = makeComponent('table', 0, 0, 'tbl');
+    table.table = {
+      mode: 'solution',
+      inputs: 2,
+      outputs: 1,
+      names: ['A', 'B', 'Q'],
+      rows: ['0', '0', '0', '1'],
+    };
+
+    // No highlight when tableTestRow is undefined
+    const opsNoTest = componentOps(table, theme, { active: false });
+    const highlightsNoTest = opsNoTest.filter(
+      (op) => op.t === 'path' && op.fill === theme.selection && op.alpha === 0.18,
+    );
+    expect(highlightsNoTest).toHaveLength(0);
+
+    // Row 0 highlighted
+    const opsRow0 = componentOps(table, theme, { active: false, tableTestRow: 0 });
+    const highlightsRow0 = opsRow0.filter(
+      (op) => op.t === 'path' && op.fill === theme.selection && op.alpha === 0.18,
+    );
+    expect(highlightsRow0).toHaveLength(1);
+
+    // Row 1 highlighted
+    const opsRow1 = componentOps(table, theme, { active: false, tableTestRow: 1 });
+    const highlightsRow1 = opsRow1.filter(
+      (op) => op.t === 'path' && op.fill === theme.selection && op.alpha === 0.18,
+    );
+    expect(highlightsRow1).toHaveLength(1);
+
+    // Row 1 highlight Y coordinate is 22px (TABLE_ROW_H) below row 0
+    // d is roundRectD: M(x+r) (y) H(x+w-r) ...
+    // Let's verify row 1 is shifted down relative to row 0
+    expect(highlightsRow1[0]).not.toEqual(highlightsRow0[0]);
+    if (highlightsRow0[0].t === 'path' && highlightsRow1[0].t === 'path') {
+      const matchY0 = highlightsRow0[0].d.match(/M[\d.]+\s+([\d.]+)/);
+      const matchY1 = highlightsRow1[0].d.match(/M[\d.]+\s+([\d.]+)/);
+      expect(matchY0).not.toBeNull();
+      expect(matchY1).not.toBeNull();
+      const y0 = parseFloat(matchY0![1]);
+      const y1 = parseFloat(matchY1![1]);
+      expect(y1 - y0).toBeCloseTo(22, 1);
+    }
+  });
+
+  it('slides smoothly down when tableTestRow is fractional', () => {
+    const table = makeComponent('table', 0, 0, 'tbl');
+    table.table = {
+      mode: 'solution',
+      inputs: 2,
+      outputs: 1,
+      names: ['A', 'B', 'Q'],
+      rows: ['0', '0', '0', '1'],
+    };
+
+    const opsRow0 = componentOps(table, theme, { active: false, tableTestRow: 0 });
+    const opsRowHalf = componentOps(table, theme, { active: false, tableTestRow: 0.5 });
+    const h0 = opsRow0.find((op) => op.t === 'path' && op.fill === theme.selection);
+    const hHalf = opsRowHalf.find((op) => op.t === 'path' && op.fill === theme.selection);
+    expect(h0 && h0.t === 'path').toBe(true);
+    expect(hHalf && hHalf.t === 'path').toBe(true);
+    if (h0?.t === 'path' && hHalf?.t === 'path') {
+      const y0 = parseFloat(h0.d.match(/M[\d.]+\s+([\d.]+)/)![1]);
+      const yHalf = parseFloat(hHalf.d.match(/M[\d.]+\s+([\d.]+)/)![1]);
+      expect(yHalf - y0).toBeCloseTo(11, 1);
+    }
+  });
+});

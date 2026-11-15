@@ -641,6 +641,7 @@ export function renderScene(ed: Editor): void {
         info.tableTitles = columnTitles(doc, c);
         info.tableTitleColors = columnTitleColors(doc, c, theme, pc.roots, pc.live, (id, lane) => ed.sim.value(id, lane ?? 0));
         info.tableHold = ed.convertHoldOf(c.id);
+        info.tableTestRow = ed.testRowPosition(c.id);
       }
       const ops = componentOps(c, theme, info);
       batch.add(c.id === ed.editingId ? ops.filter((op) => op.t !== 'text') : ops, xformOf(c));
@@ -953,6 +954,7 @@ function paintAuraCover(
         ed.sim.value(id, lane ?? 0),
       );
       info.tableHold = ed.convertHoldOf(c.id);
+      info.tableTestRow = ed.testRowPosition(c.id);
     }
     const ops = componentOps(c, theme, info).filter(
       (op) => c.kind === 'table' || op.t === 'text' || op.alpha === undefined || op.alpha >= 0.99,

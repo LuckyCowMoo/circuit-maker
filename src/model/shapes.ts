@@ -62,6 +62,8 @@ export interface DrawInfo {
   tableTitleColors?: string[];
   /** 0–1 fill on the discovery button while it is held. */
   tableHold?: number;
+  /** Current row being tested (fractional during slide animation between rows). */
+  tableTestRow?: number | null;
 }
 
 const f = (n: number) => Math.round(n * 100) / 100;
@@ -610,6 +612,30 @@ function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
     stubs += `M${f(pin.x)} 0V${f(-PIN_LEN)}`;
   }
   if (stubs) ops.push({ t: 'path', d: stubs, stroke, width: 2 });
+
+  if (info.tableTestRow != null) {
+    const relRow = info.tableTestRow - scroll;
+    if (relRow >= -0.05 && relRow <= lay.visible - 0.95) {
+      const hasScrollbar = lay.rows > lay.visible;
+      const hx = lay.gridLeft + 2;
+      const hw = lay.gridRight - lay.gridLeft - 4 - (hasScrollbar ? 6 : 0);
+      const hy = lay.gridTop + relRow * TABLE_ROW_H + 1;
+      const hh = TABLE_ROW_H - 2;
+      ops.push({
+        t: 'path',
+        d: roundRectD(hx, hy, hw, hh, 4),
+        fill: theme.selection,
+        alpha: 0.18,
+      });
+      ops.push({
+        t: 'path',
+        d: roundRectD(hx, hy, hw, hh, 4),
+        stroke: theme.selection,
+        width: 1.5,
+        alpha: 0.75,
+      });
+    }
+  }
 
   const cells: TablePin[] = lay.pins.filter((pin) => !pin.spare);
   const colors = info.tableTitleColors;

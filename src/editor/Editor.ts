@@ -82,6 +82,7 @@ import {
   TABLE_CONVERT_MS,
   TABLE_OUT,
   TABLE_ROW_H,
+  TABLE_SLIDE_MS,
   TABLE_STEP_MS,
   TABLE_VISIBLE,
 } from '../model/table';
@@ -445,6 +446,9 @@ export class Editor {
     nextAt: number;
     inputs: { id: string; kind: 'switch' | 'button' | 'timer' }[];
     outputs: string[];
+    fromRow: number;
+    toRow: number;
+    slideT0: number;
   } | null = null;
   /** Box edge under the pointer, which a drag would resize. */
   hoverEdge: BoxEdges | null = null;
@@ -1417,6 +1421,15 @@ export class Editor {
     return this.tableScroll.get(id) ?? 0;
   }
 
+  /** Row index being tested on a truth table, smoothly sliding between rows during transitions. */
+  testRowPosition(id: string): number | null {
+    const run = this.tableTest;
+    if (!run || run.id !== id) return null;
+    if (run.fromRow === run.toRow) return run.showing;
+    const now = this.visNow || performance.now();
+    return lerpAnim(run.fromRow, run.toRow, run.slideT0, now, TABLE_SLIDE_MS);
+  }
+
   private clampTableScroll(id: string): void {
     const t = this.doc.components.get(id)?.table;
     if (!t) return;
@@ -1673,7 +1686,16 @@ export class Editor {
     if (this.tableTest?.id !== c.id) this.checkpoint();
     clearMarks(t);
     this.confetti = [];
-    this.tableTest = { id: c.id, showing: 0, nextAt: performance.now() + TABLE_STEP_MS, inputs, outputs };
+    this.tableTest = {
+      id: c.id,
+      showing: 0,
+      nextAt: performance.now() + TABLE_STEP_MS,
+      inputs,
+      outputs,
+      fromRow: 0,
+      toRow: 0,
+      slideT0: performance.now(),
+    };
     this.applyTestRow(0);
     this.paintTestRow(c, 0);
     this.revealTestRow(c.id, 0);
@@ -1779,7 +1801,14 @@ export class Editor {
 
   private tickTableTest(now: number): void {
     const run = this.tableTest;
-    if (!run || now < run.nextAt) return;
+    if (!run) return;
+    if (run.fromRow !== run.toRow) {
+      this.needsRender = true;
+      if (now >= run.slideT0 + TABLE_SLIDE_MS) {
+        run.fromRow = run.toRow;
+      }
+    }
+    if (now < run.nextAt) return;
     const c = this.doc.components.get(run.id);
     const t = c?.table;
     if (!c || !t || t.mode !== 'solution') {
@@ -1794,7 +1823,11 @@ export class Editor {
       this.scheduleAutosave();
       return;
     }
+    const prev = run.showing;
     run.showing++;
+    run.fromRow = prev;
+    run.toRow = run.showing;
+    run.slideT0 = now;
     this.applyTestRow(run.showing);
     this.paintTestRow(c, run.showing);
     this.revealTestRow(run.id, run.showing);
