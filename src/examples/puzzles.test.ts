@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { noteLayout } from '../model/shapes';
-import { tableComplete } from '../model/table';
+import { TABLE_OUT, tableComplete } from '../model/table';
 import { exampleIconSvg } from './exampleIcons';
 import { exampleCardColors, exampleComplexity } from './exampleVisuals';
 import { EXAMPLES } from './catalog';
@@ -39,11 +39,19 @@ describe('solution puzzles', () => {
       'solsame',
       'solhigh',
       'solhalf',
+      'solhalfsub',
+      'solroute',
       'solunless',
       'solpick',
+      'solparity3',
+      'solallnone',
       'solmaj',
       'solmost',
       'solfull',
+      'solfullsub',
+      'soldecoder',
+      'solbcd',
+      'solcmp2',
     ]);
     expect(PUZZLES.filter(isSingleGate).map((p) => p.id)).toEqual(['soland']);
     expect(EXAMPLES[0].name).toBe('Puzzles');
@@ -62,10 +70,34 @@ describe('solution puzzles', () => {
       const note = [...doc.components.values()].find((c) => c.kind === 'note');
       expect(spawned?.table?.rows).toEqual(spec.rows);
       expect(note?.name).toBe(spec.hint);
+      expect(note?.name.startsWith(spec.name)).toBe(true);
       expect(noteLayout(spec.hint, note?.w ?? 0, note?.h ?? 0).size).toBeGreaterThanOrEqual(15);
       expect((note?.w ?? 0) % 10).toBe(0);
       expect((note?.h ?? 0) % 10).toBe(0);
-      expect((note?.y ?? 0) + (note?.h ?? 0)).toBeLessThan(0);
+      expect(note?.y).toBeGreaterThanOrEqual(spawned?.h ?? 0);
+
+      const switches = [...doc.components.values()].filter((c) => c.kind === 'switch');
+      const bulbs = [...doc.components.values()].filter((c) => c.kind === 'bulb');
+      expect(switches.length).toBe(spec.inputs.length);
+      expect(bulbs.length).toBe(spec.outputs.length);
+      for (const sw of switches) {
+        expect(sw.x).toBeLessThan(0);
+        expect(sw.y).toBeLessThan(0);
+      }
+      for (const b of bulbs) {
+        expect(b.x).toBeGreaterThan(spawned?.w ?? 0);
+        expect(b.y).toBeLessThan(0);
+      }
+      for (let i = 0; i < spec.inputs.length; i++) {
+        const inWire = [...doc.wires.values()].find((w) => w.to === spawned?.id && w.input === i);
+        expect(inWire).toBeDefined();
+        expect(inWire?.from).toBe(`sw_${i}`);
+      }
+      for (let j = 0; j < spec.outputs.length; j++) {
+        const outWire = [...doc.wires.values()].find((w) => w.to === spawned?.id && w.input === TABLE_OUT + j);
+        expect(outWire).toBeDefined();
+        expect(outWire?.from).toBe(`bulb_${j}`);
+      }
     }
     const lights = PUZZLES.map((spec) => lightness(exampleCardColors('Puzzles', spec.id).bg));
     for (let i = 1; i < lights.length; i++) expect(lights[i]).toBeLessThan(lights[i - 1]);

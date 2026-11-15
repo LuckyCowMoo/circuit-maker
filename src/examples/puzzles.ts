@@ -1,14 +1,14 @@
 import { emptyDoc, makeComponent } from '../model/doc';
-import { GRID } from '../model/geometry';
+import { GRID, snap } from '../model/geometry';
 import { noteLayout } from '../model/shapes';
-import { layoutTable, rowCount } from '../model/table';
-import type { Component, Doc, TableData } from '../model/types';
+import { layoutTable, rowCount, TABLE_OUT } from '../model/table';
+import type { Component, Doc, TableData, Wire } from '../model/types';
 
 /** One solution-mode truth table the player has to build. */
 export interface PuzzleSpec {
   id: string;
   name: string;
-  /** Shown on the note above the table. */
+  /** Shown on the note beneath the table. */
   hint: string;
   inputs: string[];
   outputs: string[];
@@ -32,36 +32,37 @@ function puzzle(
   outputs: string[],
   fn: (bits: boolean[]) => boolean[],
 ): PuzzleSpec {
-  return { id, name, hint, inputs, outputs, rows: rowsFor(inputs.length, fn) };
+  const fullHint = hint.startsWith(name) ? hint : `${name}: ${hint}`;
+  return { id, name, hint: fullHint, inputs, outputs, rows: rowsFor(inputs.length, fn) };
 }
 
 /**
  * Easiest first. And is the one single-gate puzzle. Each later puzzle needs a
- * larger circuit. Full adder stays the hardest.
+ * larger circuit. 2-bit compare stays the hardest.
  */
 export const PUZZLES: PuzzleSpec[] = [
-  puzzle('soland', 'And', 'Y is 1 only when A and B are both 1.', ['A', 'B'], ['Y'], ([a, b]) => [a && b]),
-  puzzle('soleither', 'Either and both', 'X is 1 when A or B is on. Y is 1 only when both are on.', ['A', 'B'], ['X', 'Y'], ([a, b]) => [
+  puzzle('soland', 'And', 'And: Y is 1 only when A and B are both 1.', ['A', 'B'], ['Y'], ([a, b]) => [a && b]),
+  puzzle('soleither', 'Either and both', 'Either and both: X is 1 when A or B is on. Y is 1 only when both are on.', ['A', 'B'], ['X', 'Y'], ([a, b]) => [
     a || b,
     a && b,
   ]),
-  puzzle('solonly', 'Only A', 'Y is 1 only when A is on and B is off.', ['A', 'B'], ['Y'], ([a, b]) => [a && !b]),
+  puzzle('solonly', 'Only A', 'Only A: Y is 1 only when A is on and B is off.', ['A', 'B'], ['Y'], ([a, b]) => [a && !b]),
   puzzle(
     'solboth',
     'Only or both',
-    'Only is 1 only when A is on and B is off. Both is 1 only when A and B are both on.',
+    'Only or both: Only is 1 only when A is on and B is off. Both is 1 only when A and B are both on.',
     ['A', 'B'],
     ['Only', 'Both'],
     ([a, b]) => [a && !b, a && b],
   ),
-  puzzle('solsame', 'Same or different', 'Same is 1 when A and B match. Diff is 1 when they differ.', ['A', 'B'], ['Same', 'Diff'], ([a, b]) => [
+  puzzle('solsame', 'Same or different', 'Same or different: Same is 1 when A and B match. Diff is 1 when they differ.', ['A', 'B'], ['Same', 'Diff'], ([a, b]) => [
     a === b,
     a !== b,
   ]),
   puzzle(
     'solhigh',
     'Which side',
-    'High is 1 only when A is on and B is off. Low is 1 only when A is off and B is on.',
+    'Which side: High is 1 only when A is on and B is off. Low is 1 only when A is off and B is on.',
     ['A', 'B'],
     ['High', 'Low'],
     ([a, b]) => [a && !b, !a && b],
@@ -69,27 +70,62 @@ export const PUZZLES: PuzzleSpec[] = [
   puzzle(
     'solhalf',
     'Half adder',
-    'S is the sum, 1 when A and B differ. C is the carry, 1 only when both are 1.',
+    'Half adder: S is the sum, 1 when A and B differ. C is the carry, 1 only when both are 1.',
     ['A', 'B'],
     ['S', 'C'],
     ([a, b]) => [a !== b, a && b],
   ),
-  puzzle('solunless', 'Unless', 'Y is 1 only when A and B are on and C is off.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [a && b && !c]),
+  puzzle(
+    'solhalfsub',
+    'Half subtractor',
+    'Half subtractor: D is the difference, 1 when A and B differ. Bw is the borrow, 1 only when A is 0 and B is 1.',
+    ['A', 'B'],
+    ['D', 'Bw'],
+    ([a, b]) => [a !== b, !a && b],
+  ),
+  puzzle(
+    'solroute',
+    'Route',
+    'Route: Sends In to Y0 while Sel is off, and to Y1 while Sel is on.',
+    ['In', 'Sel'],
+    ['Y0', 'Y1'],
+    ([input, sel]) => [input && !sel, input && sel],
+  ),
+  puzzle('solunless', 'Unless', 'Unless: Y is 1 only when A and B are on and C is off.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [a && b && !c]),
   puzzle(
     'solpick',
     'Choose',
-    'Y matches A while Pick is off, and matches B while Pick is on.',
+    'Choose: Y matches A while Pick is off, and matches B while Pick is on.',
     ['A', 'B', 'Pick'],
     ['Y'],
     ([a, b, pick]) => [pick ? b : a],
   ),
-  puzzle('solmaj', 'Majority', 'Y is 1 when at least two of A, B, and C are on.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [
+  puzzle(
+    'solparity3',
+    'Odd and even',
+    'Odd and even: Odd is 1 when an odd number of A, B, and C are on. Even is 1 when an even number are on.',
+    ['A', 'B', 'C'],
+    ['Odd', 'Even'],
+    ([a, b, c]) => {
+      const n = Number(a) + Number(b) + Number(c);
+      return [n % 2 === 1, n % 2 === 0];
+    },
+  ),
+  puzzle(
+    'solallnone',
+    'All or none',
+    'All or none: Y is 1 when either all three inputs are on, or all three are off.',
+    ['A', 'B', 'C'],
+    ['Y'],
+    ([a, b, c]) => [(a && b && c) || (!a && !b && !c)],
+  ),
+  puzzle('solmaj', 'Majority', 'Majority: Y is 1 when at least two of A, B, and C are on.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [
     Number(a) + Number(b) + Number(c) >= 2,
   ]),
   puzzle(
     'solmost',
     'Most or all',
-    'Most is 1 when at least two of A, B, and C are on. All is 1 only when every one is on.',
+    'Most or all: Most is 1 when at least two of A, B, and C are on. All is 1 only when every one is on.',
     ['A', 'B', 'C'],
     ['Most', 'All'],
     ([a, b, c]) => {
@@ -100,12 +136,54 @@ export const PUZZLES: PuzzleSpec[] = [
   puzzle(
     'solfull',
     'Full adder',
-    'S is the sum, 1 when an odd number of A, B, and Ci are on. Co is the carry, 1 when at least two are on.',
+    'Full adder: S is the sum, 1 when an odd number of A, B, and Ci are on. Co is the carry, 1 when at least two are on.',
     ['A', 'B', 'Ci'],
     ['S', 'Co'],
     ([a, b, ci]) => {
       const n = Number(a) + Number(b) + Number(ci);
       return [n % 2 === 1, n >= 2];
+    },
+  ),
+  puzzle(
+    'solfullsub',
+    'Full subtractor',
+    'Full subtractor: D is the difference (A - B - Bi). Bo is the borrow, 1 whenever A minus B minus Bi is negative.',
+    ['A', 'B', 'Bi'],
+    ['D', 'Bo'],
+    ([a, b, bi]) => {
+      const d = Number(a) - Number(b) - Number(bi);
+      return [Math.abs(d) % 2 === 1, d < 0];
+    },
+  ),
+  puzzle(
+    'soldecoder',
+    'Decoder',
+    'Decoder: When En is on, turns on exactly one output selected by A and B (00: Y0, 01: Y1, 10: Y2, 11: Y3).',
+    ['A', 'B', 'En'],
+    ['Y0', 'Y1', 'Y2', 'Y3'],
+    ([a, b, en]) => [en && !a && !b, en && !a && b, en && a && !b, en && a && b],
+  ),
+  puzzle(
+    'solbcd',
+    'Valid BCD',
+    'Valid BCD: Valid is 1 when the 4-bit input represents a valid decimal digit 0 to 9, and 0 for 10 to 15.',
+    ['B3', 'B2', 'B1', 'B0'],
+    ['Valid'],
+    ([b3, b2, b1, b0]) => {
+      const val = (Number(b3) << 3) | (Number(b2) << 2) | (Number(b1) << 1) | Number(b0);
+      return [val <= 9];
+    },
+  ),
+  puzzle(
+    'solcmp2',
+    '2-bit compare',
+    '2-bit compare: Gt is 1 when 2-bit number A (A1 A0) is greater than B (B1 B0). Eq is 1 when they are equal.',
+    ['A1', 'A0', 'B1', 'B0'],
+    ['Gt', 'Eq'],
+    ([a1, a0, b1, b0]) => {
+      const va = (Number(a1) << 1) | Number(a0);
+      const vb = (Number(b1) << 1) | Number(b0);
+      return [va > vb, va === vb];
     },
   ),
 ];
@@ -126,18 +204,21 @@ function onGrid(v: number): number {
 }
 
 /** Wide enough, and tall enough, that the plain-English hint stays readable. */
-function hintNote(hint: string, tableW: number): Component {
+function hintNote(spec: PuzzleSpec, tableW: number, tableH: number): Component {
+  const text = spec.hint.startsWith(spec.name) ? spec.hint : `${spec.name}: ${spec.hint}`;
   const w = onGrid(Math.max(tableW, 260));
   let h = onGrid(100);
-  while (h < 240 && noteLayout(hint, w, h).size < 15) h += GRID;
-  const note = makeComponent('note', (tableW - w) / 2, -(h + 40), 'hint');
+  while (h < 240 && noteLayout(text, w, h).size < 15) h += GRID;
+  const x = Math.round((tableW - w) / (2 * GRID)) * GRID;
+  const y = onGrid(tableH + 40);
+  const note = makeComponent('note', x, y, 'hint');
   note.w = w;
   note.h = h;
-  note.name = hint;
+  note.name = text;
   return note;
 }
 
-/** The question table and a note that states the goal. The circuit is left for the player. */
+/** The question table, switches, bulbs, and a note stating the goal. The circuit is left for the player. */
 export function puzzleDoc(spec: PuzzleSpec): Doc {
   const doc = emptyDoc(spec.name);
   const table = makeComponent('table', 0, 0, 'table');
@@ -147,7 +228,46 @@ export function puzzleDoc(spec: PuzzleSpec): Doc {
   table.w = size.w;
   table.h = size.h;
   doc.components.set(table.id, table);
-  const note = hintNote(spec.hint, size.w);
+
+  // Position switches above the table, out to the left
+  const swX = -160;
+  const nIn = spec.inputs.length;
+  for (let i = 0; i < nIn; i++) {
+    const swY = -60 - (nIn - 1 - i) * 80;
+    const sw = makeComponent('switch', swX, swY, `sw_${i}`);
+    sw.name = spec.inputs[i];
+    doc.components.set(sw.id, sw);
+
+    const wire: Wire = {
+      id: `w_in_${i}`,
+      from: sw.id,
+      to: table.id,
+      input: i,
+      separatePort: true,
+    };
+    doc.wires.set(wire.id, wire);
+  }
+
+  // Position bulbs above the table, out to the right
+  const bulbX = snap(size.w + 120);
+  const nOut = spec.outputs.length;
+  for (let j = 0; j < nOut; j++) {
+    const bulbY = -60 - (nOut - 1 - j) * 80;
+    const bulb = makeComponent('bulb', bulbX, bulbY, `bulb_${j}`);
+    bulb.name = spec.outputs[j];
+    doc.components.set(bulb.id, bulb);
+
+    const wire: Wire = {
+      id: `w_out_${j}`,
+      from: bulb.id,
+      to: table.id,
+      input: TABLE_OUT + j,
+      separatePort: true,
+    };
+    doc.wires.set(wire.id, wire);
+  }
+
+  const note = hintNote(spec, size.w, size.h);
   doc.components.set(note.id, note);
   return doc;
 }
