@@ -221,7 +221,11 @@ function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera, w: number, h: numb
 
 function roundRectPath(ctx: CanvasRenderingContext2D, r: Rect, radius: number): void {
   ctx.beginPath();
-  ctx.roundRect(r.x, r.y, r.w, r.h, Math.min(radius, r.w / 2, r.h / 2));
+  if (typeof ctx.roundRect === 'function') {
+    ctx.roundRect(r.x, r.y, r.w, r.h, Math.min(radius, r.w / 2, r.h / 2));
+  } else {
+    ctx.rect(r.x, r.y, r.w, r.h);
+  }
 }
 
 /**
@@ -379,8 +383,7 @@ function drawArrows(ctx: CanvasRenderingContext2D, arrows: Arrow[], theme: Theme
     const ly = a.y - sin * dist;
     const bx = Math.max(4, Math.min(lx - pw / 2, ctx.canvas.clientWidth - pw - 4));
     ctx.fillStyle = theme.ui.bg;
-    ctx.beginPath();
-    ctx.roundRect(bx, ly - 10, pw, 20, 10);
+    roundRectPath(ctx, { x: bx, y: ly - 10, w: pw, h: 20 }, 10);
     ctx.fill();
     ctx.fillStyle = a.color;
     ctx.textAlign = 'left';
@@ -960,8 +963,7 @@ function drawFlatSelection(ctx: CanvasRenderingContext2D, ed: Editor, px: number
     if (!c) continue;
     if (notesOnly && c.kind !== 'note' && c.kind !== 'marker') continue;
     const r = inflate(bodyRect(c), 5);
-    ctx.beginPath();
-    ctx.roundRect(r.x, r.y, r.w, r.h, 4);
+    roundRectPath(ctx, r, 4);
     ctx.stroke();
   }
   if (!notesOnly) {

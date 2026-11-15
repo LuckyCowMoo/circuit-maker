@@ -1078,8 +1078,8 @@ export function Toolbar({ editor }: { editor: Editor }) {
           <div className="wire-style">
             <span>Selection</span>
             <div className="seg">
-              <button type="button" className={editor.waveSelection ? 'active' : ''} onClick={() => editor.setWaveSelection(true)}>Colour wave</button>
-              <button type="button" className={!editor.waveSelection ? 'active' : ''} onClick={() => editor.setWaveSelection(false)}>Blue box</button>
+              <button type="button" className={!editor.waveSelection ? 'active' : ''} title="Blue square outline" onClick={() => editor.setWaveSelection(false)}>Blue box</button>
+              <button type="button" className={editor.waveSelection ? 'active' : ''} title="Colour wave" onClick={() => editor.setWaveSelection(true)}>Colour wave</button>
             </div>
           </div>
           <div className="wire-style">

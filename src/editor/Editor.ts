@@ -396,8 +396,8 @@ export class Editor {
   wireStyle: WireStyle = wireStyleOf(storage.get(BEND_KEY));
   /** When set, the selection menu sits beside the part instead of above the toolbar. */
   propsNear = storage.get(PROPS_KEY) === '1';
-  /** Colour-wave selection. Off uses the flat blue outline. Notes and markers always use blue. */
-  waveSelection = storage.get(WAVE_KEY) !== '0';
+  /** Colour-wave selection. Off uses the flat blue outline. Notes and markers always use blue. Defaults to off. */
+  waveSelection = storage.get(WAVE_KEY) === '1';
   tool: Tool = 'select';
   selection = new Set<string>();
   sim = new Simulator();
