@@ -3,7 +3,6 @@ import { keyBindLabel } from './keys';
 import {
   freshTable,
   layoutTable,
-  maxScroll,
   rowBit,
   TABLE_BTN_ROW,
   TABLE_CONVERT_LABEL,
@@ -593,7 +592,6 @@ function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
   const stroke = c.stroke ?? theme.stroke;
   const fill = c.fill ?? theme.fill;
   const ops: DrawOp[] = [];
-  const scroll = Math.max(0, Math.min(info.tableScroll ?? 0, maxScroll(t)));
   const titles = info.tableTitles ?? t.names;
   const mask = info.mask ?? '';
 
@@ -614,11 +612,10 @@ function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
   if (stubs) ops.push({ t: 'path', d: stubs, stroke, width: 2 });
 
   if (info.tableTestRow != null) {
-    const relRow = info.tableTestRow - scroll;
-    if (relRow >= -0.05 && relRow <= lay.visible - 0.95) {
-      const hasScrollbar = lay.rows > lay.visible;
+    const relRow = info.tableTestRow;
+    if (relRow >= -0.05 && relRow <= lay.rows - 0.05) {
       const hx = lay.gridLeft + 2;
-      const hw = lay.gridRight - lay.gridLeft - 4 - (hasScrollbar ? 6 : 0);
+      const hw = lay.gridRight - lay.gridLeft - 4;
       const hy = lay.gridTop + relRow * TABLE_ROW_H + 1;
       const hh = TABLE_ROW_H - 2;
       ops.push({
@@ -639,10 +636,8 @@ function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
 
   const cells: TablePin[] = lay.pins.filter((pin) => !pin.spare);
   const colors = info.tableTitleColors;
-  for (let i = 0; i < lay.visible; i++) {
-    const row = scroll + i;
-    if (row >= lay.rows) break;
-    const y = lay.gridTop + i * TABLE_ROW_H;
+  for (let row = 0; row < lay.rows; row++) {
+    const y = lay.gridTop + row * TABLE_ROW_H;
     const recorded = t.rows[row];
     const marks = t.marks?.[row];
     for (const pin of cells) {
@@ -705,17 +700,6 @@ function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
       bold: true,
       anchor: 'middle',
     });
-  }
-
-  if (lay.rows > lay.visible) {
-    const trackX = lay.w - TABLE_PAD - 4;
-    const trackY = lay.gridTop + 4;
-    const trackH = lay.visible * TABLE_ROW_H - 8;
-    const thumbH = Math.max(10, (trackH * lay.visible) / lay.rows);
-    const span = lay.rows - lay.visible;
-    const thumbY = trackY + ((trackH - thumbH) * scroll) / span;
-    ops.push({ t: 'path', d: roundRectD(trackX, trackY, 3, trackH, 1.5), fill: theme.ui.border });
-    ops.push({ t: 'path', d: roundRectD(trackX, thumbY, 3, thumbH, 1.5), fill: theme.ui.muted });
   }
 
   const ready = t.mode === 'solution' || tableComplete(t);

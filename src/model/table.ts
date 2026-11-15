@@ -5,7 +5,7 @@ import type { Component, Doc, Point, Rect, TableData, Wire } from './types';
 export const TABLE_MAX = 8;
 /** Output-column pins start here so adding an input never renumbers them. */
 export const TABLE_OUT = 8;
-export const TABLE_VISIBLE = 8;
+export const TABLE_VISIBLE = 1 << TABLE_MAX;
 /** How long a solution test holds each row before the next one. */
 export const TABLE_STEP_MS = 1000;
 /** How long the slide animation takes between rows during a solution test. */
@@ -89,8 +89,8 @@ export function rowBit(inputs: number, row: number, col: number): '0' | '1' {
   return (row >> (inputs - 1 - col)) & 1 ? '1' : '0';
 }
 
-export function maxScroll(t: TableData): number {
-  return Math.max(0, rowCount(t.inputs) - TABLE_VISIBLE);
+export function maxScroll(_t?: TableData): number {
+  return 0;
 }
 
 export function tableComplete(t: TableData): boolean {
@@ -333,7 +333,7 @@ export function layoutTable(t: TableData): TableLayout {
     w = minW;
   }
   const rows = rowCount(t.inputs);
-  const visible = Math.min(rows, TABLE_VISIBLE);
+  const visible = rows;
   const gridTop = TABLE_BTN_ROW + TABLE_LABEL;
   const h = gridTop + visible * TABLE_ROW_H;
   const pins: TablePin[] = [];

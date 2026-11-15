@@ -12,6 +12,7 @@ import {
   freshTable,
   gradeRow,
   layoutTable,
+  maxScroll,
   observe,
   pinIsSpare,
   pinSide,
@@ -171,5 +172,41 @@ describe('truth table rows', () => {
     expect(out!.x).toBeGreaterThan(b!.x);
     expect(a!.y).toBeLessThan(c.y);
     expect(missing).toBeNull();
+  });
+
+  it('spawns truth tables at full size without scrolling for any number of inputs', () => {
+    // 0 inputs: 1 row
+    const t0 = freshTable();
+    t0.inputs = 0;
+    const lay0 = layoutTable(t0);
+    expect(lay0.rows).toBe(1);
+    expect(lay0.visible).toBe(1);
+    expect(maxScroll(t0)).toBe(0);
+
+    // 3 inputs: 8 rows
+    const t3 = freshTable();
+    t3.inputs = 3;
+    const lay3 = layoutTable(t3);
+    expect(lay3.rows).toBe(8);
+    expect(lay3.visible).toBe(8);
+    expect(maxScroll(t3)).toBe(0);
+
+    // 4 inputs: 16 rows (previously capped at 8 with scroll)
+    const t4 = freshTable();
+    t4.inputs = 4;
+    const lay4 = layoutTable(t4);
+    expect(lay4.rows).toBe(16);
+    expect(lay4.visible).toBe(16);
+    expect(lay4.h).toBe(lay4.gridTop + 16 * 22);
+    expect(maxScroll(t4)).toBe(0);
+
+    // 5 inputs: 32 rows
+    const t5 = freshTable();
+    t5.inputs = 5;
+    const lay5 = layoutTable(t5);
+    expect(lay5.rows).toBe(32);
+    expect(lay5.visible).toBe(32);
+    expect(lay5.h).toBe(lay5.gridTop + 32 * 22);
+    expect(maxScroll(t5)).toBe(0);
   });
 });

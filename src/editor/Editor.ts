@@ -84,7 +84,6 @@ import {
   TABLE_ROW_H,
   TABLE_SLIDE_MS,
   TABLE_STEP_MS,
-  TABLE_VISIBLE,
 } from '../model/table';
 import { buildRowPreview, type RowPreviewModel } from '../model/tablePreview';
 import { getTheme, type Theme } from '../model/themes';
@@ -1416,9 +1415,9 @@ export class Editor {
     return null;
   }
 
-  /** First visible row of a truth table, for drawing. */
-  tableScrollOf(id: string): number {
-    return this.tableScroll.get(id) ?? 0;
+  /** First visible row of a truth table, for drawing (always 0, tables are full size). */
+  tableScrollOf(_id: string): number {
+    return 0;
   }
 
   /** Row index being tested on a truth table, smoothly sliding between rows during transitions. */
@@ -1430,23 +1429,9 @@ export class Editor {
     return lerpAnim(run.fromRow, run.toRow, run.slideT0, now, TABLE_SLIDE_MS);
   }
 
-  private clampTableScroll(id: string): void {
-    const t = this.doc.components.get(id)?.table;
-    if (!t) return;
-    const max = maxScroll(t);
-    const cur = this.tableScroll.get(id) ?? 0;
-    if (cur > max) this.tableScroll.set(id, max);
-  }
+  private clampTableScroll(_id: string): void {}
 
-  private scrollTable(id: string, delta: number): void {
-    const t = this.doc.components.get(id)?.table;
-    if (!t) return;
-    const max = maxScroll(t);
-    const next = Math.max(0, Math.min(max, (this.tableScroll.get(id) ?? 0) + delta));
-    if (next === (this.tableScroll.get(id) ?? 0)) return;
-    this.tableScroll.set(id, next);
-    this.needsRender = true;
-  }
+  private scrollTable(_id: string, _delta: number): void {}
 
   private hitTableButton(w: Point): Component | null {
     let hit: Component | null = null;
@@ -1581,11 +1566,7 @@ export class Editor {
     return true;
   }
 
-  private revealTestRow(id: string, row: number): void {
-    const top = this.tableScroll.get(id) ?? 0;
-    if (row < top) this.tableScroll.set(id, row);
-    else if (row >= top + TABLE_VISIBLE) this.tableScroll.set(id, row - TABLE_VISIBLE + 1);
-  }
+  private revealTestRow(_id: string, _row: number): void {}
 
   private onTableButton(c: Component): void {
     const t = c.table;
