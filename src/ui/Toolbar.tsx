@@ -949,27 +949,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
   ];
 
   return (
-    <>
-      <div className="mode-badge" role="region" aria-label="Gate catalogue mode">
-        <button
-          type="button"
-          className={`mode-badge-btn ${editor.gateMode === 'gcse' ? 'active' : ''}`}
-          onClick={() => editor.setGateMode('gcse')}
-          title="GCSE mode: AND, OR, NOT gates only in bottom tray"
-        >
-          GCSE
-        </button>
-        <button
-          type="button"
-          className={`mode-badge-btn ${editor.gateMode === 'full' ? 'active' : ''}`}
-          onClick={() => editor.setGateMode('full')}
-          title="Full mode: all gates (AND, OR, XOR, Buffer, NOT bubble) in bottom tray"
-        >
-          Full
-        </button>
-      </div>
-
-      <div className="dock" ref={dockRef}>
+    <div className="dock" ref={dockRef}>
       {editor.toastMessage && (
         <div className={`toast${editor.toastMessage.startsWith('Building ') ? ' building' : ''}`} role="status">
           {editor.toastMessage}
@@ -1109,14 +1089,14 @@ export function Toolbar({ editor }: { editor: Editor }) {
                 className={editor.gateMode === 'gcse' ? 'active' : ''}
                 onClick={() => editor.setGateMode('gcse')}
               >
-                GCSE (AND, OR, NOT)
+                GCSE
               </button>
               <button
                 type="button"
                 className={editor.gateMode === 'full' ? 'active' : ''}
                 onClick={() => editor.setGateMode('full')}
               >
-                Full (all gates)
+                FULL
               </button>
             </div>
           </div>
@@ -1287,6 +1267,5 @@ export function Toolbar({ editor }: { editor: Editor }) {
         )}
       </div>
     </div>
-  </>
-);
+  );
 }

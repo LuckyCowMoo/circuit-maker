@@ -1286,15 +1286,19 @@ export class Editor {
         this.changed(true);
         return;
       }
-      this.checkpoint();
-      const c = this.addComponent('buffer', 0, 0);
-      c.negate = true;
-      const size = rotatedSize(c);
-      c.x = snap(w.x - size.w / 2);
-      c.y = snap(w.y - size.h / 2);
-      this.selection = new Set([c.id]);
-      this.finishPendingConnect(c.id);
-      this.changed(true);
+      if (this.gateMode === 'gcse') {
+        this.checkpoint();
+        const c = this.addComponent('buffer', 0, 0);
+        c.negate = true;
+        const size = rotatedSize(c);
+        c.x = snap(w.x - size.w / 2);
+        c.y = snap(w.y - size.h / 2);
+        this.selection = new Set([c.id]);
+        this.finishPendingConnect(c.id);
+        this.changed(true);
+        return;
+      }
+      this.toast('Drop the NOT bubble onto a gate.');
       return;
     }
     if (kind === 'port' || kind === 'ribbon-port') {

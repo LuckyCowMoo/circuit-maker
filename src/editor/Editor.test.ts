@@ -258,8 +258,19 @@ describe('Editor gateMode (GCSE vs Full)', () => {
     expect(gateLabels).toEqual(['AND', 'OR', 'NOT']);
   });
 
-  it('placing NOT on empty space creates a buffer with negate = true (a NOT gate)', () => {
+  it('in full mode, placing NOT bubble on empty space toasts error and does not create a buffer', () => {
     const editor = new Editor();
+    editor.setGateMode('full');
+    expect(editor.doc.components.size).toBe(0);
+
+    editor.placeAt('not', { x: 100, y: 100 });
+    expect(editor.doc.components.size).toBe(0);
+    expect(editor.toastMessage).toBe('Drop the NOT bubble onto a gate.');
+  });
+
+  it('in GCSE mode, placing NOT on empty space creates a buffer with negate = true (a NOT gate)', () => {
+    const editor = new Editor();
+    editor.setGateMode('gcse');
     expect(editor.doc.components.size).toBe(0);
 
     editor.placeAt('not', { x: 100, y: 100 });

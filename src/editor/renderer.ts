@@ -796,8 +796,26 @@ export function renderScene(ed: Editor): void {
       ctx.lineWidth = 2;
       ctx.stroke();
     } else if (ed.placing === 'not') {
-      const hit = ed.hitComponent(ed.ghost);
-      if (hit && isGate(hit.kind)) {
+      if (ed.gateMode === 'gcse') {
+        const hit = ed.hitComponent(ed.ghost);
+        if (hit && isGate(hit.kind)) {
+          ctx.globalAlpha = 0.8;
+          ctx.beginPath();
+          ctx.arc(ed.ghost.x, ed.ghost.y, 5, 0, Math.PI * 2);
+          ctx.fillStyle = theme.fill;
+          ctx.fill();
+          ctx.strokeStyle = theme.selection;
+          ctx.lineWidth = STROKE_W;
+          ctx.stroke();
+        } else {
+          const ghost = makeComponent('buffer', 0, 0, 'ghost');
+          ghost.negate = true;
+          const size = rotatedSize(ghost);
+          ghost.x = snap(ed.ghost.x - size.w / 2);
+          ghost.y = snap(ed.ghost.y - size.h / 2);
+          drawOps(ctx, componentOps(ghost, theme, { active: false }), xformOf(ghost), px);
+        }
+      } else {
         ctx.globalAlpha = 0.8;
         ctx.beginPath();
         ctx.arc(ed.ghost.x, ed.ghost.y, 5, 0, Math.PI * 2);
@@ -806,13 +824,6 @@ export function renderScene(ed: Editor): void {
         ctx.strokeStyle = theme.selection;
         ctx.lineWidth = STROKE_W;
         ctx.stroke();
-      } else {
-        const ghost = makeComponent('buffer', 0, 0, 'ghost');
-        ghost.negate = true;
-        const size = rotatedSize(ghost);
-        ghost.x = snap(ed.ghost.x - size.w / 2);
-        ghost.y = snap(ed.ghost.y - size.h / 2);
-        drawOps(ctx, componentOps(ghost, theme, { active: false }), xformOf(ghost), px);
       }
     } else {
       const kind = ed.placing === 'ribbon-port' ? 'port' : ed.placing;
