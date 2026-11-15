@@ -14,6 +14,27 @@ const mockStorage = {
 };
 globalThis.localStorage = mockStorage as unknown as Storage;
 
+let currentUrl = 'http://localhost/';
+const mockWindow = {
+  get location() {
+    const u = new URL(currentUrl);
+    return {
+      get href() { return u.href; },
+      get search() { return u.search; },
+      get pathname() { return u.pathname; },
+      get hash() { return u.hash; },
+    };
+  },
+  history: {
+    replaceState: (_data: any, _unused: string, url: string) => {
+      currentUrl = new URL(url, currentUrl).href;
+    },
+  },
+  addEventListener: () => {},
+  removeEventListener: () => {},
+};
+globalThis.window = mockWindow as unknown as Window & typeof globalThis;
+
 describe('Editor selection style', () => {
   beforeEach(() => {
     mockStorage.clear();
@@ -170,5 +191,96 @@ describe('Truth table testing row highlight and slide animation', () => {
     // When the last row finishes, test completes and highlight disappears
     (editor as any).tickTableTest(run.nextAt);
     expect(editor.testRowPosition(tbl.id)).toBeNull();
+  });
+});
+
+describe('Editor gateMode (GCSE vs Full)', () => {
+  beforeEach(() => {
+    mockStorage.clear();
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', 'http://localhost/');
+    }
+  });
+
+  it('defaults to full mode when no query param or localStorage is present', () => {
+    const editor = new Editor();
+    expect(editor.gateMode).toBe('full');
+  });
+
+  it('initializes to gcse mode from ?mode=gcse', () => {
+    window.history.replaceState(null, '', 'http://localhost/?mode=gcse');
+    const editor = new Editor();
+    expect(editor.gateMode).toBe('gcse');
+  });
+
+  it('initializes to gcse mode from ?gcse or ?gcse=1', () => {
+    window.history.replaceState(null, '', 'http://localhost/?gcse');
+    const editor1 = new Editor();
+    expect(editor1.gateMode).toBe('gcse');
+
+    window.history.replaceState(null, '', 'http://localhost/?gcse=1');
+    const editor2 = new Editor();
+    expect(editor2.gateMode).toBe('gcse');
+  });
+
+  it('URL query parameter overrides localStorage preference', () => {
+    mockStorage.setItem('circuit-maker:gate-mode', 'gcse');
+    window.history.replaceState(null, '', 'http://localhost/?mode=full');
+    const editor = new Editor();
+    expect(editor.gateMode).toBe('full');
+
+    mockStorage.setItem('circuit-maker:gate-mode', 'full');
+    window.history.replaceState(null, '', 'http://localhost/?mode=gcse');
+    const editor2 = new Editor();
+    expect(editor2.gateMode).toBe('gcse');
+  });
+
+  it('setGateMode toggles gateMode, persists in localStorage, and updates URL', () => {
+    const editor = new Editor();
+    expect(editor.gateMode).toBe('full');
+
+    editor.setGateMode('gcse');
+    expect(editor.gateMode).toBe('gcse');
+    expect(mockStorage.getItem('circuit-maker:gate-mode')).toBe('gcse');
+    expect(window.location.search).toBe('?mode=gcse');
+
+    editor.setGateMode('full');
+    expect(editor.gateMode).toBe('full');
+    expect(mockStorage.getItem('circuit-maker:gate-mode')).toBe('full');
+    expect(window.location.search).toBe('?mode=full');
+  });
+
+  it('menuItems returns only AND, OR, NOT gates in GCSE mode', () => {
+    const editor = new Editor();
+    editor.setGateMode('gcse');
+    const items = editor.menuItems();
+    const gateLabels = items.filter((it) => ['AND', 'OR', 'NOT', 'NAND', 'NOR', 'XOR', 'XNOR', 'Buffer'].includes(it.label)).map((it) => it.label);
+    expect(gateLabels).toEqual(['AND', 'OR', 'NOT']);
+  });
+
+  it('placing NOT on empty space creates a buffer with negate = true (a NOT gate)', () => {
+    const editor = new Editor();
+    expect(editor.doc.components.size).toBe(0);
+
+    editor.placeAt('not', { x: 100, y: 100 });
+    expect(editor.doc.components.size).toBe(1);
+
+    const placed = [...editor.doc.components.values()][0];
+    expect(placed.kind).toBe('buffer');
+    expect(placed.negate).toBe(true);
+  });
+
+  it('placing NOT on an existing gate toggles its negate property', () => {
+    const editor = new Editor();
+    const andGate = editor.addComponent('and', 100, 100);
+    expect(andGate.negate).toBe(false);
+
+    // Place NOT directly on the AND gate body
+    editor.placeAt('not', { x: 120, y: 120 });
+    expect(andGate.negate).toBe(true);
+
+    // Place NOT again to toggle back
+    editor.placeAt('not', { x: 120, y: 120 });
+    expect(andGate.negate).toBe(false);
   });
 });

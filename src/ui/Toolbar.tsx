@@ -17,8 +17,11 @@ import { useEditor } from './useEditor';
 
 type Panel = 'save' | 'open' | 'theme' | 'help' | 'live' | null;
 
+const GCSE_GATES: PlaceKind[] = ['and', 'or', 'not'];
+const FULL_GATES: PlaceKind[] = ['and', 'or', 'xor', 'buffer', 'not'];
+
 const PLACE_GROUPS: PlaceKind[][] = [
-  ['and', 'or', 'xor', 'buffer', 'not'],
+  FULL_GATES,
   ['switch', 'button', 'timer', 'bulb', 'rgb'],
   ['marker', 'note', 'table'],
   ['port', 'ribbon-port', 'box'],
@@ -842,23 +845,34 @@ export function Toolbar({ editor }: { editor: Editor }) {
     else editor.loadText(text, 'merge');
   };
 
-  const placeButton = (kind: PlaceKind) => (
-    <button
-      key={kind}
-      type="button"
-      className={`tb-btn place ${editor.placing === kind ? 'active' : ''}`}
-      title={KIND_LABEL[kind]}
-      aria-label={KIND_LABEL[kind]}
-      onPointerDown={(e) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        if (editor.placing === kind) editor.cancelPlacing();
-        else editor.beginPlace(kind, e.nativeEvent);
-      }}
-    >
-      <ComponentIcon kind={kind} theme={theme} wave={editor.placing === kind} />
-    </button>
-  );
+  const gateList = editor.gateMode === 'gcse' ? GCSE_GATES : FULL_GATES;
+
+  const placeButton = (kind: PlaceKind) => {
+    const isGcseNot = editor.gateMode === 'gcse' && kind === 'not';
+    const label = isGcseNot ? 'NOT gate' : KIND_LABEL[kind];
+    return (
+      <button
+        key={kind}
+        type="button"
+        className={`tb-btn place ${editor.placing === kind ? 'active' : ''}`}
+        title={label}
+        aria-label={label}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          if (editor.placing === kind) editor.cancelPlacing();
+          else editor.beginPlace(kind, e.nativeEvent);
+        }}
+      >
+        <ComponentIcon
+          kind={isGcseNot ? 'buffer' : kind}
+          negate={isGcseNot ? true : undefined}
+          theme={theme}
+          wave={editor.placing === kind}
+        />
+      </button>
+    );
+  };
 
   const navigation = (
     <>
@@ -870,7 +884,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
       </Btn>
     </>
   );
-  const gates = <>{PLACE_GROUPS[0].map(placeButton)}</>;
+  const gates = <>{gateList.map(placeButton)}</>;
   const io = <>{PLACE_GROUPS[1].map(placeButton)}</>;
   const comments = <>{PLACE_GROUPS[2].map(placeButton)}</>;
   const components = <>{PLACE_GROUPS[3].map(placeButton)}</>;
@@ -926,7 +940,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
   const placing = editor.placing;
   const SEGMENTS: { id: string; title: string; icon: ReactNode; active: boolean; body: ReactNode }[] = [
     { id: 'navigation', title: 'Navigation', icon: Icons.navigation, active: false, body: navigation },
-    { id: 'gates', title: 'Gates', icon: Icons.gates, active: !!placing && PLACE_GROUPS[0].includes(placing), body: gates },
+    { id: 'gates', title: 'Gates', icon: Icons.gates, active: !!placing && gateList.includes(placing), body: gates },
     { id: 'io', title: 'I/O', icon: Icons.io, active: !!placing && PLACE_GROUPS[1].includes(placing), body: io },
     { id: 'comments', title: 'Comments', icon: Icons.comments, active: !!placing && PLACE_GROUPS[2].includes(placing), body: comments },
     { id: 'components', title: 'Components', icon: Icons.components, active: !!placing && PLACE_GROUPS[3].includes(placing), body: components },
@@ -935,7 +949,27 @@ export function Toolbar({ editor }: { editor: Editor }) {
   ];
 
   return (
-    <div className="dock" ref={dockRef}>
+    <>
+      <div className="mode-badge" role="region" aria-label="Gate catalogue mode">
+        <button
+          type="button"
+          className={`mode-badge-btn ${editor.gateMode === 'gcse' ? 'active' : ''}`}
+          onClick={() => editor.setGateMode('gcse')}
+          title="GCSE mode: AND, OR, NOT gates only in bottom tray"
+        >
+          GCSE
+        </button>
+        <button
+          type="button"
+          className={`mode-badge-btn ${editor.gateMode === 'full' ? 'active' : ''}`}
+          onClick={() => editor.setGateMode('full')}
+          title="Full mode: all gates (AND, OR, XOR, Buffer, NOT bubble) in bottom tray"
+        >
+          Full
+        </button>
+      </div>
+
+      <div className="dock" ref={dockRef}>
       {editor.toastMessage && (
         <div className={`toast${editor.toastMessage.startsWith('Building ') ? ' building' : ''}`} role="status">
           {editor.toastMessage}
@@ -1067,6 +1101,25 @@ export function Toolbar({ editor }: { editor: Editor }) {
       {panel === 'help' && (
         <div className="panel help">
           <div className="panel-title">Controls</div>
+          <div className="wire-style">
+            <span>Gate catalogue</span>
+            <div className="seg">
+              <button
+                type="button"
+                className={editor.gateMode === 'gcse' ? 'active' : ''}
+                onClick={() => editor.setGateMode('gcse')}
+              >
+                GCSE (AND, OR, NOT)
+              </button>
+              <button
+                type="button"
+                className={editor.gateMode === 'full' ? 'active' : ''}
+                onClick={() => editor.setGateMode('full')}
+              >
+                Full (all gates)
+              </button>
+            </div>
+          </div>
           <div className="wire-style">
             <span>Wires</span>
             <div className="seg">
@@ -1234,5 +1287,6 @@ export function Toolbar({ editor }: { editor: Editor }) {
         )}
       </div>
     </div>
-  );
+  </>
+);
 }

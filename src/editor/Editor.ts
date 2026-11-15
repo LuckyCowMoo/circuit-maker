@@ -243,9 +243,12 @@ const THEME_KEY = 'circuit-maker:theme';
 const BEND_KEY = 'circuit-maker:bend-wires';
 const PROPS_KEY = 'circuit-maker:props-near';
 const WAVE_KEY = 'circuit-maker:wave-selection';
+const GATE_MODE_KEY = 'circuit-maker:gate-mode';
 const DEFAULT_BOX = { w: 240, h: 160 };
 /** Space kept between a resized box and the walls of the boxes around it. */
 const BOX_GAP = 20;
+
+export type GateMode = 'gcse' | 'full';
 
 const GATE_MENU: MenuItem[] = [
   { label: 'AND', kind: 'and' },
@@ -255,6 +258,12 @@ const GATE_MENU: MenuItem[] = [
   { label: 'XOR', kind: 'xor' },
   { label: 'XNOR', kind: 'xor', negate: true },
   { label: 'Buffer', kind: 'buffer' },
+  { label: 'NOT', kind: 'buffer', negate: true },
+];
+
+const GCSE_GATE_MENU: MenuItem[] = [
+  { label: 'AND', kind: 'and' },
+  { label: 'OR', kind: 'or' },
   { label: 'NOT', kind: 'buffer', negate: true },
 ];
 
@@ -399,6 +408,8 @@ export class Editor {
   propsNear = storage.get(PROPS_KEY) === '1';
   /** Colour-wave selection. Off uses the flat blue outline. Notes and markers always use blue. Defaults to off. */
   waveSelection = storage.get(WAVE_KEY) === '1';
+  /** Gate catalogue mode: 'gcse' (AND, OR, NOT) or 'full' (all gates). */
+  gateMode: GateMode = this.initialGateMode();
   tool: Tool = 'select';
   selection = new Set<string>();
   sim = new Simulator();
@@ -539,6 +550,7 @@ export class Editor {
     window.addEventListener('cut', this.onCut);
     window.addEventListener('paste', this.onPaste);
     window.addEventListener('blur', this.onBlur);
+    window.addEventListener('popstate', this.onPopState);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas);
     this.resize();
@@ -585,6 +597,7 @@ export class Editor {
     window.removeEventListener('cut', this.onCut);
     window.removeEventListener('paste', this.onPaste);
     window.removeEventListener('blur', this.onBlur);
+    window.removeEventListener('popstate', this.onPopState);
     this.resizeObserver?.disconnect();
     this.clearHold();
     cancelAnimationFrame(this.raf);
@@ -752,7 +765,10 @@ export class Editor {
     const handoff = params.get('open');
     const blank = params.has('new');
     if (handoff !== null || blank) {
-      history.replaceState(null, '', location.pathname + location.hash);
+      params.delete('open');
+      params.delete('new');
+      const q = params.toString();
+      history.replaceState(null, '', location.pathname + (q ? `?${q}` : '') + location.hash);
       this.tab = tabId(true);
     }
     if (blank) {
@@ -1036,6 +1052,59 @@ export class Editor {
     this.emit();
   }
 
+  private initialGateMode(): GateMode {
+    try {
+      if (typeof window !== 'undefined' && window.location) {
+        const params = new URLSearchParams(window.location.search);
+        const m = params.get('mode')?.toLowerCase();
+        if (m === 'gcse' || params.has('gcse') || params.get('gates')?.toLowerCase() === 'gcse') {
+          return 'gcse';
+        }
+        if (m === 'full' || params.get('gates')?.toLowerCase() === 'full') {
+          return 'full';
+        }
+      }
+      const saved = storage.get(GATE_MODE_KEY);
+      if (saved === 'gcse' || saved === 'full') return saved;
+    } catch {}
+    return 'full';
+  }
+
+  setGateMode(mode: GateMode): void {
+    if (this.gateMode === mode) return;
+    this.gateMode = mode;
+    storage.set(GATE_MODE_KEY, mode);
+    this.updateUrlGateMode(mode);
+    this.needsRender = true;
+    this.emit();
+  }
+
+  private updateUrlGateMode(mode: GateMode): void {
+    try {
+      if (typeof window === 'undefined' || !window.location || !window.history?.replaceState) return;
+      const url = new URL(window.location.href);
+      if (mode === 'gcse') {
+        url.searchParams.set('mode', 'gcse');
+        url.searchParams.delete('gcse');
+        url.searchParams.delete('gates');
+      } else {
+        url.searchParams.set('mode', 'full');
+        url.searchParams.delete('gcse');
+        url.searchParams.delete('gates');
+      }
+      window.history.replaceState(null, '', url.pathname + (url.search ? url.search : '') + url.hash);
+    } catch {}
+  }
+
+  private onPopState = () => {
+    const next = this.initialGateMode();
+    if (next !== this.gateMode) {
+      this.gateMode = next;
+      this.needsRender = true;
+      this.emit();
+    }
+  };
+
   setDocName(name: string): void {
     this.doc.name = name;
     this.scheduleAutosave();
@@ -1210,13 +1279,21 @@ export class Editor {
   placeAt(kind: PlaceKind, w: Point): void {
     if (kind === 'not') {
       const gate = this.hitComponent(w);
-      if (!gate || !isGate(gate.kind)) {
-        this.toast('Drop the NOT bubble onto a gate.');
+      if (gate && isGate(gate.kind)) {
+        this.checkpoint();
+        gate.negate = !gate.negate;
+        this.selection = new Set([gate.id]);
+        this.changed(true);
         return;
       }
       this.checkpoint();
-      gate.negate = !gate.negate;
-      this.selection = new Set([gate.id]);
+      const c = this.addComponent('buffer', 0, 0);
+      c.negate = true;
+      const size = rotatedSize(c);
+      c.x = snap(w.x - size.w / 2);
+      c.y = snap(w.y - size.h / 2);
+      this.selection = new Set([c.id]);
+      this.finishPendingConnect(c.id);
       this.changed(true);
       return;
     }
@@ -2257,10 +2334,11 @@ export class Editor {
   }
 
   menuItems(): MenuItem[] {
+    const gateMenu = this.gateMode === 'gcse' ? GCSE_GATE_MENU : GATE_MENU;
     const from = this.menu?.from ?? null;
     if (!from) {
       return [
-        ...GATE_MENU,
+        ...gateMenu,
         { label: 'Switch', kind: 'switch' },
         { label: 'Button', kind: 'button' },
         { label: 'Timer', kind: 'timer' },
@@ -2280,9 +2358,9 @@ export class Editor {
       ];
     }
     if (from.pin < 0) {
-      return [...GATE_MENU, { label: 'Light bulb', kind: 'bulb' }, { label: 'RGB bulb', kind: 'rgb' }, { label: 'Truth table', kind: 'table' }];
+      return [...gateMenu, { label: 'Light bulb', kind: 'bulb' }, { label: 'RGB bulb', kind: 'rgb' }, { label: 'Truth table', kind: 'table' }];
     }
-    return [...GATE_MENU, { label: 'Switch', kind: 'switch' }, { label: 'Button', kind: 'button' }, { label: 'Timer', kind: 'timer' }];
+    return [...gateMenu, { label: 'Switch', kind: 'switch' }, { label: 'Button', kind: 'button' }, { label: 'Timer', kind: 'timer' }];
   }
 
   /** True when `from` is the ribbon plug of a multi-lane port (cable drag). */
