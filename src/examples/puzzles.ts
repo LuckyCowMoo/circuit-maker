@@ -47,6 +47,7 @@ export const PUZZLES: PuzzleSpec[] = [
     a && b,
   ]),
   puzzle('solonly', 'Only A', 'Only A: Y is 1 only when A is on and B is off.', ['A', 'B'], ['Y'], ([a, b]) => [a && !b]),
+  puzzle('solimply', 'Imply', 'Imply: Y is 1 unless A is on while B is off.', ['A', 'B'], ['Y'], ([a, b]) => [!a || b]),
   puzzle(
     'solboth',
     'Only or both',
@@ -55,10 +56,22 @@ export const PUZZLES: PuzzleSpec[] = [
     ['Only', 'Both'],
     ([a, b]) => [a && !b, a && b],
   ),
+  puzzle('solbounds', 'Bounds', 'Bounds: AtLeast is 1 when A or B is on. AtMost is 1 when not both are on.', ['A', 'B'], ['AtLeast', 'AtMost'], ([a, b]) => [
+    a || b,
+    !(a && b),
+  ]),
   puzzle('solsame', 'Same or different', 'Same or different: Same is 1 when A and B match. Diff is 1 when they differ.', ['A', 'B'], ['Same', 'Diff'], ([a, b]) => [
     a === b,
     a !== b,
   ]),
+  puzzle(
+    'solbothneither',
+    'Both and neither',
+    'Both and neither: Both is 1 only when A and B are both on. Neither is 1 only when neither is on.',
+    ['A', 'B'],
+    ['Both', 'Neither'],
+    ([a, b]) => [a && b, !a && !b],
+  ),
   puzzle(
     'solhigh',
     'Which side',
@@ -67,6 +80,9 @@ export const PUZZLES: PuzzleSpec[] = [
     ['High', 'Low'],
     ([a, b]) => [a && !b, !a && b],
   ),
+  puzzle('soleneither', 'Enable either', 'Enable either: Y is 1 when either A or B is on, provided En is on.', ['A', 'B', 'En'], ['Y'], ([a, b, en]) => [
+    (a || b) && en,
+  ]),
   puzzle(
     'solhalf',
     'Half adder',
