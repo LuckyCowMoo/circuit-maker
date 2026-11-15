@@ -243,7 +243,6 @@ const THEME_KEY = 'circuit-maker:theme';
 const BEND_KEY = 'circuit-maker:bend-wires';
 const PROPS_KEY = 'circuit-maker:props-near';
 const WAVE_KEY = 'circuit-maker:wave-selection';
-const GATE_MODE_KEY = 'circuit-maker:gate-mode';
 const DEFAULT_BOX = { w: 240, h: 160 };
 /** Space kept between a resized box and the walls of the boxes around it. */
 const BOX_GAP = 20;
@@ -1060,12 +1059,7 @@ export class Editor {
         if (m === 'gcse' || params.has('gcse') || params.get('gates')?.toLowerCase() === 'gcse') {
           return 'gcse';
         }
-        if (m === 'full' || params.get('gates')?.toLowerCase() === 'full') {
-          return 'full';
-        }
       }
-      const saved = storage.get(GATE_MODE_KEY);
-      if (saved === 'gcse' || saved === 'full') return saved;
     } catch {}
     return 'full';
   }
@@ -1073,7 +1067,6 @@ export class Editor {
   setGateMode(mode: GateMode): void {
     if (this.gateMode === mode) return;
     this.gateMode = mode;
-    storage.set(GATE_MODE_KEY, mode);
     this.updateUrlGateMode(mode);
     this.needsRender = true;
     this.emit();
@@ -1088,11 +1081,12 @@ export class Editor {
         url.searchParams.delete('gcse');
         url.searchParams.delete('gates');
       } else {
-        url.searchParams.set('mode', 'full');
+        url.searchParams.delete('mode');
         url.searchParams.delete('gcse');
         url.searchParams.delete('gates');
       }
-      window.history.replaceState(null, '', url.pathname + (url.search ? url.search : '') + url.hash);
+      const q = url.searchParams.toString();
+      window.history.replaceState(null, '', url.pathname + (q ? `?${q}` : '') + url.hash);
     } catch {}
   }
 

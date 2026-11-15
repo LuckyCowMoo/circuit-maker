@@ -202,7 +202,8 @@ describe('Editor gateMode (GCSE vs Full)', () => {
     }
   });
 
-  it('defaults to full mode when no query param or localStorage is present', () => {
+  it('defaults to full mode when no mode is specified in the URL', () => {
+    window.history.replaceState(null, '', 'http://localhost/');
     const editor = new Editor();
     expect(editor.gateMode).toBe('full');
   });
@@ -223,31 +224,17 @@ describe('Editor gateMode (GCSE vs Full)', () => {
     expect(editor2.gateMode).toBe('gcse');
   });
 
-  it('URL query parameter overrides localStorage preference', () => {
-    mockStorage.setItem('circuit-maker:gate-mode', 'gcse');
-    window.history.replaceState(null, '', 'http://localhost/?mode=full');
-    const editor = new Editor();
-    expect(editor.gateMode).toBe('full');
-
-    mockStorage.setItem('circuit-maker:gate-mode', 'full');
-    window.history.replaceState(null, '', 'http://localhost/?mode=gcse');
-    const editor2 = new Editor();
-    expect(editor2.gateMode).toBe('gcse');
-  });
-
-  it('setGateMode toggles gateMode, persists in localStorage, and updates URL', () => {
+  it('setGateMode toggles gateMode and updates URL', () => {
     const editor = new Editor();
     expect(editor.gateMode).toBe('full');
 
     editor.setGateMode('gcse');
     expect(editor.gateMode).toBe('gcse');
-    expect(mockStorage.getItem('circuit-maker:gate-mode')).toBe('gcse');
     expect(window.location.search).toBe('?mode=gcse');
 
     editor.setGateMode('full');
     expect(editor.gateMode).toBe('full');
-    expect(mockStorage.getItem('circuit-maker:gate-mode')).toBe('full');
-    expect(window.location.search).toBe('?mode=full');
+    expect(window.location.search).toBe('');
   });
 
   it('menuItems returns only AND, OR, NOT gates in GCSE mode', () => {
