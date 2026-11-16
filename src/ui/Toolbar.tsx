@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Editor, ExportScope, PlaceKind } from '../editor/Editor';
 import { KIND_LABEL } from '../editor/Editor';
 import { componentBounds, INPUT_WARN, MAX_INPUTS, pinPos, rotatedSize } from '../model/geometry';
@@ -728,6 +728,41 @@ function LivePanel({ editor }: { editor: Editor }) {
   );
 }
 
+export const SEGMENT_PRIORITY: readonly string[] = [
+  'gates',
+  'io',
+  'menu',
+  'components',
+  'comments',
+  'time',
+  'navigation',
+];
+
+export function computeOpenSegments(
+  availableRoom: number,
+  thinWidth: number,
+  iconWidth: number,
+  bodyWidths: Record<string, number>,
+): Set<string> {
+  const nextOpen = new Set<string>();
+  let currentW = thinWidth;
+  for (const id of SEGMENT_PRIORITY) {
+    const bodyW = bodyWidths[id] ?? 0;
+    const delta = Math.max(0, bodyW - iconWidth);
+    if (currentW + delta <= availableRoom) {
+      nextOpen.add(id);
+      currentW += delta;
+    }
+  }
+  return nextOpen;
+}
+
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const x of a) if (!b.has(x)) return false;
+  return true;
+}
+
 export function Toolbar({ editor }: { editor: Editor }) {
   useEditor(editor);
   const [panel, setPanel] = useState<Panel>(null);
@@ -735,10 +770,9 @@ export function Toolbar({ editor }: { editor: Editor }) {
   const [transparent, setTransparent] = useState(false);
   const [live, setLive] = useState(true);
   const [lists, setLists] = useState({ inputs: false, outputs: false });
-  const [mode, setMode] = useState<'full' | 'inline' | 'thin'>('full');
-  const [openSeg, setOpenSeg] = useState<string | null>(null);
-  const [slotW, setSlotW] = useState<Record<string, number>>({});
-  const [slide, setSlide] = useState(1);
+  const [mode, setMode] = useState<'full' | 'compact'>('full');
+  const [openSegments, setOpenSegments] = useState<Set<string>>(() => new Set(SEGMENT_PRIORITY));
+  const [popSeg, setPopSeg] = useState<string | null>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   const rowRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -772,7 +806,10 @@ export function Toolbar({ editor }: { editor: Editor }) {
     if (!hasSelection && scope === 'selection') setScope('all');
   }, [hasSelection, scope]);
 
-  const toggle = (p: Panel) => setPanel((cur) => (cur === p ? null : p));
+  const toggle = (p: Panel) => {
+    setPanel((cur) => (cur === p ? null : p));
+    setPopSeg(null);
+  };
 
   useEffect(() => {
     const row = rowRef.current;
@@ -789,22 +826,27 @@ export function Toolbar({ editor }: { editor: Editor }) {
       const fullRoom = row.clientWidth - ioW - gap * 2;
       const shortRoom = row.clientWidth;
       const widths: Record<string, number> = {};
-      let maxBody = 0;
       row.querySelectorAll('.tb-body-probe').forEach((el) => {
         const id = (el as HTMLElement).dataset.seg;
         if (!id) return;
-        const w = (el as HTMLElement).offsetWidth;
-        widths[id] = w;
-        maxBody = Math.max(maxBody, w);
+        widths[id] = (el as HTMLElement).offsetWidth;
       });
       const icon = thin.querySelector('.tb-btn')?.getBoundingClientRect().width ?? 40;
-      const inlineW = thin.offsetWidth - icon + maxBody;
-      const next = measure.offsetWidth <= fullRoom + 1 ? 'full' : inlineW <= shortRoom + 1 ? 'inline' : 'thin';
-      setMode((cur) => (cur === next ? cur : next));
-      setSlotW((cur) => {
-        const same = Object.keys(widths).every((id) => Math.abs((cur[id] ?? 0) - widths[id]) < 1);
-        return same ? cur : widths;
-      });
+
+      if (measure.offsetWidth <= fullRoom + 1) {
+        setMode('full');
+        setOpenSegments((cur) => (cur.size === SEGMENT_PRIORITY.length ? cur : new Set(SEGMENT_PRIORITY)));
+        setPopSeg(null);
+      } else {
+        setMode('compact');
+        const availableRoom = shortRoom - 4;
+        const nextOpen = computeOpenSegments(availableRoom, thin.offsetWidth, icon, widths);
+        setOpenSegments((cur) => {
+          if (setsEqual(cur, nextOpen)) return cur;
+          setPopSeg((pop) => (pop && nextOpen.has(pop) ? null : pop));
+          return nextOpen;
+        });
+      }
     };
     const ro = new ResizeObserver(check);
     ro.observe(row);
@@ -814,33 +856,42 @@ export function Toolbar({ editor }: { editor: Editor }) {
     row.querySelectorAll('.tb-body-probe').forEach((el) => ro.observe(el));
     check();
     return () => ro.disconnect();
-  }, [lists.inputs, lists.outputs]);
+  }, [lists.inputs, lists.outputs, editor.gateMode]);
 
   useEffect(() => {
-    if (mode === 'inline') setOpenSeg((cur) => cur ?? 'navigation');
-    else setOpenSeg(null);
-  }, [mode]);
-
-  useEffect(() => {
-    if (mode !== 'thin' || !openSeg) return;
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpenSeg(null);
+    if (!popSeg) return;
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setPopSeg(null);
     const outside = (e: PointerEvent) => {
-      const host = rowRef.current?.querySelector(`[data-seg="${openSeg}"]`);
-      if (host && !host.contains(e.target as Node)) setOpenSeg(null);
+      const host = rowRef.current?.querySelector(`[data-seg="${popSeg}"]`);
+      if (host && !host.contains(e.target as Node)) setPopSeg(null);
     };
+    const resize = () => setPopSeg(null);
     window.addEventListener('keydown', esc);
     window.addEventListener('pointerdown', outside);
+    window.addEventListener('resize', resize);
     return () => {
       window.removeEventListener('keydown', esc);
       window.removeEventListener('pointerdown', outside);
+      window.removeEventListener('resize', resize);
     };
-  }, [mode, openSeg]);
+  }, [popSeg]);
+
+  const clampPop = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.left < 8) {
+      el.style.transform = `translateX(calc(-50% + ${Math.ceil(8 - rect.left)}px))`;
+    } else if (rect.right > window.innerWidth - 8) {
+      el.style.transform = `translateX(calc(-50% - ${Math.ceil(rect.right - (window.innerWidth - 8))}px))`;
+    }
+  }, []);
 
   const openFile = async (mode: 'tab' | 'merge') => {
     const file = await pickFile(`${FILE_EXTENSION},.json,application/json`);
     if (!file) return;
     const text = await file.text();
     setPanel(null);
+    setPopSeg(null);
     if (mode === 'tab') editor.openInNewTab(text);
     else editor.loadText(text, 'merge');
   };
@@ -860,8 +911,12 @@ export function Toolbar({ editor }: { editor: Editor }) {
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           e.preventDefault();
-          if (editor.placing === kind) editor.cancelPlacing();
-          else editor.beginPlace(kind, e.nativeEvent);
+          if (editor.placing === kind) {
+            editor.cancelPlacing();
+          } else {
+            editor.beginPlace(kind, e.nativeEvent);
+            setPopSeg(null);
+          }
         }}
       >
         <ComponentIcon
@@ -876,10 +931,24 @@ export function Toolbar({ editor }: { editor: Editor }) {
 
   const navigation = (
     <>
-      <Btn title="Select" active={editor.tool === 'select'} onClick={() => editor.setTool('select')}>
+      <Btn
+        title="Select"
+        active={editor.tool === 'select'}
+        onClick={() => {
+          editor.setTool('select');
+          setPopSeg(null);
+        }}
+      >
         {Icons.select}
       </Btn>
-      <Btn title="Pan" active={editor.tool === 'pan'} onClick={() => editor.setTool('pan')}>
+      <Btn
+        title="Pan"
+        active={editor.tool === 'pan'}
+        onClick={() => {
+          editor.setTool('pan');
+          setPopSeg(null);
+        }}
+      >
         {Icons.pan}
       </Btn>
     </>
@@ -896,7 +965,13 @@ export function Toolbar({ editor }: { editor: Editor }) {
       <Btn title="Redo" disabled={!editor.canRedo} onClick={() => editor.redo()}>
         {Icons.redo}
       </Btn>
-      <Btn title="Fit to view" onClick={() => editor.fitView()}>
+      <Btn
+        title="Fit to view"
+        onClick={() => {
+          editor.fitView();
+          setPopSeg(null);
+        }}
+      >
         {Icons.fit}
       </Btn>
     </>
@@ -939,7 +1014,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
   );
   const placing = editor.placing;
   const SEGMENTS: { id: string; title: string; icon: ReactNode; active: boolean; body: ReactNode }[] = [
-    { id: 'navigation', title: 'Navigation', icon: Icons.navigation, active: false, body: navigation },
+    { id: 'navigation', title: 'Navigation', icon: Icons.navigation, active: editor.tool === 'pan', body: navigation },
     { id: 'gates', title: 'Gates', icon: Icons.gates, active: !!placing && gateList.includes(placing), body: gates },
     { id: 'io', title: 'I/O', icon: Icons.io, active: !!placing && PLACE_GROUPS[1].includes(placing), body: io },
     { id: 'comments', title: 'Comments', icon: Icons.comments, active: !!placing && PLACE_GROUPS[2].includes(placing), body: comments },
@@ -1210,49 +1285,45 @@ export function Toolbar({ editor }: { editor: Editor }) {
           />
         )}
         <div
-          className={`toolbar${mode === 'full' ? '' : ` ${mode}`}`}
+          className={`toolbar${mode === 'full' ? '' : ' compact'}`}
           role="toolbar"
           aria-label="Circuit Maker tools"
-          style={{ ['--slide' as string]: slide }}
         >
           {mode === 'full'
             ? toolbarBody
             : SEGMENTS.map((seg, i) => {
-                const open = mode === 'inline' && openSeg === seg.id;
+                const isOpen = openSegments.has(seg.id);
+                const isPop = popSeg === seg.id && !isOpen;
                 return (
                   <Fragment key={seg.id}>
-                  {i > 0 && <Sep />}
-                  <div
-                    className={`tb-slot${open ? ' open' : ''} ${mode === 'thin' ? 'tb-seg' : ''}`}
-                    data-seg={seg.id}
-                    style={{ ['--slot-w' as string]: `${slotW[seg.id] ?? 240}px` }}
-                    onPointerDown={mode === 'thin' ? (e) => e.stopPropagation() : undefined}
-                  >
-                    <Btn
-                      title={seg.title}
-                      className={mode === 'inline' ? 'tb-slot-icon' : undefined}
-                      active={mode === 'thin' && (openSeg === seg.id || seg.active)}
-                      onClick={() => {
-                        if (mode === 'thin') {
-                          setOpenSeg((cur) => (cur === seg.id ? null : seg.id));
-                          return;
-                        }
-                        if (openSeg === seg.id) return;
-                        const next = SEGMENTS.findIndex((s) => s.id === seg.id);
-                        const prev = SEGMENTS.findIndex((s) => s.id === openSeg);
-                        setSlide(next >= prev ? 1 : -1);
-                        setOpenSeg(seg.id);
-                      }}
+                    {i > 0 && <Sep />}
+                    <div
+                      className={`tb-slot${isOpen ? ' open' : ''} ${!isOpen ? 'tb-seg' : ''}`}
+                      data-seg={seg.id}
+                      onPointerDown={!isOpen ? (e) => e.stopPropagation() : undefined}
                     >
-                      {seg.icon}
-                    </Btn>
-                    {mode === 'inline' && (
-                      <div className="tb-reveal">
-                        <div className="tb-reveal-inner">{seg.body}</div>
-                      </div>
-                    )}
-                    {mode === 'thin' && openSeg === seg.id && <div className="surface tb-pop">{seg.body}</div>}
-                  </div>
+                      {!isOpen && (
+                        <Btn
+                          title={seg.title}
+                          active={isPop || seg.active}
+                          onClick={() => {
+                            setPopSeg((cur) => (cur === seg.id ? null : seg.id));
+                          }}
+                        >
+                          {seg.icon}
+                        </Btn>
+                      )}
+                      {isOpen && (
+                        <div className="tb-group">
+                          {seg.body}
+                        </div>
+                      )}
+                      {isPop && (
+                        <div className="surface tb-pop" ref={clampPop}>
+                          {seg.body}
+                        </div>
+                      )}
+                    </div>
                   </Fragment>
                 );
               })}
