@@ -400,6 +400,10 @@ export class AuraOverlay {
   }
 
   private rippleOf(ed: Editor, now: number): RippleDraw | null {
+    if (!ed.waveSelection) {
+      ed.placeRipple = null;
+      return null;
+    }
     const rip = ed.placeRipple;
     if (!rip) return null;
     const age = (now - rip.t0) / RIPPLE_MS;
@@ -460,9 +464,11 @@ export class AuraOverlay {
       this.activeVer = ed.getSimVersion();
       this.activeSel = sel;
       const on: string[] = [];
-      for (const c of ed.doc.components.values()) {
-        if (!isInput(c.kind) || ed.selection.has(c.id) || !ed.isActive(c)) continue;
-        on.push(c.id);
+      if (ed.waveSelection) {
+        for (const c of ed.doc.components.values()) {
+          if (!isInput(c.kind) || ed.selection.has(c.id) || !ed.isActive(c)) continue;
+          on.push(c.id);
+        }
       }
       this.activeSig = on.join(',');
     }
@@ -519,7 +525,7 @@ export class AuraOverlay {
       const selected = ed.selection.has(c.id);
       if (c.kind === 'note' || c.kind === 'marker') continue;
       if (selected && !ed.waveSelection) continue;
-      const powered = !selected && isInput(c.kind) && ed.isActive(c);
+      const powered = ed.waveSelection && !selected && isInput(c.kind) && ed.isActive(c);
       if (!selected && !powered) continue;
       if (!rectsOverlap(componentBounds(c), view)) continue;
       if (partHidden(ed, c, covered)) continue;
@@ -922,7 +928,7 @@ export class AuraOverlay {
   }
 
   private postState(ed: Editor, building: boolean, show: boolean, ripple: RippleDraw | null): void {
-    const rip = ed.placeRipple;
+    const rip = ed.waveSelection ? ed.placeRipple : null;
     this.worker?.postMessage({
       type: 'state',
       cssW: ed.width,

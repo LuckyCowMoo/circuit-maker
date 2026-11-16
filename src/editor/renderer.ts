@@ -955,7 +955,7 @@ function paintAuraCover(
   for (const c of parts) {
     if (c.id === ed.editingId) continue;
     const selected = ed.selection.has(c.id);
-    if (!selected && !ends.has(c.id) && !(isInput(c.kind) && ed.isActive(c))) continue;
+    if (!selected && !ends.has(c.id) && !(ed.waveSelection && isInput(c.kind) && ed.isActive(c))) continue;
     const info = partInfo(ed.parts, c, theme, ed.isActive(c));
     if (c.kind === 'switch') info.switchT = ed.switchBlend(c.id);
     if (c.kind === 'bulb' || c.kind === 'rgb') {

@@ -923,7 +923,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
           kind={isGcseNot ? 'buffer' : kind}
           negate={isGcseNot ? true : undefined}
           theme={theme}
-          wave={editor.placing === kind}
+          wave={editor.waveSelection && editor.placing === kind}
         />
       </button>
     );

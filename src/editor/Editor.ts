@@ -1046,6 +1046,7 @@ export class Editor {
 
   setWaveSelection(on: boolean): void {
     this.waveSelection = on;
+    if (!on) this.placeRipple = null;
     storage.set(WAVE_KEY, on ? '1' : '0');
     this.needsRender = true;
     this.emit();
@@ -1206,21 +1207,23 @@ export class Editor {
         if (dt > 0) pendingT = ev.timeStamp;
       }
       if (leaving) {
-        const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
-        const br = bar?.getBoundingClientRect();
-        if (br) {
-          left = true;
-          const x = Math.max(br.left, Math.min(ev.clientX, br.right));
-          const gesture = exitStepSpeed(path, ev.timeStamp - downT);
-          this.placeRipple = {
-            x,
-            y: br.top,
-            dx: len > 2 ? vx / len : 0,
-            dy: len > 2 ? vy / len : -1,
-            speed: Math.min(EXIT_SPEED_CAP, Math.max(speedEma, step, gesture)),
-            t0: performance.now(),
-            kind,
-          };
+        left = true;
+        if (this.waveSelection) {
+          const bar = document.querySelector('.tb-row .toolbar:not(.tb-measure)');
+          const br = bar?.getBoundingClientRect();
+          if (br) {
+            const x = Math.max(br.left, Math.min(ev.clientX, br.right));
+            const gesture = exitStepSpeed(path, ev.timeStamp - downT);
+            this.placeRipple = {
+              x,
+              y: br.top,
+              dx: len > 2 ? vx / len : 0,
+              dy: len > 2 ? vy / len : -1,
+              speed: Math.min(EXIT_SPEED_CAP, Math.max(speedEma, step, gesture)),
+              t0: performance.now(),
+              kind,
+            };
+          }
         }
       }
       lastX = ev.clientX;

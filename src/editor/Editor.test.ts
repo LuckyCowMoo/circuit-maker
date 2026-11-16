@@ -64,6 +64,23 @@ describe('Editor selection style', () => {
     const restoredEditor2 = new Editor();
     expect(restoredEditor2.waveSelection).toBe(false);
   });
+
+  it('clears and prevents placeRipple when waveSelection is false', () => {
+    const editor = new Editor();
+    expect(editor.waveSelection).toBe(false);
+
+    editor.placeRipple = {
+      x: 100,
+      y: 100,
+      dx: 0,
+      dy: -1,
+      speed: 1,
+      t0: 100,
+      kind: 'and',
+    };
+    editor.setWaveSelection(false);
+    expect(editor.placeRipple).toBeNull();
+  });
 });
 
 describe('Pin grab area shape and hit testing', () => {
