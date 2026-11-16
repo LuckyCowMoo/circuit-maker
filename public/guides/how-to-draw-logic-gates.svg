@@ -1,0 +1,247 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 920" width="1800" height="920">
+  <!-- Background -->
+  <rect width="1800" height="920" fill="#ffffff"/>
+
+  <!-- Main Title -->
+  <text x="900.0" y="70" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="44" font-weight="bold">How to Draw Logic Gates</text>
+  <text x="900.0" y="108" text-anchor="middle" fill="#64748b" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="20" font-weight="600">Step-by-Step Drawing Guide for AND, OR &amp; NOT Gates (Circuit Maker Exact Geometry)</text>
+
+  <!-- ==================== COLUMN 1: AND GATE ==================== -->
+  <g id="and_column">
+    <rect x="40" y="140" width="540" height="750" rx="20" fill="#fbfcff" stroke="#e2e8f0" stroke-width="2"/>
+    <text x="310.0" y="185" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="28" font-weight="bold">AND Gate</text>
+
+    <!-- Step 1 -->
+    
+    <g transform="translate(85, 260)">
+      <circle cx="0" cy="0" r="18" fill="#0b8a82"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">1</text>
+    </g>
+    
+    
+    <line x1="110" y1="260" x2="155" y2="260" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="155,260 145,255 147,260 145,265" fill="#0f2042"/>
+    
+    <g transform="translate(205, 215) scale(0.9)">
+      <line x1="0" y1="0" x2="0" y2="100" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    
+    <line x1="335" y1="260" x2="225" y2="260" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="225,260 235,255 233,260 235,265" fill="#0f2042"/>
+    
+    <text x="352" y="267" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="21" font-weight="bold">Straight Back</text>
+
+    <!-- Step 2 -->
+    
+    <g transform="translate(85, 470)">
+      <circle cx="0" cy="0" r="18" fill="#f36f21"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">2</text>
+    </g>
+    
+    
+    <line x1="110" y1="470" x2="155" y2="470" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="155,470 145,465 147,470 145,475" fill="#0f2042"/>
+    
+    <g transform="translate(205, 425) scale(0.9)">
+      <line x1="0" y1="0" x2="0" y2="100" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+      <path d="M 0 0 H 75 A 50 50 0 0 1 75 100 H 0" fill="none" stroke="#f36f21" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    
+    <line x1="435" y1="470" x2="330" y2="470" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="330,470 340,465 338,470 340,475" fill="#0f2042"/>
+    
+    <text x="450" y="477" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="21" font-weight="bold">Round Front</text>
+
+    <!-- Step 3 -->
+    
+    <g transform="translate(85, 720)">
+      <circle cx="0" cy="0" r="18" fill="#0f2042"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">3</text>
+    </g>
+    
+    
+    <line x1="110" y1="720" x2="155" y2="720" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="155,720 145,715 147,720 145,725" fill="#0f2042"/>
+    
+    <g transform="translate(245, 675) scale(0.9)">
+      <line x1="-50" y1="25" x2="0" y2="25" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <line x1="-50" y1="75" x2="0" y2="75" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <line x1="125" y1="50" x2="180" y2="50" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <line x1="0" y1="0" x2="0" y2="100" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+      <path d="M 0 0 H 75 A 50 50 0 0 1 75 100 H 0" fill="none" stroke="#f36f21" stroke-width="5" stroke-linecap="round"/>
+      <path d="M -62 18.0
+              C -71.8 18.0, -71.8 34.0, -71.8 44
+              C -71.8 48, -76 50, -76 50
+              C -76 50, -71.8 52, -71.8 56
+              C -71.8 66.0, -71.8 82.0, -62 82.0"
+              fill="none" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+      
+    <line x1="-76" y1="102" x2="-76" y2="86" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="-76,86 -81,96 -76,94 -71,96" fill="#0f2042"/>
+    
+      <text x="-76" y="126" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold">Inputs</text>
+      
+    <line x1="153" y1="76" x2="153" y2="58" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="153,58 148,68 153,66 158,68" fill="#0f2042"/>
+    
+      <text x="153" y="100" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold">Output</text>
+    </g>
+  </g>
+
+  <!-- ==================== COLUMN 2: OR GATE ==================== -->
+  <g id="or_column">
+    <rect x="630" y="140" width="540" height="750" rx="20" fill="#fbfcff" stroke="#e2e8f0" stroke-width="2"/>
+    <text x="900.0" y="185" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="28" font-weight="bold">OR Gate</text>
+
+    <!-- Step 1 -->
+    
+    <g transform="translate(675, 260)">
+      <circle cx="0" cy="0" r="18" fill="#0b8a82"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">1</text>
+    </g>
+    
+    
+    <line x1="700" y1="260" x2="745" y2="260" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="745,260 735,255 737,260 735,265" fill="#0f2042"/>
+    
+    <g transform="translate(795, 215) scale(0.9)">
+      <path d="M 0 0 Q 30 50 0 100" fill="none" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    
+    <line x1="925" y1="260" x2="825" y2="260" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="825,260 835,255 833,260 835,265" fill="#0f2042"/>
+    
+    <text x="942" y="267" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="21" font-weight="bold">Curved Back</text>
+
+    <!-- Step 2 -->
+    
+    <g transform="translate(675, 470)">
+      <circle cx="0" cy="0" r="18" fill="#f36f21"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">2</text>
+    </g>
+    
+    
+    <line x1="700" y1="470" x2="745" y2="470" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="745,470 735,465 737,470 735,475" fill="#0f2042"/>
+    
+    <g transform="translate(795, 425) scale(0.9)">
+      <path d="M 0 0 Q 30 50 0 100" fill="none" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+      <path d="M 0 100 C 48 100 123 83 150 50 C 123 17 48 0 0 0" fill="none" stroke="#f36f21" stroke-width="5" stroke-linecap="round"/>
+    </g>
+    
+    <line x1="1045" y1="470" x2="945" y2="470" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="945,470 955,465 953,470 955,475" fill="#0f2042"/>
+    
+    <text x="1060" y="477" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="21" font-weight="bold">Pointy Nose</text>
+
+    <!-- Step 3 -->
+    
+    <g transform="translate(675, 720)">
+      <circle cx="0" cy="0" r="18" fill="#0f2042"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">3</text>
+    </g>
+    
+    
+    <line x1="700" y1="720" x2="745" y2="720" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="745,720 735,715 737,720 735,725" fill="#0f2042"/>
+    
+    <g transform="translate(835, 675) scale(0.9)">
+      <line x1="-50" y1="25" x2="11.25" y2="25" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <line x1="-50" y1="75" x2="11.25" y2="75" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <line x1="150" y1="50" x2="205" y2="50" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <path d="M 0 0 Q 30 50 0 100" fill="none" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+      <path d="M 0 100 C 48 100 123 83 150 50 C 123 17 48 0 0 0" fill="none" stroke="#f36f21" stroke-width="5" stroke-linecap="round"/>
+      <path d="M -62 18.0
+              C -71.8 18.0, -71.8 34.0, -71.8 44
+              C -71.8 48, -76 50, -76 50
+              C -76 50, -71.8 52, -71.8 56
+              C -71.8 66.0, -71.8 82.0, -62 82.0"
+              fill="none" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+      
+    <line x1="-76" y1="102" x2="-76" y2="86" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="-76,86 -81,96 -76,94 -71,96" fill="#0f2042"/>
+    
+      <text x="-76" y="126" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold">Inputs</text>
+      
+    <line x1="178" y1="76" x2="178" y2="58" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="178,58 173,68 178,66 183,68" fill="#0f2042"/>
+    
+      <text x="178" y="100" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold">Output</text>
+    </g>
+  </g>
+
+  <!-- ==================== COLUMN 3: NOT GATE ==================== -->
+  <g id="not_column">
+    <rect x="1220" y="140" width="540" height="750" rx="20" fill="#fbfcff" stroke="#e2e8f0" stroke-width="2"/>
+    <text x="1490.0" y="185" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="28" font-weight="bold">NOT Gate</text>
+
+    <!-- Step 1 -->
+    
+    <g transform="translate(1265, 260)">
+      <circle cx="0" cy="0" r="18" fill="#0b8a82"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">1</text>
+    </g>
+    
+    
+    <line x1="1290" y1="260" x2="1335" y2="260" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="1335,260 1325,255 1327,260 1325,265" fill="#0f2042"/>
+    
+    <g transform="translate(1385, 215) scale(0.9)">
+      <path d="M 0 0 L 100 50 L 0 100 Z" fill="none" stroke="#0b8a82" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+    </g>
+    
+    <line x1="1545" y1="260" x2="1485" y2="260" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="1485,260 1495,255 1493,260 1495,265" fill="#0f2042"/>
+    
+    <text x="1562" y="267" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="21" font-weight="bold">Triangle Body</text>
+
+    <!-- Step 2 -->
+    
+    <g transform="translate(1265, 470)">
+      <circle cx="0" cy="0" r="18" fill="#f36f21"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">2</text>
+    </g>
+    
+    
+    <line x1="1290" y1="470" x2="1335" y2="470" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="1335,470 1325,465 1327,470 1325,475" fill="#0f2042"/>
+    
+    <g transform="translate(1385, 425) scale(0.9)">
+      <path d="M 0 0 L 100 50 L 0 100 Z" fill="none" stroke="#0b8a82" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="112.5" cy="50" r="12.5" fill="none" stroke="#f36f21" stroke-width="5"/>
+    </g>
+    
+    <line x1="1605" y1="470" x2="1510" y2="470" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="1510,470 1520,465 1518,470 1520,475" fill="#0f2042"/>
+    
+    <text x="1622" y="477" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="21" font-weight="bold">NOT Bubble</text>
+
+    <!-- Step 3 -->
+    
+    <g transform="translate(1265, 720)">
+      <circle cx="0" cy="0" r="18" fill="#0f2042"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">3</text>
+    </g>
+    
+    
+    <line x1="1290" y1="720" x2="1335" y2="720" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="1335,720 1325,715 1327,720 1325,725" fill="#0f2042"/>
+    
+    <g transform="translate(1425, 675) scale(0.9)">
+      <line x1="-50" y1="50" x2="0" y2="50" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <line x1="125" y1="50" x2="180" y2="50" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <path d="M 0 0 L 100 50 L 0 100 Z" fill="none" stroke="#0b8a82" stroke-width="5" stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="112.5" cy="50" r="12.5" fill="none" stroke="#f36f21" stroke-width="5"/>
+      
+    <line x1="-25" y1="76" x2="-25" y2="58" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="-25,58 -30,68 -25,66 -20,68" fill="#0f2042"/>
+    
+      <text x="-25" y="100" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold">Input</text>
+      
+    <line x1="153" y1="76" x2="153" y2="58" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="153,58 148,68 153,66 158,68" fill="#0f2042"/>
+    
+      <text x="153" y="100" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold">Output</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 840" width="720" height="840">
+  <!-- Background -->
+  <rect width="720" height="840" fill="#ffffff"/>
+  <rect x="20" y="20" width="680" height="800" rx="24" fill="#fbfcff" stroke="#e2e8f0" stroke-width="2"/>
+
+  <!-- Title -->
+  <text x="360.0" y="75" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="36" font-weight="bold">How to Draw an AND Gate</text>
+  <text x="360.0" y="110" text-anchor="middle" fill="#64748b" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="600">Circuit Maker Logic Gate Guide</text>
+
+  <!-- STEP 1 -->
+  <g id="step1">
+    
+    <g transform="translate(75, 200)">
+      <circle cx="0" cy="0" r="18" fill="#0b8a82"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">1</text>
+    </g>
+    
+    
+    <line x1="105" y1="200" x2="160" y2="200" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="160,200 150,195 152,200 150,205" fill="#0f2042"/>
+    
+
+    <!-- Straight Back -->
+    <g transform="translate(220, 150)">
+      <line x1="0" y1="0" x2="0" y2="100" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+    </g>
+
+    <!-- Label & Arrow -->
+    
+    <line x1="325" y1="200" x2="235" y2="200" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="235,200 245,195 243,200 245,205" fill="#0f2042"/>
+    
+    <text x="345" y="208" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="26" font-weight="bold">Straight Back</text>
+  </g>
+
+  <!-- STEP 2 -->
+  <g id="step2">
+    
+    <g transform="translate(75, 420)">
+      <circle cx="0" cy="0" r="18" fill="#f36f21"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">2</text>
+    </g>
+    
+    
+    <line x1="105" y1="420" x2="160" y2="420" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="160,420 150,415 152,420 150,425" fill="#0f2042"/>
+    
+
+    <!-- Straight Back + Round Front -->
+    <g transform="translate(220, 370)">
+      <line x1="0" y1="0" x2="0" y2="100" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+      <path d="M 0 0 H 75 A 50 50 0 0 1 75 100 H 0" fill="none" stroke="#f36f21" stroke-width="5" stroke-linecap="round"/>
+    </g>
+
+    <!-- Label & Arrow -->
+    
+    <line x1="465" y1="420" x2="360" y2="420" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="360,420 370,415 368,420 370,425" fill="#0f2042"/>
+    
+    <text x="485" y="428" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="26" font-weight="bold">Round Front</text>
+  </g>
+
+  <!-- STEP 3 -->
+  <g id="step3">
+    
+    <g transform="translate(75, 660)">
+      <circle cx="0" cy="0" r="18" fill="#0f2042"/>
+      <text x="0" y="6" text-anchor="middle" fill="#ffffff" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold">3</text>
+    </g>
+    
+    
+    <line x1="105" y1="660" x2="160" y2="660" stroke="#0f2042" stroke-width="3.5" stroke-linecap="round"/>
+    <polygon points="160,660 150,655 152,660 150,665" fill="#0f2042"/>
+    
+
+    <!-- Complete Gate with Inputs & Output -->
+    <g transform="translate(260, 610)">
+      <!-- Input lines -->
+      <line x1="-50" y1="25" x2="0" y2="25" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+      <line x1="-50" y1="75" x2="0" y2="75" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+
+      <!-- Output line -->
+      <line x1="125" y1="50" x2="180" y2="50" stroke="#0f2042" stroke-width="4.5" stroke-linecap="round"/>
+
+      <!-- Gate Body -->
+      <line x1="0" y1="0" x2="0" y2="100" stroke="#0b8a82" stroke-width="5" stroke-linecap="round"/>
+      <path d="M 0 0 H 75 A 50 50 0 0 1 75 100 H 0" fill="none" stroke="#f36f21" stroke-width="5" stroke-linecap="round"/>
+
+      <!-- Curly Bracket -->
+      <path d="M -62 18.0
+              C -71.8 18.0, -71.8 34.0, -71.8 44
+              C -71.8 48, -76 50, -76 50
+              C -76 50, -71.8 52, -71.8 56
+              C -71.8 66.0, -71.8 82.0, -62 82.0"
+              fill="none" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+
+      <!-- Inputs Label & Arrow -->
+      
+    <line x1="-76" y1="102" x2="-76" y2="86" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="-76,86 -81,96 -76,94 -71,96" fill="#0f2042"/>
+    
+      <text x="-76" y="128" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="22" font-weight="bold">Inputs</text>
+
+      <!-- Output Label & Arrow -->
+      
+    <line x1="153" y1="76" x2="153" y2="58" stroke="#0f2042" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="153,58 148,68 153,66 158,68" fill="#0f2042"/>
+    
+      <text x="153" y="102" text-anchor="middle" fill="#0f2042" font-family="'Comic Sans MS', 'Chalkboard SE', 'Arial Rounded MT Bold', 'Quicksand', system-ui, -apple-system, sans-serif" font-size="22" font-weight="bold">Output</text>
+    </g>
+  </g>
+</svg>
