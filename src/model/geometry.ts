@@ -54,6 +54,7 @@ const KIND_INDEX: Record<ComponentKind, number> = {
   note: 11,
   port: 10,
   table: 12,
+  puzzles: 13,
 };
 
 const cache = new Map<number, Geom>();
@@ -199,6 +200,7 @@ function build(
         bounds: { x: -PIN_LEN, y: 0, w: PORT_SIZE + 2 * PIN_LEN, h: PORT_SIZE },
       };
     case 'note':
+    case 'puzzles':
       return { ...base, w, h, tip: w, inputs: [], output: null, bounds: { x: 0, y: 0, w, h } };
     default:
       return { ...base, w: 30, h: 40, tip: 30, inputs: [], output: null, bounds: { x: 0, y: 0, w: 30, h: 40 } };
@@ -216,7 +218,14 @@ export function geomFor(
 ): Geom {
   const gate = isGate(kind);
   const wide = kind === 'port' && n > 1;
-  const io = kind === 'switch' || kind === 'button' || kind === 'timer' || kind === 'bulb' || kind === 'rgb' || kind === 'note';
+  const io =
+    kind === 'switch' ||
+    kind === 'button' ||
+    kind === 'timer' ||
+    kind === 'bulb' ||
+    kind === 'rgb' ||
+    kind === 'note' ||
+    kind === 'puzzles';
   const key =
     KIND_INDEX[kind] * 1_000_000 +
     (inputBundle ? 500_000 : 0) +

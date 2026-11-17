@@ -31,7 +31,20 @@ export function ComponentIcon({
             strokeWidth={(op.width ?? 2.5) * 1.7}
             opacity={op.alpha}
           />
-        ) : null,
+        ) : (
+          <text
+            key={i}
+            x={op.x}
+            y={op.y}
+            fill={op.fill}
+            fontSize={op.size}
+            fontWeight={op.bold ? 700 : 400}
+            textAnchor={op.anchor === 'middle' ? 'middle' : op.anchor === 'end' ? 'end' : 'start'}
+            dominantBaseline="central"
+          >
+            {op.text}
+          </text>
+        ),
       )}
     </svg>
   );

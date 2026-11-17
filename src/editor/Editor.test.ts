@@ -34,6 +34,14 @@ const mockWindow = {
   removeEventListener: () => {},
 };
 globalThis.window = mockWindow as unknown as Window & typeof globalThis;
+Object.defineProperty(globalThis, 'location', {
+  get: () => mockWindow.location,
+  configurable: true,
+});
+Object.defineProperty(globalThis, 'history', {
+  get: () => mockWindow.history,
+  configurable: true,
+});
 
 describe('Editor selection style', () => {
   beforeEach(() => {
@@ -297,5 +305,82 @@ describe('Editor gateMode (GCSE vs Full)', () => {
     // Place NOT again to toggle back
     editor.placeAt('not', { x: 120, y: 120 });
     expect(andGate.negate).toBe(false);
+  });
+});
+
+describe('Puzzles button component and starter circuit', () => {
+  beforeEach(() => {
+    mockStorage.clear();
+    if (typeof window !== 'undefined') {
+      window.history.replaceState(null, '', 'http://localhost/');
+    }
+  });
+
+  it('loads starter circuit with half adder and the resizable puzzles button', () => {
+    const editor = new Editor();
+    editor.loadInitial();
+    expect(editor.doc.boxes.has('half_adder')).toBe(true);
+    const puzzlesBtn = editor.doc.components.get('puzzles');
+    expect(puzzlesBtn).toBeDefined();
+    expect(puzzlesBtn?.kind).toBe('puzzles');
+    expect(puzzlesBtn?.w).toBe(180);
+    expect(puzzlesBtn?.h).toBe(80);
+  });
+
+  it('treats puzzles button as a resize target when selected and supports edge resizing', () => {
+    const editor = new Editor();
+    editor.placeAt('puzzles', { x: 200, y: 200 });
+    const placed = [...editor.doc.components.values()][0];
+    expect(placed.kind).toBe('puzzles');
+    expect(placed.w).toBe(180);
+    expect(placed.h).toBe(80);
+    expect(editor.resizeTarget()?.id).toBe(placed.id);
+    expect((editor as any).hitNoteEdge({ x: placed.x, y: placed.y + 40 })?.id).toBe(placed.id);
+  });
+
+  it('triggers openPuzzles when clicking the puzzles button without dragging', () => {
+    const editor = new Editor();
+    editor.placeAt('puzzles', { x: 200, y: 200 });
+    const placed = [...editor.doc.components.values()][0];
+    let opened = false;
+    editor.openPuzzles = () => {
+      opened = true;
+    };
+    const center = { x: placed.x + placed.w / 2, y: placed.y + placed.h / 2 };
+    (editor as any).startMove(placed.id, center, center, false, placed);
+    (editor as any).finishPointer({ pointerId: 1, clientX: center.x, clientY: center.y } as PointerEvent, false);
+    expect(opened).toBe(true);
+  });
+
+  it('spawns a puzzles button in a nearby open space when a solution truth table passes', () => {
+    const editor = new Editor();
+    const sw = makeComponent('switch', 0, 0, 'sw');
+    const bulb = makeComponent('bulb', 200, 0, 'bulb');
+    const tbl = makeComponent('table', 100, 100, 'tbl');
+    tbl.table = {
+      mode: 'solution',
+      inputs: 1,
+      outputs: 1,
+      names: ['A', 'Q'],
+      rows: ['0', '1'],
+    };
+
+    editor.doc.components.set(sw.id, sw);
+    editor.doc.components.set(bulb.id, bulb);
+    editor.doc.components.set(tbl.id, tbl);
+    // Wire switch straight to bulb so Q === A (passes both rows)
+    editor.doc.wires.set('w_circuit', { id: 'w_circuit', from: sw.id, to: bulb.id, input: 0 });
+    editor.doc.wires.set('w1', { id: 'w1', from: sw.id, to: tbl.id, input: 0 });
+    editor.doc.wires.set('w2', { id: 'w2', from: bulb.id, to: tbl.id, input: TABLE_OUT });
+    editor.sim.compile(editor.doc);
+
+    expect([...editor.doc.components.values()].some((c) => c.kind === 'puzzles')).toBe(false);
+
+    (editor as any).startTableTest(tbl);
+    const run = (editor as any).tableTest;
+    (editor as any).tickTableTest(run.nextAt);
+
+    const spawned = [...editor.doc.components.values()].find((c) => c.kind === 'puzzles');
+    expect(spawned).toBeDefined();
   });
 });

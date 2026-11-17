@@ -3,8 +3,16 @@ export type GateKind = (typeof GATE_KINDS)[number];
 export const IO_KINDS = ['switch', 'button', 'timer', 'bulb', 'rgb'] as const;
 export type IOKind = (typeof IO_KINDS)[number];
 /** `port` is the connector where a wire passes through the wall of a box. */
-export type ComponentKind = GateKind | IOKind | 'marker' | 'note' | 'port' | 'table';
-export const COMPONENT_KINDS: readonly ComponentKind[] = [...GATE_KINDS, ...IO_KINDS, 'marker', 'note', 'port', 'table'];
+export type ComponentKind = GateKind | IOKind | 'marker' | 'note' | 'port' | 'table' | 'puzzles';
+export const COMPONENT_KINDS: readonly ComponentKind[] = [
+  ...GATE_KINDS,
+  ...IO_KINDS,
+  'marker',
+  'note',
+  'port',
+  'table',
+  'puzzles',
+];
 
 /**
  * Truth table recorded on a component.

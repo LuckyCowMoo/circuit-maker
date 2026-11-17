@@ -30,12 +30,12 @@ export function makeComponent(kind: ComponentKind, x: number, y: number, id: str
     stroke: null,
     fill: null,
     on: false,
-    name: kind === 'marker' ? 'Marker' : kind === 'note' ? 'Text' : '',
+    name: kind === 'marker' ? 'Marker' : kind === 'note' ? 'Text' : kind === 'puzzles' ? 'Puzzles' : '',
     color: null,
     rot: 0,
     flip: false,
-    w: kind === 'note' ? 180 : IO_SIZE,
-    h: kind === 'note' ? 80 : IO_SIZE,
+    w: kind === 'note' || kind === 'puzzles' ? 180 : IO_SIZE,
+    h: kind === 'note' || kind === 'puzzles' ? 80 : IO_SIZE,
     box: null,
   };
   if (kind === 'timer') {

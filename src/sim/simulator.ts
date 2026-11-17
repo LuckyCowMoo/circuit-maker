@@ -26,6 +26,7 @@ const KIND_CODE: Record<ComponentKind, number> = {
   note: K_MARKER,
   port: K_BUF,
   table: K_MARKER,
+  puzzles: K_MARKER,
 };
 
 /**

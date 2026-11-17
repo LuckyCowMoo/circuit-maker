@@ -195,7 +195,7 @@ export type Drag =
       press: string | null;
       toggle: string | null;
     }
-  | { kind: 'operate'; sx: number; sy: number; id: string; press: boolean; toggle: boolean; moved: boolean }
+  | { kind: 'operate'; sx: number; sy: number; id: string; press: boolean; toggle: boolean; puzzles?: boolean; moved: boolean }
   | { kind: 'marquee'; start: Point; cur: Point; base: Set<string>; sx: number; sy: number; moved: boolean; click: string | null; shift: boolean }
   | {
       kind: 'wire';
@@ -283,6 +283,7 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   port: 'Wire port',
   'ribbon-port': 'Ribbon port',
   table: 'Truth table',
+  puzzles: 'Puzzles',
 };
 
 const storage = {
@@ -482,6 +483,8 @@ export class Editor {
 
   /** Opens the save panel. The toolbar sets this; Ctrl/Cmd+S calls it. */
   openSave: (() => void) | null = null;
+  /** Opens the puzzles panel. The toolbar sets this; clicking a puzzles button calls it. */
+  openPuzzles: (() => void) | null = null;
   canvas: HTMLCanvasElement | null = null;
   ctx: CanvasRenderingContext2D | null = null;
   width = 0;
@@ -1791,7 +1794,31 @@ export class Editor {
     if (!run || !t) return;
     const actual = run.outputs.map((id) => this.sim.value(id));
     setRowMark(t, row, gradeRow(t.rows[row] ?? '', actual));
-    if (tablePassed(t)) this.celebrate(c);
+    if (tablePassed(t)) {
+      this.celebrate(c);
+      this.spawnPuzzlesButtonNear(c);
+    }
+  }
+
+  /** Spawns a puzzles button in the nearest open space beside a completed solution truth table. */
+  private spawnPuzzlesButtonNear(c: Component): void {
+    const btn = makeComponent('puzzles', 0, 0, uid(this.doc, 'puzzles_'));
+    const tb = componentBounds(c);
+    const start: Rect = {
+      x: snap(tb.x + (tb.w - btn.w) / 2),
+      y: snap(tb.y + (tb.h - btn.h) / 2),
+      w: btn.w,
+      h: btn.h,
+    };
+    const spot = this.freeSpot(start, new Set());
+    btn.x = snap(spot.x);
+    btn.y = snap(spot.y);
+    this.doc.components.set(btn.id, btn);
+    this.topologyDirty = true;
+    this.needsRender = true;
+    this.scheduleAutosave();
+    this.emit();
+    this.scheduleNetDoc();
   }
 
   /** Sends confetti out of every side of a table that just matched its circuit. */
@@ -2069,7 +2096,7 @@ export class Editor {
 
   setColor(color: string | null): void {
     this.editSelection('color', (it) => {
-      if (!('kind' in it) || it.kind === 'marker' || it.kind === 'bulb' || it.kind === 'note') it.color = color;
+      if (!('kind' in it) || it.kind === 'marker' || it.kind === 'bulb' || it.kind === 'note' || it.kind === 'puzzles') it.color = color;
     });
   }
 
@@ -2114,7 +2141,7 @@ export class Editor {
   resizeTarget(): Component | null {
     if (this.selection.size !== 1) return null;
     const c = this.doc.components.get([...this.selection][0]);
-    return c && (isIO(c.kind) || c.kind === 'note') ? c : null;
+    return c && (isIO(c.kind) || c.kind === 'note' || c.kind === 'puzzles') ? c : null;
   }
 
   toggleSwitch(id: string): void {
@@ -2348,6 +2375,7 @@ export class Editor {
         { label: 'Marker', kind: 'marker' },
         { label: 'Text box', kind: 'note' },
         { label: 'Truth table', kind: 'table' },
+        { label: 'Puzzles', kind: 'puzzles' },
         { label: 'Box', kind: 'box' },
       ];
     }
@@ -2495,7 +2523,7 @@ export class Editor {
     let best: PinRef | null = null;
     let bestD = r;
     for (const c of this.doc.components.values()) {
-      if (c.kind === 'marker' || c.kind === 'note') continue;
+      if (c.kind === 'marker' || c.kind === 'note' || c.kind === 'puzzles') continue;
       if (!pointInRect(w, componentBounds(c), r)) continue;
       if (closed.length && this.hiddenIn(c, closed)) continue;
       const g = geomOf(c);
@@ -2565,7 +2593,7 @@ export class Editor {
     const tol = this.grab(6) / this.cam.zoom;
     let hit: { id: string; l: boolean; t: boolean; r: boolean; b: boolean } | null = null;
     for (const c of this.doc.components.values()) {
-      if (c.kind !== 'note' && c.kind !== 'bulb' && c.kind !== 'rgb') continue;
+      if (c.kind !== 'note' && c.kind !== 'puzzles' && c.kind !== 'bulb' && c.kind !== 'rgb') continue;
       const r = bodyRect(c);
       const band = c.kind === 'note' ? noteAmp(r.w, r.h) + tol : tol;
       if (!pointInRect(w, r, tol)) continue;
@@ -2727,7 +2755,7 @@ export class Editor {
       return pin;
     }
     const c = this.hitComponent(w);
-    if (!c || c.kind === 'marker') return null;
+    if (!c || c.kind === 'marker' || c.kind === 'note' || c.kind === 'puzzles') return null;
     if (!cableDrag && isRibbonPort(c) && bundleInput(c) !== bundleOutput(c)) return this.ribbonLanePin(c, w);
     if (want === 'out' && (c.kind === 'bulb' || c.kind === 'rgb')) {
       const fromC = this.doc.components.get(from.comp);
@@ -3265,7 +3293,8 @@ export class Editor {
         const o = d.orig;
         const left = d.corner === 0 || d.corner === 3;
         const top = d.corner === 0 || d.corner === 1;
-        const lim = (v: number) => clamp(v, IO_MIN, IO_MAX);
+        const max = c.kind === 'note' || c.kind === 'puzzles' ? 2000 : IO_MAX;
+        const lim = (v: number) => clamp(v, IO_MIN, max);
         const ww = lim(snap(o.w + (left ? -1 : 1) * (w.x - d.start.x)));
         const hh = lim(snap(o.h + (top ? -1 : 1) * (w.y - d.start.y)));
         c.x = left ? o.x + o.w - ww : o.x;
@@ -3367,6 +3396,9 @@ export class Editor {
             else if (this.selection.size > 1) this.selection = new Set([d.target]);
           }
           const typed = this.doc.components.get(d.target);
+          if (!d.shift && typed?.kind === 'puzzles') {
+            this.openPuzzles?.();
+          }
           this.editingId =
             !d.shift && typed && (typed.kind === 'note' || typed.kind === 'marker') ? typed.id : null;
           this.editClick = this.editingId && typed?.kind === 'note' ? { x: e.clientX, y: e.clientY } : null;
@@ -3438,7 +3470,7 @@ export class Editor {
       if ((noteEdge = this.hitNoteEdge(w))) {
         const e = noteEdge;
         cursor = (e.l || e.r) && (e.t || e.b) ? ((e.l && e.t) || (e.r && e.b) ? 'nwse-resize' : 'nesw-resize') : e.l || e.r ? 'ew-resize' : 'ns-resize';
-      } else if (c) cursor = this.knobAt(c, w) ? 'pointer' : 'move';
+      } else if (c) cursor = this.knobAt(c, w) || c.kind === 'puzzles' ? 'pointer' : 'move';
       else if ((edge = this.hitBoxEdge(w))) {
         const e = edge;
         cursor = (e.l || e.r) && (e.t || e.b) ? ((e.l && e.t) || (e.r && e.b) ? 'nwse-resize' : 'nesw-resize') : e.l || e.r ? 'ew-resize' : 'ns-resize';
@@ -3845,6 +3877,7 @@ export class Editor {
   isActive(c: Component): boolean {
     if (c.kind === 'switch') return c.on;
     if (c.kind === 'button') return this.sim.isPressed(c.id);
+    if (c.kind === 'puzzles') return this.drag?.kind === 'operate' && this.drag.id === c.id && !this.drag.moved;
     if (c.kind === 'timer' || c.kind === 'bulb' || c.kind === 'port') return this.sim.value(c.id);
     if (c.kind === 'rgb') return this.sim.value(c.id) || this.sim.value(c.id, 1) || this.sim.value(c.id, 2);
     return false;

@@ -15,7 +15,7 @@ import { ComponentIcon, Icons } from './icons';
 import { SideList } from './SideLists';
 import { useEditor } from './useEditor';
 
-type Panel = 'save' | 'open' | 'theme' | 'help' | 'live' | null;
+type Panel = 'save' | 'open' | 'theme' | 'help' | 'live' | 'puzzles' | null;
 
 const GCSE_GATES: PlaceKind[] = ['and', 'or', 'not'];
 const FULL_GATES: PlaceKind[] = ['and', 'or', 'xor', 'buffer', 'not'];
@@ -23,7 +23,7 @@ const FULL_GATES: PlaceKind[] = ['and', 'or', 'xor', 'buffer', 'not'];
 const PLACE_GROUPS: PlaceKind[][] = [
   FULL_GATES,
   ['switch', 'button', 'timer', 'bulb', 'rgb'],
-  ['marker', 'note', 'table'],
+  ['marker', 'note', 'table', 'puzzles'],
   ['port', 'ribbon-port', 'box'],
 ];
 
@@ -221,6 +221,8 @@ const COUNT_ORDER = [
   'Ribbon port',
   'Marker',
   'Text box',
+  'Truth table',
+  'Puzzles',
   'Box',
 ];
 
@@ -368,16 +370,17 @@ function PropsBar({ editor }: { editor: Editor }) {
   const ports = comps.filter((c) => c.kind === 'port');
   const inputGates = gates.filter((g) => g.kind !== 'buffer');
   const widthParts = [...inputGates, ...ports];
-  const colourable = comps.filter((c) => c.kind !== 'marker' && c.kind !== 'port' && c.kind !== 'note');
+  const colourable = comps.filter((c) => c.kind !== 'marker' && c.kind !== 'port' && c.kind !== 'note' && c.kind !== 'puzzles');
   const rotatable = comps.filter((c) => canRotate(c.kind));
   const markers = comps.filter((c) => c.kind === 'marker');
   const notes = comps.filter((c) => c.kind === 'note');
+  const puzzles = comps.filter((c) => c.kind === 'puzzles');
   const bulbs = comps.filter((c) => c.kind === 'bulb');
   const rgbBulbs = comps.filter((c) => c.kind === 'rgb');
   const timers = comps.filter((c) => c.kind === 'timer');
   const keyable = comps.filter((c) => c.kind === 'switch' || c.kind === 'button');
   const named = total === 1 ? ((comps[0] && !isGate(comps[0].kind) ? comps[0] : null) ?? boxes[0] ?? null) : null;
-  const tinted = [...markers, ...notes, ...boxes];
+  const tinted = [...markers, ...notes, ...puzzles, ...boxes];
   const title =
     total === 1
       ? comps[0]
@@ -565,7 +568,13 @@ function PropsBar({ editor }: { editor: Editor }) {
               label={notes.length && tinted.length === notes.length ? 'Background' : 'Colour'}
               value={
                 tinted[0].color ??
-                (!('kind' in tinted[0]) ? theme.box : tinted[0].kind === 'note' ? NOTE_BG : theme.marker)
+                (!('kind' in tinted[0])
+                  ? theme.box
+                  : tinted[0].kind === 'note'
+                    ? NOTE_BG
+                    : tinted[0].kind === 'puzzles'
+                      ? theme.on
+                      : theme.marker)
               }
               onChange={(c) => editor.setColor(c)}
             />
@@ -731,11 +740,6 @@ function LivePanel({ editor }: { editor: Editor }) {
 export const SEGMENT_PRIORITY: readonly string[] = [
   'gates',
   'io',
-  'menu',
-  'components',
-  'comments',
-  'time',
-  'navigation',
 ];
 
 export function computeOpenSegments(
@@ -783,8 +787,13 @@ export function Toolbar({ editor }: { editor: Editor }) {
 
   useEffect(() => {
     editor.openSave = () => setPanel('save');
+    editor.openPuzzles = () => {
+      setPanel('puzzles');
+      setPopSeg(null);
+    };
     return () => {
       editor.openSave = null;
+      editor.openPuzzles = null;
     };
   }, [editor]);
 
@@ -1020,7 +1029,7 @@ export function Toolbar({ editor }: { editor: Editor }) {
     { id: 'comments', title: 'Comments', icon: Icons.comments, active: !!placing && PLACE_GROUPS[2].includes(placing), body: comments },
     { id: 'components', title: 'Components', icon: Icons.components, active: !!placing && PLACE_GROUPS[3].includes(placing), body: components },
     { id: 'time', title: 'Time', icon: Icons.time, active: false, body: time },
-    { id: 'menu', title: 'Menu', icon: Icons.menu, active: panel !== null, body: menu },
+    { id: 'menu', title: 'Menu', icon: Icons.menu, active: panel !== null && panel !== 'puzzles', body: menu },
   ];
 
   return (
@@ -1120,6 +1129,12 @@ export function Toolbar({ editor }: { editor: Editor }) {
           </button>
           <div className="panel-sub">Examples</div>
           <Examples editor={editor} onPicked={() => setPanel(null)} />
+        </div>
+      )}
+
+      {panel === 'puzzles' && (
+        <div className="panel open-panel">
+          <Examples editor={editor} onPicked={() => setPanel(null)} group="Puzzles" />
         </div>
       )}
 

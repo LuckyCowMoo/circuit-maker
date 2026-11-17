@@ -105,7 +105,7 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
       fc.pulse = c.pulse ?? 1;
     }
     if (c.kind === 'marker' || (c.name && !isGate(c.kind))) fc.name = c.name;
-    if (c.color && (c.kind === 'marker' || c.kind === 'bulb' || c.kind === 'note')) fc.color = c.color;
+    if (c.color && (c.kind === 'marker' || c.kind === 'bulb' || c.kind === 'note' || c.kind === 'puzzles')) fc.color = c.color;
     if (c.stroke && c.kind !== 'marker' && c.kind !== 'port') fc.stroke = c.stroke;
     if (c.fill && c.kind !== 'marker' && c.kind !== 'port') fc.fill = c.fill;
     if (canRotate(c.kind)) {
@@ -116,7 +116,7 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
       if (c.w !== IO_SIZE) fc.w = c.w;
       if (c.h !== IO_SIZE) fc.h = c.h;
     }
-    if (c.kind === 'note') {
+    if (c.kind === 'note' || c.kind === 'puzzles') {
       fc.w = c.w;
       fc.h = c.h;
     }
@@ -233,6 +233,10 @@ const TYPE_ALIASES: Record<string, { kind: ComponentKind; not?: boolean }> = {
   connector: { kind: 'port' },
   table: { kind: 'table' },
   truthtable: { kind: 'table' },
+  puzzles: { kind: 'puzzles' },
+  puzzle: { kind: 'puzzles' },
+  puzzlebutton: { kind: 'puzzles' },
+  puzzlesbutton: { kind: 'puzzles' },
 };
 
 export interface ParseResult {
@@ -336,13 +340,13 @@ export function parseCircuit(text: string): ParseResult {
     }
     if (c.kind === 'rgb') c.inputBundle = o.inputSide === 'cable';
     if (c.kind === 'marker') c.name = str(o.name) ?? 'Marker';
-    if (c.kind === 'note') {
-      c.name = str(o.name) ?? 'Text';
+    if (c.kind === 'note' || c.kind === 'puzzles') {
+      c.name = str(o.name) ?? (c.kind === 'puzzles' ? 'Puzzles' : 'Text');
       const size = (v: unknown, fallback: number) => Math.max(IO_MIN, snap(num(v, fallback)) || fallback);
       c.w = size(o.w, 180);
       c.h = size(o.h, 80);
     }
-    else if (!isGate(c.kind)) c.name = str(o.name) ?? '';
+    else if (c.kind !== 'marker' && !isGate(c.kind)) c.name = str(o.name) ?? '';
     c.color = color(o.color);
     c.stroke = color(o.stroke);
     c.fill = color(o.fill);

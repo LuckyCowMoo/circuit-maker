@@ -88,6 +88,20 @@ describe('switch and button knobs', () => {
     expect(at(btn, { x: 8, y: 20 }, undefined, true)).toBe(false);
     expect(at(btn, { x: 20, y: 20 }, undefined, true)).toBe(true);
   });
+
+  it('draws the puzzles button as a single green button shape with no outer base', () => {
+    const puz = makeComponent('puzzles', 0, 0, 'p');
+    expect(puz.w).toBe(180);
+    expect(puz.h).toBe(80);
+    const ops = componentOps(puz, theme, { active: false });
+    const paths = ops.filter((op) => op.t === 'path');
+    expect(paths).toHaveLength(1);
+    if (paths[0].t === 'path') {
+      expect(paths[0].fill).toBe(theme.on);
+    }
+    const texts = ops.filter((op): op is TextOp => op.t === 'text');
+    expect(texts.map((t) => t.text).join(' ')).toBe('Puzzles');
+  });
 });
 
 describe('truth table test row highlight', () => {

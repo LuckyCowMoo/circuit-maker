@@ -68,6 +68,7 @@ export interface DrawInfo {
 const f = (n: number) => Math.round(n * 100) / 100;
 
 export const NOTE_BG = '#ffe08a';
+export const PUZZLES_BG = '#22c55e';
 
 /** Hue opposite `hex`, with lightness chosen so the text stays readable. */
 export function complementColor(hex: string): string {
@@ -155,11 +156,8 @@ function keyFit(textWidth: number, rows: number, boxW: number, boxH: number): nu
   return Math.min(byW, byH);
 }
 
-/** The bound key, fitted to a box on the part. A two-word label stacks when that keeps the letters larger. */
-function keyOps(c: Component, cx: number, cy: number, boxW: number, boxH: number, bg: string): TextOp[] {
-  if (!c.key || boxW < 3 || boxH < 3) return [];
-  const label = keyBindLabel(c.key);
-  if (!label) return [];
+function fitTextOps(label: string, cx: number, cy: number, boxW: number, boxH: number, fill: string): TextOp[] {
+  if (!label || boxW < 3 || boxH < 3) return [];
   const words = label.split(' ').filter(Boolean);
   const options: string[][] = [[label]];
   if (words.length > 1) {
@@ -178,7 +176,6 @@ function keyOps(c: Component, cx: number, cy: number, boxW: number, boxH: number
   if (size < 1) return [];
   const gap = size * KEY_LINE;
   const block = (lines.length - 1) * gap;
-  const fill = keyInk(bg);
   return lines.map((text, i) => ({
     t: 'text',
     text,
@@ -189,6 +186,14 @@ function keyOps(c: Component, cx: number, cy: number, boxW: number, boxH: number
     bold: true,
     anchor: 'middle',
   }));
+}
+
+/** The bound key, fitted to a box on the part. A two-word label stacks when that keeps the letters larger. */
+function keyOps(c: Component, cx: number, cy: number, boxW: number, boxH: number, bg: string): TextOp[] {
+  if (!c.key || boxW < 3 || boxH < 3) return [];
+  const label = keyBindLabel(c.key);
+  if (!label) return [];
+  return fitTextOps(label, cx, cy, boxW, boxH, keyInk(bg));
 }
 
 export function noteAmp(w: number, h: number): number {
@@ -449,6 +454,7 @@ export function componentOutline(c: Component): string {
   if (c.kind === 'marker') return MARKER_PIN;
   const g = geomOf(c);
   if (c.kind === 'note') return noteHole(g.w, g.h, c.id);
+  if (c.kind === 'puzzles') return roundRectD(0, 0, g.w, g.h, Math.min(14, g.w / 4, g.h / 4));
   if (c.kind === 'port') return c.inputs > 1 ? roundRectD(0, 1, g.w, g.h - 2, 3) : PORT_PLUG;
   if (isGate(c.kind)) {
     const body = gateBodyPath(g);
@@ -959,6 +965,17 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
       });
       return ops;
     }
+    case 'puzzles': {
+      const bg = c.color ?? c.fill ?? theme.on;
+      const textFill = keyInk(bg);
+      const label = (c.name || 'Puzzles').trim() || 'Puzzles';
+      const r = Math.min(14, g.w / 4, g.h / 4);
+      ops.push(
+        { t: 'path', d: roundRectD(0, 0, g.w, g.h, r), fill: bg, stroke, width: 1.8 },
+        ...fitTextOps(label, cx, cy, g.w * 0.84, g.h * 0.7, textFill),
+      );
+      return ops;
+    }
     case 'port': {
       const accent = info.accent ?? theme.box;
       if (stubs) ops.push({ t: 'path', d: stubs, stroke: accent, width: 2 });
@@ -1029,6 +1046,15 @@ export function iconOps(kind: ComponentKind | 'box' | 'not' | 'ribbon-port', the
         { t: 'path', d: 'M1 14H47M16 4V32M32 4V32', stroke: theme.stroke, width: 1.4 },
       ],
       viewBox: '0 0 48 36',
+    };
+  }
+  if (kind === 'puzzles') {
+    return {
+      ops: [
+        { t: 'path', d: roundRectD(2, 4, 48, 28, 6), fill: theme.on, stroke: theme.stroke, width: 1.6 },
+        { t: 'text', text: 'Puzzles', x: 26, y: 18, size: 9.5, fill: keyInk(theme.on), bold: true, anchor: 'middle' },
+      ],
+      viewBox: '0 0 52 36',
     };
   }
   if (kind === 'note') {

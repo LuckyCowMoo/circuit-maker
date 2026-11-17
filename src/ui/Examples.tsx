@@ -15,11 +15,19 @@ function exampleDoc(id: string, build: () => Doc): Doc {
 }
 
 /** Example circuits in groups. Icons and previews are static assets; heavy examples build on pick. */
-export function Examples({ editor, onPicked }: { editor: Editor; onPicked: () => void }) {
+export function Examples({
+  editor,
+  onPicked,
+  group,
+}: {
+  editor: Editor;
+  onPicked: () => void;
+  group?: string;
+}) {
   const theme = editor.theme;
   const groups = useMemo(
     () =>
-      EXAMPLES.map((g) => ({
+      (group ? EXAMPLES.filter((g) => g.name === group) : EXAMPLES).map((g) => ({
         name: g.name,
         hue: groupHue(g.name),
         items: g.items.map((e) => {

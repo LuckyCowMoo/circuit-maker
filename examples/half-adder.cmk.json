@@ -12,7 +12,8 @@
     {"id":"sum_gate","type":"xor","x":180,"y":10,"inputs":2},
     {"id":"carry_gate","type":"and","x":180,"y":100,"inputs":2},
     {"id":"sum","type":"bulb","x":420,"y":10,"name":"Sum"},
-    {"id":"carry","type":"bulb","x":420,"y":100,"name":"Carry"}
+    {"id":"carry","type":"bulb","x":420,"y":100,"name":"Carry"},
+    {"id":"puzzles","type":"puzzles","x":150,"y":220,"name":"Puzzles","w":180,"h":80}
   ],
   "wires": [
     {"from":"a","to":"sum_gate","input":0},
