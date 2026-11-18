@@ -586,4 +586,65 @@ describe('Puzzles button component and starter circuit', () => {
     editor.toggleTableHint(tbl);
     expect(tbl.table?.showHint).toBe(false);
   });
+
+  it('clicking a truth table row changes connected inputs to that binary combination', () => {
+    const editor = new Editor();
+    const swA = makeComponent('switch', 0, 0, 'sw_a');
+    const swB = makeComponent('switch', 0, 80, 'sw_b');
+    swA.on = false;
+    swB.on = false;
+    const tbl = makeComponent('table', 100, 100, 'tbl_row');
+    tbl.table = {
+      mode: 'solution',
+      inputs: 2,
+      outputs: 1,
+      names: ['A', 'B', 'Y'],
+      rows: ['0', '1', '1', '0'],
+    };
+
+    editor.doc.components.set(swA.id, swA);
+    editor.doc.components.set(swB.id, swB);
+    editor.doc.components.set(tbl.id, tbl);
+
+    editor.doc.wires.set('wt0', { id: 'wt0', from: swA.id, to: tbl.id, input: 0 });
+    editor.doc.wires.set('wt1', { id: 'wt1', from: swB.id, to: tbl.id, input: 1 });
+    editor.sim.compile(editor.doc);
+
+    // Initial state: both off (0, 0)
+    expect(swA.on).toBe(false);
+    expect(swB.on).toBe(false);
+
+    // Set to row 1 (0, 1): A should be off, B should be on
+    editor.setTableInputsToRow(tbl, 1);
+    expect(swA.on).toBe(false);
+    expect(swB.on).toBe(true);
+    expect(editor.sim.value(swA.id)).toBe(false);
+    expect(editor.sim.value(swB.id)).toBe(true);
+
+    // Set to row 2 (1, 0): A should be on, B should be off
+    editor.setTableInputsToRow(tbl, 2);
+    expect(swA.on).toBe(true);
+    expect(swB.on).toBe(false);
+    expect(editor.sim.value(swA.id)).toBe(true);
+    expect(editor.sim.value(swB.id)).toBe(false);
+
+    // Set to row 3 (1, 1): both should be on
+    editor.setTableInputsToRow(tbl, 3);
+    expect(swA.on).toBe(true);
+    expect(swB.on).toBe(true);
+    expect(editor.sim.value(swA.id)).toBe(true);
+    expect(editor.sim.value(swB.id)).toBe(true);
+
+    // Set to row 0 (0, 0): both should be off
+    editor.setTableInputsToRow(tbl, 0);
+    expect(swA.on).toBe(false);
+    expect(swB.on).toBe(false);
+
+    // Hit-testing a row coordinate (gridTop = 60, TABLE_ROW_H = 22)
+    // Row 2 is at local Y in [60 + 2*22, 60 + 3*22) = [104, 126)
+    const row2Hit = editor.hitTableRow({ x: tbl.x + 30, y: tbl.y + 110 });
+    expect(row2Hit).toBeDefined();
+    expect(row2Hit?.component.id).toBe(tbl.id);
+    expect(row2Hit?.row).toBe(2);
+  });
 });

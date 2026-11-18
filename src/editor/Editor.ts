@@ -76,6 +76,7 @@ import {
   pinIsSpare,
   pinSide,
   rowBit,
+  rowCount,
   setRowMark,
   tableComplete,
   tablePassed,
@@ -1548,6 +1549,43 @@ export class Editor {
       this.toast(`Hint: ${summary}`);
     }
     this.scheduleAutosave();
+  }
+
+  setTableInputsToRow(c: Component, row: number): void {
+    const t = c.table;
+    if (!t || t.inputs < 1) return;
+    if (row < 0 || row >= rowCount(t.inputs)) return;
+    if (this.tableTest) return;
+
+    let anyChanged = false;
+    for (let i = 0; i < t.inputs; i++) {
+      const src = this.columnSource(c.id, i);
+      if (!src) continue;
+      const on = rowBit(t.inputs, row, i) === '1';
+      if (src.kind === 'switch') {
+        if (src.on !== on) {
+          src.on = on;
+          this.sim.setSwitch(src.id, on);
+          this.publishInput({ t: 'input', kind: 'switch', id: src.id, on });
+          anyChanged = true;
+        }
+      } else if (src.kind === 'button') {
+        this.sim.setPressed(src.id, on);
+        this.publishInput({ t: 'input', kind: 'button', id: src.id, pressed: on });
+        anyChanged = true;
+      } else if (src.kind === 'timer') {
+        this.sim.hold(src.id, on ? 1 : 0);
+        anyChanged = true;
+      }
+    }
+
+    this.sim.settle();
+    this.sampleDiscovery();
+    this.needsRender = true;
+    if (anyChanged) {
+      this.scheduleAutosave();
+      this.emit();
+    }
   }
 
   recordTableComponents(doc: Doc, tableComp: Component): string[] {
@@ -3094,6 +3132,16 @@ export class Editor {
       this.toggleTableHint(tableHintButton);
       return;
     }
+    const tableRowHit = this.hitTableRow(w);
+    if (tableRowHit) {
+      if (this.tableTest) {
+        this.toast('A truth table test is running.');
+        return;
+      }
+      this.setTableInputsToRow(tableRowHit.component, tableRowHit.row);
+      this.startMove(tableRowHit.component.id, w, s, e.shiftKey, tableRowHit.component);
+      return;
+    }
     if (this.tableTest) {
       this.toast('A truth table test is running.');
       return;
@@ -3710,7 +3758,7 @@ export class Editor {
     const corner = this.hitSizeHandle(s);
     const selecting = this.tool === 'select' && !this.spaceHeld;
     if (this.placing) cursor = 'copy';
-    else if (this.hitTableButton(w) || this.hitTableHintButton(w) || this.hitTrace(w)) cursor = 'pointer';
+    else if (this.hitTableButton(w) || this.hitTableHintButton(w) || this.hitTableRow(w) || this.hitTrace(w)) cursor = 'pointer';
     else if (this.hitArrow(s)) cursor = 'pointer';
     else if (corner !== null) cursor = corner === 0 || corner === 2 ? 'nwse-resize' : 'nesw-resize';
     else if (pin) cursor = 'crosshair';
@@ -3745,21 +3793,21 @@ export class Editor {
     else this.setRowHover(this.hitTableRow(w));
   }
 
-  /** Solution row under the pointer. Discovery rows and the button row do not count. */
-  private hitTableRow(w: Point): { id: string; row: number } | null {
-    let hit: { id: string; row: number } | null = null;
+  /** Truth table row under the pointer. The button and label rows do not count. */
+  hitTableRow(w: Point): { id: string; row: number; component: Component } | null {
+    let hit: { id: string; row: number; component: Component } | null = null;
     for (const c of this.doc.components.values()) {
       const t = c.table;
-      if (c.kind !== 'table' || t?.mode !== 'solution') continue;
+      if (c.kind !== 'table' || !t || t.inputs < 1) continue;
       const lay = layoutTable(t);
       const lx = w.x - c.x;
       const ly = w.y - c.y;
-      if (lx < 0 || lx > lay.w || ly < lay.gridTop || ly > lay.h) continue;
+      if (lx < 0 || lx > lay.w || ly < lay.gridTop || ly >= lay.gridTop + lay.rows * TABLE_ROW_H) continue;
       const i = Math.floor((ly - lay.gridTop) / TABLE_ROW_H);
       if (i < 0 || i >= lay.visible) continue;
       const row = (this.tableScroll.get(c.id) ?? 0) + i;
       if (row < 0 || row >= lay.rows) continue;
-      hit = { id: c.id, row };
+      hit = { id: c.id, row, component: c };
     }
     return hit;
   }
