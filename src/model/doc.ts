@@ -1,6 +1,7 @@
 import { bodyRect, componentBounds, geomFor, inflate, IO_SIZE, pointInRect, rectInside, rectsOverlap } from './geometry';
 import { freshTable, layoutTable } from './table';
-import type { Box, Component, ComponentKind, Doc, Rect } from './types';
+import { freshTrace, layoutTrace } from './trace';
+import type { Box, Component, ComponentKind, Doc, Rect, Wire } from './types';
 import { bundleDest, bundleSource, inputCount, isGate, isInput, laneCount } from './types';
 
 export function emptyDoc(name = 'Untitled circuit'): Doc {
@@ -30,7 +31,7 @@ export function makeComponent(kind: ComponentKind, x: number, y: number, id: str
     stroke: null,
     fill: null,
     on: false,
-    name: kind === 'marker' ? 'Marker' : kind === 'note' ? 'Text' : kind === 'puzzles' ? 'Puzzles' : '',
+    name: kind === 'marker' ? 'Marker' : kind === 'note' ? 'Text' : kind === 'puzzles' ? 'Puzzles' : kind === 'trace' ? 'Trace' : '',
     color: null,
     rot: 0,
     flip: false,
@@ -46,6 +47,12 @@ export function makeComponent(kind: ComponentKind, x: number, y: number, id: str
   if (kind === 'table') {
     c.table = freshTable();
     const size = layoutTable(c.table);
+    c.w = size.w;
+    c.h = size.h;
+  }
+  if (kind === 'trace') {
+    c.trace = freshTrace();
+    const size = layoutTrace(c.trace);
     c.w = size.w;
     c.h = size.h;
   }
@@ -344,3 +351,11 @@ export function signalKeys(doc: Doc): Map<string, string> {
   }
   return keys;
 }
+
+/** Returns true if a wire is directly attached to a truth table or trace component pin. */
+export function isTableOrTraceWire(doc: Doc, w: Wire): boolean {
+  const a = doc.components.get(w.from);
+  const b = doc.components.get(w.to);
+  return a?.kind === 'table' || a?.kind === 'trace' || b?.kind === 'table' || b?.kind === 'trace';
+}
+

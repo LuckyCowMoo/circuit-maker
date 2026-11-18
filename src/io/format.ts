@@ -2,7 +2,8 @@ import { componentCenter, IO_MAX, IO_MIN, IO_SIZE, MAX_INPUTS, snap } from '../m
 import { emptyDoc, idTaken, makeComponent, uid } from '../model/doc';
 import { normalizePorts, placePort, portInward } from '../model/ports';
 import { bulbsDrivenBy, normalizeTable, pinSide } from '../model/table';
-import type { Box, Component, ComponentKind, Doc, Rotation, TableData, Wire } from '../model/types';
+import { cloneTrace, layoutTrace, normalizeTrace } from '../model/trace';
+import type { Box, Component, ComponentKind, Doc, Rotation, TableData, TraceData, Wire } from '../model/types';
 import { bundleInput, bundleOutput, canRotate, hasOutput, inputCount, isGate, isInput, isIO } from '../model/types';
 
 export const FORMAT_ID = 'circuit-maker';
@@ -48,6 +49,10 @@ export interface FileComponent {
   placed?: boolean;
   /** Truth table mode, columns, recorded rows, and the last test marks. */
   table?: TableData;
+  /** Trace game puzzle state. */
+  trace?: TraceData;
+  /** Locked / non-editable puzzle component. */
+  locked?: boolean;
 }
 
 export interface FileWire {
@@ -58,6 +63,8 @@ export interface FileWire {
   lane?: number;
   /** Ribbon cable: every lane of `from` drives the same lane of `to`. */
   cable?: boolean;
+  /** Locked / non-editable puzzle wire. */
+  locked?: boolean;
 }
 
 export interface FileBox {
@@ -93,6 +100,7 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
     if (c.kind === 'port' && portBox && ids && !ids.has(portBox.id)) continue;
     included.add(c.id);
     const fc: FileComponent = { id: c.id, type: c.kind, x: r2(c.x), y: r2(c.y) };
+    if (c.locked) fc.locked = true;
     if (isGate(c.kind)) {
       fc.inputs = c.inputs;
       if (c.negate) fc.not = true;
@@ -144,7 +152,12 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
         rows: c.table.rows.slice(),
       };
       if (c.table.marks) table.marks = c.table.marks.slice();
+      if (c.table.components) table.components = c.table.components.slice();
+      if (c.table.showHint) table.showHint = true;
       fc.table = table;
+    }
+    if (c.kind === 'trace' && c.trace) {
+      fc.trace = cloneTrace(c.trace);
     }
     components.push(fc);
   }
@@ -154,6 +167,7 @@ export function serialize(doc: Doc, opts: { ids?: Set<string>; view?: FileView; 
       const fw: FileWire = { from: w.from, to: w.to, input: w.input };
       if (w.lane) fw.lane = w.lane;
       if (w.cable) fw.cable = true;
+      if (w.locked) fw.locked = true;
       wires.push(fw);
     }
   }
@@ -237,6 +251,8 @@ const TYPE_ALIASES: Record<string, { kind: ComponentKind; not?: boolean }> = {
   puzzle: { kind: 'puzzles' },
   puzzlebutton: { kind: 'puzzles' },
   puzzlesbutton: { kind: 'puzzles' },
+  trace: { kind: 'trace' },
+  tracegame: { kind: 'trace' },
 };
 
 export interface ParseResult {
@@ -311,6 +327,7 @@ export function parseCircuit(text: string): ParseResult {
       id = uid(doc, 'c');
     }
     const c: Component = makeComponent(alias.kind, num(o.x, 0), num(o.y, 0), id);
+    if (o.locked === true) c.locked = true;
     if (isGate(c.kind)) {
       c.inputs = c.kind === 'buffer' ? 1 : Math.max(1, Math.min(MAX_INPUTS, Math.round(num(o.inputs, 2))));
       c.negate = Boolean(alias.not) !== Boolean(o.not);
@@ -360,6 +377,13 @@ export function parseCircuit(text: string): ParseResult {
       c.flip = o.flip === true;
     }
     if (c.kind === 'table') c.table = normalizeTable(o.table);
+    if (c.kind === 'trace') {
+      c.trace = normalizeTrace(o.trace);
+      const size = layoutTrace(c.trace);
+      c.w = size.w;
+      c.h = size.h;
+    }
+    if (o.locked === true) c.locked = true;
     if (c.kind === 'port') {
       const boxId = str(o.box);
       const box = boxId ? doc.boxes.get(boxId) : undefined;
@@ -412,8 +436,8 @@ export function parseCircuit(text: string): ParseResult {
     const dst = doc.components.get(to.id);
     if (!src) return warnings.push(`wires[${i}]: no component "${from}".`);
     if (!dst) return warnings.push(`wires[${i}]: no component "${to.id}".`);
-    // A bulb wired into a truth table is a probe, not a driver. The simulator ignores it.
-    if (!hasOutput(src.kind) && !(src.kind === 'bulb' && dst.kind === 'table')) {
+    // A bulb wired into a truth table or trace component is a probe, not a driver. The simulator ignores it.
+    if (!hasOutput(src.kind) && !(src.kind === 'bulb' && (dst.kind === 'table' || dst.kind === 'trace'))) {
       return warnings.push(`wires[${i}]: "${from}" (${src.kind}) has no output.`);
     }
     const input = Math.round(num(o.input, to.pin ?? 0));
@@ -434,6 +458,7 @@ export function parseCircuit(text: string): ParseResult {
     const lane = Math.round(num(o.lane, 0));
     if (lane > 0) w.lane = lane;
     if (o.cable) w.cable = true;
+    if (o.locked === true) w.locked = true;
     doc.wires.set(w.id, w);
     taken.set(key, w.id);
   });

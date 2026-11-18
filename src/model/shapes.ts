@@ -1,6 +1,7 @@
 import { BUBBLE_D, geomFor, geomOf, IO_SIZE, localPoint, MARKER_FONT, PIN_LEN, PORT_SIZE, RIBBON_PITCH, type Geom } from './geometry';
 import { keyBindLabel } from './keys';
 import {
+  formatComponentsSummary,
   freshTable,
   layoutTable,
   rowBit,
@@ -13,6 +14,7 @@ import {
   type TableLayout,
   type TablePin,
 } from './table';
+import { freshTrace, layoutTrace, type TraceData, type TraceLayout } from './trace';
 import type { Theme } from './themes';
 import type { Component, ComponentKind, Point, Rect, TableData } from './types';
 import { bundleInput, bundleOutput, isGate } from './types';
@@ -63,6 +65,8 @@ export interface DrawInfo {
   tableHold?: number;
   /** Current row being tested (fractional during slide animation between rows). */
   tableTestRow?: number | null;
+  /** Whether trace puzzle circuit outputs are masked/hidden during guessing. */
+  traceHidden?: boolean;
 }
 
 const f = (n: number) => Math.round(n * 100) / 100;
@@ -672,6 +676,7 @@ function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
   }
 
   const top = lay.gridTop;
+  const gridBottom = top + lay.visible * TABLE_ROW_H;
   const inRight = lay.gapX;
   const outLeft = lay.gapX + lay.gap;
   let grid = `M${f(TABLE_PAD)} ${TABLE_BTN_ROW}H${f(lay.w - TABLE_PAD)}`;
@@ -679,18 +684,21 @@ function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
     if (x1 - x0 < 1) return;
     grid += `M${f(x0)} ${top}H${f(x1)}`;
     for (let i = 1; i < lay.visible; i++) grid += `M${f(x0)} ${top + i * TABLE_ROW_H}H${f(x1)}`;
-    grid += `M${f(x0)} ${top}V${f(lay.h)}M${f(x1)} ${top}V${f(lay.h)}`;
+    grid += `M${f(x0)} ${top}V${f(gridBottom)}M${f(x1)} ${top}V${f(gridBottom)}`;
   };
   if (t.inputs > 0) band(lay.gridLeft, inRight);
   if (t.outputs > 0) band(outLeft, lay.gridRight);
   for (const pin of cells) {
     if (pin.index === 0) continue;
-    grid += `M${f(pin.colX)} ${top}V${f(lay.h)}`;
+    grid += `M${f(pin.colX)} ${top}V${f(gridBottom)}`;
   }
   const divX = lay.gapX + lay.gap / 2;
-  grid += `M${f(divX)} ${f(TABLE_BTN_ROW)}V${f(lay.h)}`;
+  grid += `M${f(divX)} ${f(TABLE_BTN_ROW)}V${f(gridBottom)}`;
+  if (t.mode === 'solution') {
+    grid += `M${f(TABLE_PAD)} ${f(gridBottom)}H${f(lay.w - TABLE_PAD)}`;
+  }
   ops.push({ t: 'path', d: grid, stroke: theme.ui.border, width: 1 });
-  ops.push({ t: 'path', d: `M${f(divX)} ${f(TABLE_BTN_ROW)}V${f(lay.h)}`, stroke, width: 1.5 });
+  ops.push({ t: 'path', d: `M${f(divX)} ${f(TABLE_BTN_ROW)}V${f(gridBottom)}`, stroke, width: 1.5 });
 
   for (const pin of cells) {
     const at = pin.side === 'in' ? pin.index : t.inputs + pin.index;
@@ -738,6 +746,294 @@ function tableOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
     bold: true,
     anchor: 'middle',
   });
+
+  if (lay.hintButton) {
+    const hb = lay.hintButton;
+    const hbPath = roundRectD(hb.x, hb.y, hb.w, hb.h, 5);
+    const hasHint = Boolean(t.components && t.components.length > 0);
+    ops.push({
+      t: 'path',
+      d: hbPath,
+      fill: t.showHint ? theme.ui.active : theme.ui.hover,
+      stroke: theme.ui.border,
+      width: 1,
+    });
+    const hintText = t.showHint
+      ? (hasHint ? `💡 ${formatComponentsSummary(t.components)}` : '💡 None needed')
+      : '💡 Hint';
+    ops.push({
+      t: 'text',
+      text: hintText,
+      x: hb.x + hb.w / 2,
+      y: hb.y + hb.h / 2,
+      size: 11,
+      fill: t.showHint ? theme.ui.activeFg : theme.ui.muted,
+      bold: true,
+      anchor: 'middle',
+    });
+  }
+
+  return ops;
+}
+
+function traceOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
+  const t: TraceData = c.trace ?? freshTrace();
+  const lay: TraceLayout = layoutTrace(t);
+  const stroke = c.stroke ?? theme.stroke;
+  const fill = c.fill ?? theme.fill;
+  const ops: DrawOp[] = [];
+
+  const isRevealed = t.state === 'revealed';
+  const isCorrect = t.lastResult === 'correct';
+  const isIncorrect = t.lastResult === 'incorrect';
+
+  // 1. Body background & border
+  ops.push({
+    t: 'path',
+    d: roundRectD(0, 0, lay.w, lay.h, 8),
+    fill,
+    stroke: isRevealed && isCorrect ? theme.on : isRevealed && isIncorrect ? theme.marker : stroke,
+    width: isRevealed ? (isCorrect ? 4 : 3) : undefined,
+  });
+
+  // 2. Stubs for pins
+  const mask = info.mask ?? '';
+  let stubs = '';
+  for (const pin of lay.pins) {
+    if (mask[pin.pin + 1] === '1') continue;
+    stubs += `M${f(pin.x)} 0V${f(-PIN_LEN)}`;
+  }
+  if (stubs) ops.push({ t: 'path', d: stubs, stroke, width: 2 });
+
+  // 3. Row 1: "New Circuit" button & Score box
+  const spawnBtn = lay.btnSpawn;
+  ops.push({
+    t: 'path',
+    d: roundRectD(spawnBtn.x, spawnBtn.y, spawnBtn.w, spawnBtn.h, 5),
+    fill: theme.ui.hover,
+    stroke: theme.ui.border,
+    width: 1,
+  });
+  ops.push({
+    t: 'text',
+    text: 'New Circuit',
+    x: spawnBtn.x + spawnBtn.w / 2,
+    y: spawnBtn.y + spawnBtn.h / 2,
+    size: 11,
+    fill: theme.ui.fg,
+    bold: true,
+    anchor: 'middle',
+  });
+
+  // Score Box
+  const sb = lay.scoreBox;
+  ops.push({
+    t: 'path',
+    d: roundRectD(sb.x, sb.y, sb.w, sb.h, 5),
+    fill: theme.trackOff,
+    stroke: theme.ui.border,
+    width: 1,
+  });
+  ops.push({
+    t: 'text',
+    text: `✓ ${t.correctCount}`,
+    x: sb.x + 26,
+    y: sb.y + sb.h / 2,
+    size: 11,
+    fill: theme.on,
+    bold: true,
+    anchor: 'middle',
+  });
+  ops.push({
+    t: 'text',
+    text: `✗ ${t.incorrectCount}`,
+    x: sb.x + sb.w - 26,
+    y: sb.y + sb.h / 2,
+    size: 11,
+    fill: theme.marker,
+    bold: true,
+    anchor: 'middle',
+  });
+
+  // 4. Row 2: "Guess" / "Next" button
+  const guessBtn = lay.btnGuess;
+  let guessBg = theme.ui.active;
+  let guessFg = theme.ui.activeFg;
+  let guessText = 'Test Outcome';
+
+  if (t.inputs === 0) {
+    guessBg = theme.ui.hover;
+    guessFg = theme.ui.muted;
+    guessText = 'Press New Circuit to Start';
+  } else if (isRevealed) {
+    if (isCorrect) {
+      guessBg = theme.on;
+      guessFg = keyInk(theme.on);
+      guessText = '✓ Correct! Next Circuit ➜';
+    } else {
+      guessBg = theme.marker;
+      guessFg = '#ffffff';
+      guessText = '✗ Incorrect. Next Circuit ➜';
+    }
+  }
+
+  ops.push({
+    t: 'path',
+    d: roundRectD(guessBtn.x, guessBtn.y, guessBtn.w, guessBtn.h, 5),
+    fill: guessBg,
+    stroke: theme.ui.border,
+    width: 1,
+  });
+  ops.push({
+    t: 'text',
+    text: guessText,
+    x: guessBtn.x + guessBtn.w / 2,
+    y: guessBtn.y + guessBtn.h / 2,
+    size: 12,
+    fill: guessFg,
+    bold: true,
+    anchor: 'middle',
+  });
+
+  if (t.inputs === 0) {
+    ops.push({
+      t: 'text',
+      text: 'Click "New Circuit" to spawn puzzle',
+      x: lay.w / 2,
+      y: lay.valueY,
+      size: 11,
+      fill: theme.ui.muted,
+      bold: true,
+      anchor: 'middle',
+    });
+    return ops;
+  }
+
+  // 5. Divider line between inputs and outputs
+  const divX = lay.gapX + lay.gap / 2;
+  ops.push({
+    t: 'path',
+    d: `M${f(divX)} ${f(guessBtn.y + guessBtn.h + 4)}V${f(lay.h - 4)}`,
+    stroke: theme.ui.border,
+    width: 1.5,
+  });
+
+  // 6. Column Labels
+  for (let i = 0; i < t.inputs; i++) {
+    const pin = lay.pins.find((p) => p.side === 'in' && p.index === i);
+    if (!pin) continue;
+    const name = t.names[i] || `In ${i + 1}`;
+    ops.push({
+      t: 'text',
+      text: name,
+      x: pin.x,
+      y: lay.labelY,
+      size: 12,
+      fill: theme.text,
+      bold: true,
+      anchor: 'middle',
+    });
+  }
+
+  for (let j = 0; j < t.outputs; j++) {
+    const pin = lay.pins.find((p) => p.side === 'out' && p.index === j);
+    if (!pin) continue;
+    const name = t.names[t.inputs + j] || `Out ${j + 1}`;
+    ops.push({
+      t: 'text',
+      text: name,
+      x: pin.x,
+      y: lay.labelY,
+      size: 12,
+      fill: theme.text,
+      bold: true,
+      anchor: 'middle',
+    });
+  }
+
+  // 7. Values Row
+  // Inputs: show '0' or '1'
+  for (let i = 0; i < t.inputs; i++) {
+    const pin = lay.pins.find((p) => p.side === 'in' && p.index === i);
+    if (!pin) continue;
+    const bit = t.inputStates[i] ? '1' : '0';
+    const isOne = bit === '1';
+    ops.push({
+      t: 'path',
+      d: roundRectD(pin.x - 12, lay.valueY - 11, 24, 22, 4),
+      fill: isOne ? theme.on : theme.trackOff,
+      stroke: theme.ui.border,
+      width: 1,
+    });
+    ops.push({
+      t: 'text',
+      text: bit,
+      x: pin.x,
+      y: lay.valueY,
+      size: 12,
+      fill: isOne ? keyInk(theme.on) : theme.marker,
+      bold: true,
+      anchor: 'middle',
+    });
+  }
+
+  // Outputs: Prediction switches!
+  for (let j = 0; j < t.outputs; j++) {
+    const pin = lay.pins.find((p) => p.side === 'out' && p.index === j);
+    const box = lay.switchBoxes[j];
+    if (!pin || !box) continue;
+    const pred = t.predicted[j] ?? false;
+    const actual = t.actual[j];
+
+    // Switch track
+    ops.push({
+      t: 'path',
+      d: roundRectD(box.x, box.y, box.w, box.h, box.h / 2),
+      fill: pred ? theme.on : theme.trackOff,
+      stroke: theme.ui.border,
+      width: 1.5,
+    });
+
+    // Switch Pip
+    const pipR = 7;
+    const pipX = pred ? box.x + box.w - pipR - 3 : box.x + pipR + 3;
+    const pipY = box.y + box.h / 2;
+    ops.push({
+      t: 'path',
+      d: circlePath(pipX, pipY, pipR),
+      fill: theme.fill,
+      stroke,
+      width: 1.4,
+    });
+
+    // Label on or next to switch (0 or 1)
+    ops.push({
+      t: 'text',
+      text: pred ? '1' : '0',
+      x: pred ? box.x + 9 : box.x + box.w - 9,
+      y: box.y + box.h / 2,
+      size: 10,
+      fill: pred ? keyInk(theme.on) : theme.text,
+      bold: true,
+      anchor: 'middle',
+    });
+
+    // If revealed, show outcome mark
+    if (isRevealed && actual !== undefined) {
+      const match = pred === actual;
+      ops.push({
+        t: 'text',
+        text: match ? '✓' : `✗ (${actual ? 1 : 0})`,
+        x: pin.x,
+        y: box.y + box.h + 8,
+        size: 9.5,
+        fill: match ? theme.on : theme.marker,
+        bold: true,
+        anchor: 'middle',
+      });
+    }
+  }
+
   return ops;
 }
 
@@ -768,6 +1064,7 @@ function tableCell(t: TableData, row: number, pin: TablePin, recorded: string | 
 /** Drawing ops for a component in its unrotated local frame. The part name is drawn separately. */
 export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp[] {
   if (c.kind === 'table') return tableOps(c, theme, info);
+  if (c.kind === 'trace') return traceOps(c, theme, info);
   const stroke = c.stroke ?? theme.stroke;
   const fill = c.fill ?? theme.fill;
   const g = geomOf(c);
@@ -931,7 +1228,7 @@ export function componentOps(c: Component, theme: Theme, info: DrawInfo): DrawOp
     }
     case 'bulb': {
       const litColor = c.color ?? theme.bulb;
-      const power = info.bulbPower ?? (active ? 1 : 0);
+      const power = info.traceHidden ? 0 : info.bulbPower ?? (active ? 1 : 0);
       const shown = info.bulbColor ?? litColor;
       const bodyFill = c.fill;
       if (stubs) ops.push({ t: 'path', d: stubs, stroke });
@@ -1055,6 +1352,18 @@ export function iconOps(kind: ComponentKind | 'box' | 'not' | 'ribbon-port', the
         { t: 'text', text: 'Puzzles', x: 26, y: 18, size: 9.5, fill: keyInk(theme.on), bold: true, anchor: 'middle' },
       ],
       viewBox: '0 0 52 36',
+    };
+  }
+  if (kind === 'trace') {
+    return {
+      ops: [
+        { t: 'path', d: roundRectD(1, 4, 46, 28, 3), fill: theme.fill, stroke: theme.stroke, width: 1.6 },
+        { t: 'path', d: 'M1 14H47M24 14V32', stroke: theme.stroke, width: 1.4 },
+        { t: 'text', text: 'Trace', x: 24, y: 9, size: 8, fill: theme.text, bold: true, anchor: 'middle' },
+        { t: 'text', text: '?', x: 12, y: 23, size: 10, fill: theme.marker, bold: true, anchor: 'middle' },
+        { t: 'text', text: '✓', x: 36, y: 23, size: 10, fill: theme.on, bold: true, anchor: 'middle' },
+      ],
+      viewBox: '0 0 48 36',
     };
   }
   if (kind === 'note') {

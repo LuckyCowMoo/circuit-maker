@@ -1,5 +1,6 @@
 import { freshTable, layoutTable, tablePinLocal } from './table';
-import type { Component, ComponentKind, Point, Rect, Rotation, TableData } from './types';
+import { freshTrace, layoutTrace, tracePinLocal } from './trace';
+import type { Component, ComponentKind, Point, Rect, Rotation, TableData, TraceData } from './types';
 import { bundleDest, bundleInput, bundleOutput, bundleSource, isGate, isRibbonPort, TABLE_PIN_SLOTS } from './types';
 
 export const GRID = 10;
@@ -55,6 +56,7 @@ const KIND_INDEX: Record<ComponentKind, number> = {
   port: 10,
   table: 12,
   puzzles: 13,
+  trace: 14,
 };
 
 const cache = new Map<number, Geom>();
@@ -270,8 +272,43 @@ function tableGeom(t: TableData): Geom {
   return g;
 }
 
+const traceGeomCache = new Map<string, Geom>();
+
+function traceGeom(t: TraceData): Geom {
+  const key = `${t.inputs}:${t.outputs}`;
+  let g = traceGeomCache.get(key);
+  if (g) return g;
+  const lay = layoutTrace(t);
+  const inputs: Point[] = Array.from({ length: TABLE_PIN_SLOTS }, () => ({ x: 0, y: 0 }));
+  const back = Array.from({ length: TABLE_PIN_SLOTS }, () => 0);
+  for (const pin of lay.pins) {
+    inputs[pin.pin] = { x: pin.x, y: -PIN_LEN };
+    back[pin.pin] = 0;
+  }
+  g = {
+    kind: 'trace',
+    n: 0,
+    negate: false,
+    w: lay.w,
+    h: lay.h,
+    offset: 0,
+    depth: 0,
+    tip: lay.w,
+    inputs,
+    back,
+    output: null,
+    bounds: { x: 0, y: -PIN_LEN, w: lay.w, h: lay.h + PIN_LEN },
+  };
+  traceGeomCache.set(key, g);
+  return g;
+}
+
 export const geomOf = (c: Component): Geom =>
-  c.kind === 'table' ? tableGeom(c.table ?? freshTable()) : geomFor(c.kind, c.inputs, c.negate, c.w, c.h, bundleInput(c), bundleOutput(c));
+  c.kind === 'table'
+    ? tableGeom(c.table ?? freshTable())
+    : c.kind === 'trace'
+      ? traceGeom(c.trace ?? freshTrace())
+      : geomFor(c.kind, c.inputs, c.negate, c.w, c.h, bundleInput(c), bundleOutput(c));
 
 export const snap = (v: number): number => Math.round(v / GRID) * GRID;
 
@@ -372,6 +409,11 @@ export function pinPos(c: Component, pin: number): Point | null {
     const local = tablePinLocal(t, pin, PIN_LEN);
     return local ? applyXf(xformOf(c), local) : null;
   }
+  if (c.kind === 'trace') {
+    const t = c.trace ?? freshTrace();
+    const local = tracePinLocal(t, pin, PIN_LEN);
+    return local ? applyXf(xformOf(c), local) : null;
+  }
   if (pin >= 0) return inputPos(c, pin);
   const g = geomOf(c);
   const p = g.outputs?.[-pin - 1] ?? (pin === -1 ? g.output : null);
@@ -380,7 +422,7 @@ export function pinPos(c: Component, pin: number): Point | null {
 
 /** Unit vector pointing away from the component at a pin. */
 export function pinDir(c: Component, pin: number): Point {
-  if (c.kind === 'table' && pin >= 0) return applyDir(xformOf(c), { x: 0, y: -1 });
+  if ((c.kind === 'table' || c.kind === 'trace') && pin >= 0) return applyDir(xformOf(c), { x: 0, y: -1 });
   if (c.kind === 'bulb' && pin < 0) return applyDir(xformOf(c), { x: 1, y: 0 });
   return applyDir(xformOf(c), { x: pin < 0 ? 1 : -1, y: 0 });
 }
@@ -390,6 +432,10 @@ export function attachPos(c: Component, pin: number): Point | null {
   if (c.kind === 'bulb' && pin < 0) return applyXf(xformOf(c), { x: c.w, y: c.h / 2 });
   if (c.kind === 'table') {
     const local = tablePinLocal(c.table ?? freshTable(), pin, PIN_LEN);
+    return local ? applyXf(xformOf(c), { x: local.x, y: 0 }) : null;
+  }
+  if (c.kind === 'trace') {
+    const local = tracePinLocal(c.trace ?? freshTrace(), pin, PIN_LEN);
     return local ? applyXf(xformOf(c), { x: local.x, y: 0 }) : null;
   }
   const g = geomOf(c);
@@ -536,7 +582,10 @@ export function wireEndPin(c: Component, pin: number, cable = false): number {
   return pin;
 }
 export function wireBetween(src: Component, dst: Component, input: number, lane = 0): WireCurve | null {
-  const srcPin = src.kind === 'bulb' && dst.kind === 'table' ? 0 : wireEndPin(src, bundleSource(src) ? -1 : -1 - lane, false);
+  const srcPin =
+    src.kind === 'bulb' && (dst.kind === 'table' || dst.kind === 'trace')
+      ? 0
+      : wireEndPin(src, bundleSource(src) ? -1 : -1 - lane, false);
   const a = attachPos(src, srcPin);
   const b = attachPos(dst, wireEndPin(dst, input, false));
   if (!a || !b) return null;

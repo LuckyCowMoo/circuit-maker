@@ -4,15 +4,19 @@ import { pinPos } from './geometry';
 import {
   TABLE_CONVERT_LABEL,
   TABLE_CONVERT_MS,
+  TABLE_HINT_ROW,
   addInputColumn,
   addOutputColumn,
   blankOutputColumn,
+  cloneTable,
   comboIndex,
   dropOutput,
+  formatComponentsSummary,
   freshTable,
   gradeRow,
   layoutTable,
   maxScroll,
+  normalizeTable,
   observe,
   pinIsSpare,
   pinSide,
@@ -208,5 +212,46 @@ describe('truth table rows', () => {
     expect(lay5.visible).toBe(32);
     expect(lay5.h).toBe(lay5.gridTop + 32 * 22);
     expect(maxScroll(t5)).toBe(0);
+  });
+
+  it('formats component summary correctly and handles hint buttons in solution mode', () => {
+    expect(formatComponentsSummary()).toBe('None');
+    expect(formatComponentsSummary([])).toBe('None');
+    expect(formatComponentsSummary(['AND'])).toBe('1× AND');
+    expect(formatComponentsSummary(['OR', 'AND'])).toBe('1× AND, 1× OR');
+    expect(formatComponentsSummary(['AND', 'AND', 'NOT'])).toBe('2× AND, 1× NOT');
+    expect(formatComponentsSummary(['AND', 'AND', 'AND', 'AND', 'OR', 'NOT', 'NOT', 'NOT', 'NOT', 'XOR', 'XOR'])).toBe(
+      '4× AND, 1× OR, 4× NOT, 2× XOR',
+    );
+
+    const disc = freshTable();
+    disc.inputs = 2;
+    disc.outputs = 1;
+    const discLay = layoutTable(disc);
+    expect(discLay.hintButton).toBeUndefined();
+
+    const sol = freshTable();
+    sol.mode = 'solution';
+    sol.inputs = 2;
+    sol.outputs = 1;
+    sol.components = ['AND', 'NOT'];
+    sol.showHint = true;
+    const solLay = layoutTable(sol);
+    expect(solLay.hintButton).toBeDefined();
+    expect(solLay.h).toBe(solLay.gridTop + 4 * 22 + TABLE_HINT_ROW);
+
+    const cloned = cloneTable(sol);
+    expect(cloned.components).toEqual(['AND', 'NOT']);
+    expect(cloned.showHint).toBe(true);
+
+    const normalized = normalizeTable({
+      mode: 'solution',
+      inputs: 2,
+      outputs: 1,
+      components: ['AND', 'OR'],
+      showHint: true,
+    });
+    expect(normalized.components).toEqual(['AND', 'OR']);
+    expect(normalized.showHint).toBe(true);
   });
 });

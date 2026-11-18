@@ -234,6 +234,7 @@ export const AURA_HUE: Record<AuraKind, number> = {
   // Chartreuse: the open sector between AND's red and the note's green, clear of bulb gold.
   table: 88,
   puzzles: 38,
+  trace: 52,
 };
 
 export interface Rgb {

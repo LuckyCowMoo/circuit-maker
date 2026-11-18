@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyDoc, findFreeSpot, liveChannels, makeComponent, signalKeys } from './doc';
+import { emptyDoc, findFreeSpot, isTableOrTraceWire, liveChannels, makeComponent, signalKeys } from './doc';
 import { rectInside, rectsOverlap } from './geometry';
 
 describe('findFreeSpot', () => {
@@ -91,5 +91,36 @@ describe('liveChannels', () => {
     doc.components.set(or.id, or);
     doc.wires.set('w1', { id: 'w1', from: port.id, to: or.id, input: 0 });
     expect(liveChannels(doc).has('w1')).toBe(false);
+  });
+});
+
+describe('isTableOrTraceWire', () => {
+  it('correctly identifies wires directly attached to table or trace components', () => {
+    const doc = emptyDoc();
+    const sw = makeComponent('switch', 0, 0, 's1');
+    const gate = makeComponent('and', 100, 0, 'g1');
+    const bulb = makeComponent('bulb', 200, 0, 'b1');
+    const table = makeComponent('table', 300, 0, 'tbl1');
+    const trace = makeComponent('trace', 400, 0, 'tr1');
+
+    for (const c of [sw, gate, bulb, table, trace]) doc.components.set(c.id, c);
+
+    // Normal circuit wires
+    const wGate = { id: 'w1', from: sw.id, to: gate.id, input: 0 };
+    const wBulb = { id: 'w2', from: gate.id, to: bulb.id, input: 0 };
+    expect(isTableOrTraceWire(doc, wGate)).toBe(false);
+    expect(isTableOrTraceWire(doc, wBulb)).toBe(false);
+
+    // Truth table wires (inputs and bulb probes)
+    const wTableIn = { id: 'w3', from: sw.id, to: table.id, input: 0 };
+    const wTableOut = { id: 'w4', from: bulb.id, to: table.id, input: 8 };
+    expect(isTableOrTraceWire(doc, wTableIn)).toBe(true);
+    expect(isTableOrTraceWire(doc, wTableOut)).toBe(true);
+
+    // Trace game wires (inputs and bulb probes)
+    const wTraceIn = { id: 'w5', from: sw.id, to: trace.id, input: 0 };
+    const wTraceOut = { id: 'w6', from: bulb.id, to: trace.id, input: 8 };
+    expect(isTableOrTraceWire(doc, wTraceIn)).toBe(true);
+    expect(isTableOrTraceWire(doc, wTraceOut)).toBe(true);
   });
 });

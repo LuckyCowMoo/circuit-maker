@@ -102,6 +102,26 @@ describe('switch and button knobs', () => {
     const texts = ops.filter((op): op is TextOp => op.t === 'text');
     expect(texts.map((t) => t.text).join(' ')).toBe('Puzzles');
   });
+
+  it('draws trace component with Test Outcome button when active', () => {
+    const traceComp = makeComponent('trace', 0, 0, 'tr');
+    traceComp.trace = {
+      inputs: 3,
+      outputs: 1,
+      names: ['A', 'B', 'C', 'X'],
+      predicted: [false],
+      actual: [true],
+      inputStates: [true, false, true],
+      correctCount: 0,
+      incorrectCount: 0,
+      state: 'guess',
+      circuitIds: [],
+    };
+    const ops = componentOps(traceComp, theme, { active: false });
+    const texts = ops.filter((op): op is TextOp => op.t === 'text').map((t) => t.text);
+    expect(texts).toContain('Test Outcome');
+    expect(texts).toContain('New Circuit');
+  });
 });
 
 describe('truth table test row highlight', () => {

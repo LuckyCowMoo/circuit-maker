@@ -1,4 +1,4 @@
-﻿import { boxesOuterFirst, boxInBox, componentInBox, liveChannels, makeComponent, netRoots, pinMasks, signalKeys } from '../model/doc';
+﻿import { boxesOuterFirst, boxInBox, componentInBox, isTableOrTraceWire, liveChannels, makeComponent, netRoots, pinMasks, signalKeys } from '../model/doc';
 import { columnTitleColors, columnTitles } from '../model/table';
 import {
   attachPos,
@@ -502,6 +502,8 @@ export function renderScene(ed: Editor): void {
   // the colour of the part that really drives it, so it keeps its hue through box ports.
   const offPaths = new Map<string, Path2D>();
   const onPaths = new Map<string, { cols: WireColors; path: Path2D }>();
+  const dimOffPaths = new Map<string, Path2D>();
+  const dimOnPaths = new Map<string, { cols: WireColors; path: Path2D }>();
   const signals = signalKeys(doc);
   const laneKey = (id: string, lane = 0) => (lane ? `${id}#${lane}` : id);
   const picked = new Set<string>();
@@ -532,8 +534,10 @@ export function renderScene(ed: Editor): void {
     const srcKey = w.lane ? `${w.from}#${w.lane}` : w.from;
     const cols = colorsFor(pc.roots.get(srcKey) ?? w.from, theme);
     const connected = pc.live.has(w.id);
-    const on = connected && sim.value(w.from, w.lane ?? 0);
+    const hidden = ed.isTraceWireHidden(w);
+    const on = !hidden && connected && sim.value(w.from, w.lane ?? 0);
     const ink = on ? cols.on : connected ? cols.off : idle;
+    const isProbe = isTableOrTraceWire(doc, w);
     if (onNet(w.from, w.lane ?? 0)) {
       selectedCurves.push(curve);
       coverWires.push({
@@ -543,12 +547,14 @@ export function renderScene(ed: Editor): void {
       });
     }
     if (on) {
-      let entry = onPaths.get(cols.on);
-      if (!entry) onPaths.set(cols.on, (entry = { cols, path: new Path2D() }));
+      const targetMap = isProbe ? dimOnPaths : onPaths;
+      let entry = targetMap.get(cols.on);
+      if (!entry) targetMap.set(cols.on, (entry = { cols, path: new Path2D() }));
       addCurve(entry.path, curve);
     } else {
-      let p = offPaths.get(ink);
-      if (!p) offPaths.set(ink, (p = new Path2D()));
+      const targetMap = isProbe ? dimOffPaths : offPaths;
+      let p = targetMap.get(ink);
+      if (!p) targetMap.set(ink, (p = new Path2D()));
       addCurve(p, curve);
     }
   }
@@ -556,6 +562,14 @@ export function renderScene(ed: Editor): void {
   for (const [color, p] of offPaths) {
     ctx.strokeStyle = color;
     ctx.stroke(p);
+  }
+  if (dimOffPaths.size > 0) {
+    ctx.globalAlpha = 0.5;
+    for (const [color, p] of dimOffPaths) {
+      ctx.strokeStyle = color;
+      ctx.stroke(p);
+    }
+    ctx.globalAlpha = 1;
   }
   if (flatPick && selectedCurves.length) {
     ctx.strokeStyle = theme.selection;
@@ -570,11 +584,27 @@ export function renderScene(ed: Editor): void {
       ctx.strokeStyle = cols.glow;
       ctx.stroke(path);
     }
+    if (dimOnPaths.size > 0) {
+      ctx.globalAlpha = 0.5;
+      for (const { cols, path } of dimOnPaths.values()) {
+        ctx.strokeStyle = cols.glow;
+        ctx.stroke(path);
+      }
+      ctx.globalAlpha = 1;
+    }
   }
   ctx.lineWidth = far ? dp : Math.max(3, 1.5 * px);
   for (const { cols, path } of onPaths.values()) {
     ctx.strokeStyle = cols.on;
     ctx.stroke(path);
+  }
+  if (dimOnPaths.size > 0) {
+    ctx.globalAlpha = 0.5;
+    for (const { cols, path } of dimOnPaths.values()) {
+      ctx.strokeStyle = cols.on;
+      ctx.stroke(path);
+    }
+    ctx.globalAlpha = 1;
   }
 
   // Ribbon cables: one stripe per lane, packed with no gap, no glow. Stripe 0 matches lane 0.
@@ -594,6 +624,8 @@ export function renderScene(ed: Editor): void {
     if (!rectsOverlap(inflate(curveBounds(curve), n * CABLE_PITCH), view)) continue;
     const da = pinDir(a, -1);
     const db = pinDir(b, 0);
+    const isProbe = isTableOrTraceWire(doc, w);
+    if (isProbe) ctx.globalAlpha = 0.5;
     for (let i = 0; i < n; i++) {
       const key = i ? `${w.from}#${i}` : w.from;
       const cols = colorsFor(pc.roots.get(key) ?? w.from, theme);
@@ -605,6 +637,7 @@ export function renderScene(ed: Editor): void {
       ctx.strokeStyle = connected ? (sim.value(w.from, i) ? cols.on : cols.off) : idle;
       ctx.stroke();
     }
+    if (isProbe) ctx.globalAlpha = 1;
     let cableHit = false;
     for (let i = 0; i < n; i++) if (onNet(w.from, i)) cableHit = true;
     if (cableHit && flatPick) {
@@ -631,6 +664,9 @@ export function renderScene(ed: Editor): void {
         if (look) {
           info.bulbPower = look.power;
           info.bulbColor = look.color;
+        }
+        if (c.kind === 'bulb' && ed.isTraceBulbHidden(c)) {
+          info.traceHidden = true;
         }
       }
       info.lanes?.forEach((lane, i) => {

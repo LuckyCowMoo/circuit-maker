@@ -223,6 +223,7 @@ const COUNT_ORDER = [
   'Text box',
   'Truth table',
   'Puzzles',
+  'Trace game',
   'Box',
 ];
 
@@ -370,7 +371,7 @@ function PropsBar({ editor }: { editor: Editor }) {
   const ports = comps.filter((c) => c.kind === 'port');
   const inputGates = gates.filter((g) => g.kind !== 'buffer');
   const widthParts = [...inputGates, ...ports];
-  const colourable = comps.filter((c) => c.kind !== 'marker' && c.kind !== 'port' && c.kind !== 'note' && c.kind !== 'puzzles');
+  const colourable = comps.filter((c) => c.kind !== 'marker' && c.kind !== 'port' && c.kind !== 'note' && c.kind !== 'puzzles' && c.kind !== 'trace');
   const rotatable = comps.filter((c) => canRotate(c.kind));
   const markers = comps.filter((c) => c.kind === 'marker');
   const notes = comps.filter((c) => c.kind === 'note');

@@ -3,7 +3,7 @@ export type GateKind = (typeof GATE_KINDS)[number];
 export const IO_KINDS = ['switch', 'button', 'timer', 'bulb', 'rgb'] as const;
 export type IOKind = (typeof IO_KINDS)[number];
 /** `port` is the connector where a wire passes through the wall of a box. */
-export type ComponentKind = GateKind | IOKind | 'marker' | 'note' | 'port' | 'table' | 'puzzles';
+export type ComponentKind = GateKind | IOKind | 'marker' | 'note' | 'port' | 'table' | 'puzzles' | 'trace';
 export const COMPONENT_KINDS: readonly ComponentKind[] = [
   ...GATE_KINDS,
   ...IO_KINDS,
@@ -12,6 +12,7 @@ export const COMPONENT_KINDS: readonly ComponentKind[] = [
   'port',
   'table',
   'puzzles',
+  'trace',
 ];
 
 /**
@@ -28,6 +29,22 @@ export interface TableData {
   rows: (string | null)[];
   names: string[];
   marks?: (string | null)[];
+  components?: string[];
+  showHint?: boolean;
+}
+
+export interface TraceData {
+  inputs: number;
+  outputs: number;
+  names: string[];
+  predicted: boolean[];
+  actual: boolean[];
+  inputStates: boolean[];
+  correctCount: number;
+  incorrectCount: number;
+  state: 'guess' | 'revealed';
+  lastResult?: 'correct' | 'incorrect';
+  circuitIds?: string[];
 }
 
 export interface Point {
@@ -94,6 +111,10 @@ export interface Component {
   placed?: boolean;
   /** Truth table columns, rows, and last test marks. */
   table?: TableData;
+  /** Trace game puzzle state. */
+  trace?: TraceData;
+  /** Non-editable component generated for trace puzzle. */
+  locked?: boolean;
 }
 
 export interface Wire {
@@ -113,6 +134,8 @@ export interface Wire {
   cable?: boolean;
   /** Editor-created branch should get a new wall port instead of reusing the driver's port. */
   separatePort?: boolean;
+  /** Non-editable wire generated for trace puzzle. */
+  locked?: boolean;
 }
 
 export interface Box {
@@ -172,7 +195,7 @@ export const TABLE_PIN_SLOTS = 16;
 export const inputCount = (c: Component): number => {
   // Ribbon ports accept one wire per lane (input index = lane), whether the plug faces in or out.
   if (c.kind === 'port' && c.inputs > 1) return Math.max(1, c.inputs);
-  if (c.kind === 'table') return TABLE_PIN_SLOTS;
+  if (c.kind === 'table' || c.kind === 'trace') return TABLE_PIN_SLOTS;
   if (c.kind === 'buffer') return 1;
   if (isGate(c.kind)) return Math.max(1, c.inputs);
   if (c.kind === 'rgb') return 3;

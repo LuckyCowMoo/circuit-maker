@@ -14,6 +14,7 @@ export interface PuzzleSpec {
   outputs: string[];
   /** One string per input row, one character per output. Leftmost input is the high bit. */
   rows: string[];
+  components: string[];
 }
 
 function bitsOf(inputs: number, row: number): boolean[] {
@@ -30,10 +31,11 @@ function puzzle(
   hint: string,
   inputs: string[],
   outputs: string[],
+  components: string[],
   fn: (bits: boolean[]) => boolean[],
 ): PuzzleSpec {
   const fullHint = hint.startsWith(name) ? hint : `${name}: ${hint}`;
-  return { id, name, hint: fullHint, inputs, outputs, rows: rowsFor(inputs.length, fn) };
+  return { id, name, hint: fullHint, inputs, outputs, rows: rowsFor(inputs.length, fn), components };
 }
 
 /**
@@ -41,26 +43,27 @@ function puzzle(
  * larger circuit. 2-bit compare stays the hardest.
  */
 export const PUZZLES: PuzzleSpec[] = [
-  puzzle('soland', 'And', 'And: Y is 1 only when A and B are both 1.', ['A', 'B'], ['Y'], ([a, b]) => [a && b]),
-  puzzle('soleither', 'Either and both', 'Either and both: X is 1 when A or B is on. Y is 1 only when both are on.', ['A', 'B'], ['X', 'Y'], ([a, b]) => [
+  puzzle('soland', 'And', 'And: Y is 1 only when A and B are both 1.', ['A', 'B'], ['Y'], ['AND'], ([a, b]) => [a && b]),
+  puzzle('soleither', 'Either and both', 'Either and both: X is 1 when A or B is on. Y is 1 only when both are on.', ['A', 'B'], ['X', 'Y'], ['AND', 'OR'], ([a, b]) => [
     a || b,
     a && b,
   ]),
-  puzzle('solonly', 'Only A', 'Only A: Y is 1 only when A is on and B is off.', ['A', 'B'], ['Y'], ([a, b]) => [a && !b]),
-  puzzle('solimply', 'Imply', 'Imply: Y is 1 unless A is on while B is off.', ['A', 'B'], ['Y'], ([a, b]) => [!a || b]),
+  puzzle('solonly', 'Only A', 'Only A: Y is 1 only when A is on and B is off.', ['A', 'B'], ['Y'], ['AND', 'NOT'], ([a, b]) => [a && !b]),
+  puzzle('solimply', 'Imply', 'Imply: Y is 1 unless A is on while B is off.', ['A', 'B'], ['Y'], ['OR', 'NOT'], ([a, b]) => [!a || b]),
   puzzle(
     'solboth',
     'Only or both',
     'Only or both: Only is 1 only when A is on and B is off. Both is 1 only when A and B are both on.',
     ['A', 'B'],
     ['Only', 'Both'],
+    ['AND', 'AND', 'NOT'],
     ([a, b]) => [a && !b, a && b],
   ),
-  puzzle('solbounds', 'Bounds', 'Bounds: AtLeast is 1 when A or B is on. AtMost is 1 when not both are on.', ['A', 'B'], ['AtLeast', 'AtMost'], ([a, b]) => [
+  puzzle('solbounds', 'Bounds', 'Bounds: AtLeast is 1 when A or B is on. AtMost is 1 when not both are on.', ['A', 'B'], ['AtLeast', 'AtMost'], ['AND', 'OR', 'NOT'], ([a, b]) => [
     a || b,
     !(a && b),
   ]),
-  puzzle('solsame', 'Same or different', 'Same or different: Same is 1 when A and B match. Diff is 1 when they differ.', ['A', 'B'], ['Same', 'Diff'], ([a, b]) => [
+  puzzle('solsame', 'Same or different', 'Same or different: Same is 1 when A and B match. Diff is 1 when they differ.', ['A', 'B'], ['Same', 'Diff'], ['NOT', 'XOR'], ([a, b]) => [
     a === b,
     a !== b,
   ]),
@@ -70,6 +73,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Both and neither: Both is 1 only when A and B are both on. Neither is 1 only when neither is on.',
     ['A', 'B'],
     ['Both', 'Neither'],
+    ['AND', 'OR', 'NOT'],
     ([a, b]) => [a && b, !a && !b],
   ),
   puzzle(
@@ -78,9 +82,10 @@ export const PUZZLES: PuzzleSpec[] = [
     'Which side: High is 1 only when A is on and B is off. Low is 1 only when A is off and B is on.',
     ['A', 'B'],
     ['High', 'Low'],
+    ['AND', 'AND', 'NOT', 'NOT'],
     ([a, b]) => [a && !b, !a && b],
   ),
-  puzzle('soleneither', 'Enable either', 'Enable either: Y is 1 when either A or B is on, provided En is on.', ['A', 'B', 'En'], ['Y'], ([a, b, en]) => [
+  puzzle('soleneither', 'Enable either', 'Enable either: Y is 1 when either A or B is on, provided En is on.', ['A', 'B', 'En'], ['Y'], ['AND', 'OR'], ([a, b, en]) => [
     (a || b) && en,
   ]),
   puzzle(
@@ -89,6 +94,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Half adder: S is the sum, 1 when A and B differ. C is the carry, 1 only when both are 1.',
     ['A', 'B'],
     ['S', 'C'],
+    ['AND', 'XOR'],
     ([a, b]) => [a !== b, a && b],
   ),
   puzzle(
@@ -97,6 +103,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Half subtractor: D is the difference, 1 when A and B differ. Bw is the borrow, 1 only when A is 0 and B is 1.',
     ['A', 'B'],
     ['D', 'Bw'],
+    ['AND', 'NOT', 'XOR'],
     ([a, b]) => [a !== b, !a && b],
   ),
   puzzle(
@@ -105,15 +112,17 @@ export const PUZZLES: PuzzleSpec[] = [
     'Route: Sends In to Y0 while Sel is off, and to Y1 while Sel is on.',
     ['In', 'Sel'],
     ['Y0', 'Y1'],
+    ['AND', 'AND', 'NOT'],
     ([input, sel]) => [input && !sel, input && sel],
   ),
-  puzzle('solunless', 'Unless', 'Unless: Y is 1 only when A and B are on and C is off.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [a && b && !c]),
+  puzzle('solunless', 'Unless', 'Unless: Y is 1 only when A and B are on and C is off.', ['A', 'B', 'C'], ['Y'], ['AND', 'AND', 'NOT'], ([a, b, c]) => [a && b && !c]),
   puzzle(
     'solpick',
     'Choose',
     'Choose: Y matches A while Pick is off, and matches B while Pick is on.',
     ['A', 'B', 'Pick'],
     ['Y'],
+    ['AND', 'AND', 'OR', 'NOT'],
     ([a, b, pick]) => [pick ? b : a],
   ),
   puzzle(
@@ -122,6 +131,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Odd and even: Odd is 1 when an odd number of A, B, and C are on. Even is 1 when an even number are on.',
     ['A', 'B', 'C'],
     ['Odd', 'Even'],
+    ['NOT', 'XOR', 'XOR'],
     ([a, b, c]) => {
       const n = Number(a) + Number(b) + Number(c);
       return [n % 2 === 1, n % 2 === 0];
@@ -133,9 +143,10 @@ export const PUZZLES: PuzzleSpec[] = [
     'All or none: Y is 1 when either all three inputs are on, or all three are off.',
     ['A', 'B', 'C'],
     ['Y'],
+    ['OR', 'NOT', 'XOR', 'XOR'],
     ([a, b, c]) => [(a && b && c) || (!a && !b && !c)],
   ),
-  puzzle('solmaj', 'Majority', 'Majority: Y is 1 when at least two of A, B, and C are on.', ['A', 'B', 'C'], ['Y'], ([a, b, c]) => [
+  puzzle('solmaj', 'Majority', 'Majority: Y is 1 when at least two of A, B, and C are on.', ['A', 'B', 'C'], ['Y'], ['AND', 'AND', 'OR', 'OR'], ([a, b, c]) => [
     Number(a) + Number(b) + Number(c) >= 2,
   ]),
   puzzle(
@@ -144,6 +155,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Most or all: Most is 1 when at least two of A, B, and C are on. All is 1 only when every one is on.',
     ['A', 'B', 'C'],
     ['Most', 'All'],
+    ['AND', 'AND', 'AND', 'OR', 'OR'],
     ([a, b, c]) => {
       const n = Number(a) + Number(b) + Number(c);
       return [n >= 2, n === 3];
@@ -155,6 +167,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Full adder: S is the sum, 1 when an odd number of A, B, and Ci are on. Co is the carry, 1 when at least two are on.',
     ['A', 'B', 'Ci'],
     ['S', 'Co'],
+    ['AND', 'AND', 'OR', 'XOR', 'XOR'],
     ([a, b, ci]) => {
       const n = Number(a) + Number(b) + Number(ci);
       return [n % 2 === 1, n >= 2];
@@ -166,6 +179,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Full subtractor: D is the difference (A - B - Bi). Bo is the borrow, 1 whenever A minus B minus Bi is negative.',
     ['A', 'B', 'Bi'],
     ['D', 'Bo'],
+    ['AND', 'AND', 'OR', 'NOT', 'NOT', 'XOR', 'XOR'],
     ([a, b, bi]) => {
       const d = Number(a) - Number(b) - Number(bi);
       return [Math.abs(d) % 2 === 1, d < 0];
@@ -177,6 +191,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Decoder: When En is on, turns on exactly one output selected by A and B (00: Y0, 01: Y1, 10: Y2, 11: Y3).',
     ['A', 'B', 'En'],
     ['Y0', 'Y1', 'Y2', 'Y3'],
+    ['AND', 'AND', 'AND', 'AND', 'NOT', 'NOT'],
     ([a, b, en]) => [en && !a && !b, en && !a && b, en && a && !b, en && a && b],
   ),
   puzzle(
@@ -185,6 +200,7 @@ export const PUZZLES: PuzzleSpec[] = [
     'Valid BCD: Valid is 1 when the 4-bit input represents a valid decimal digit 0 to 9, and 0 for 10 to 15.',
     ['B3', 'B2', 'B1', 'B0'],
     ['Valid'],
+    ['AND', 'OR', 'NOT'],
     ([b3, b2, b1, b0]) => {
       const val = (Number(b3) << 3) | (Number(b2) << 2) | (Number(b1) << 1) | Number(b0);
       return [val <= 9];
@@ -196,6 +212,7 @@ export const PUZZLES: PuzzleSpec[] = [
     '2-bit compare: Gt is 1 when 2-bit number A (A1 A0) is greater than B (B1 B0). Eq is 1 when they are equal.',
     ['A1', 'A0', 'B1', 'B0'],
     ['Gt', 'Eq'],
+    ['AND', 'AND', 'AND', 'AND', 'OR', 'NOT', 'NOT', 'NOT', 'NOT', 'XOR', 'XOR'],
     ([a1, a0, b1, b0]) => {
       const va = (Number(a1) << 1) | Number(a0);
       const vb = (Number(b1) << 1) | Number(b0);
@@ -211,6 +228,7 @@ export function puzzleTable(spec: PuzzleSpec): TableData {
     outputs: spec.outputs.length,
     names: [...spec.inputs, ...spec.outputs],
     rows: spec.rows.slice(),
+    components: spec.components.slice(),
   };
 }
 

@@ -382,5 +382,208 @@ describe('Puzzles button component and starter circuit', () => {
 
     const spawned = [...editor.doc.components.values()].find((c) => c.kind === 'puzzles');
     expect(spawned).toBeDefined();
+
+    // Repeated tests must NOT spawn duplicate puzzle buttons
+    (editor as any).startTableTest(tbl);
+    const run2 = (editor as any).tableTest;
+    (editor as any).tickTableTest(run2.nextAt);
+    const puzzleButtons = [...editor.doc.components.values()].filter((c) => c.kind === 'puzzles');
+    expect(puzzleButtons.length).toBe(1);
+
+    // If the button is moved far away, a new one can spawn closer
+    spawned!.x = 5000;
+    spawned!.y = 5000;
+    (editor as any).startTableTest(tbl);
+    const run3 = (editor as any).tableTest;
+    (editor as any).tickTableTest(run3.nextAt);
+    const puzzleButtonsAfter = [...editor.doc.components.values()].filter((c) => c.kind === 'puzzles');
+    expect(puzzleButtonsAfter.length).toBe(2);
+  });
+
+  it('places a trace component that does not spawn until New Circuit is triggered', () => {
+    const editor = new Editor();
+    editor.placeAt('trace', { x: 300, y: 500 });
+
+    const traceComp = [...editor.doc.components.values()].find((c) => c.kind === 'trace');
+    expect(traceComp).toBeDefined();
+    expect(traceComp?.trace).toBeDefined();
+
+    // Circuit does NOT spawn immediately upon placement
+    const tr = traceComp!.trace!;
+    expect(tr.inputs).toBe(0);
+    expect(tr.outputs).toBe(0);
+    expect(tr.circuitIds).toEqual([]);
+
+    // Circuit spawns when spawnTraceCircuit is triggered
+    editor.spawnTraceCircuit(traceComp!);
+    const updatedTr = traceComp!.trace!;
+    expect(updatedTr.inputs).toBeGreaterThanOrEqual(1);
+    expect(updatedTr.inputs).toBeLessThanOrEqual(3);
+    expect(updatedTr.outputs).toBeGreaterThanOrEqual(1);
+    expect(updatedTr.outputs).toBeLessThanOrEqual(2);
+    expect(updatedTr.state).toBe('guess');
+    expect(updatedTr.circuitIds?.length).toBeGreaterThan(0);
+
+    // Verify generated components are locked
+    for (const id of updatedTr.circuitIds!) {
+      const c = editor.doc.components.get(id);
+      if (c) expect(c.locked).toBe(true);
+      const w = editor.doc.wires.get(id);
+      if (w) expect(w.locked).toBe(true);
+    }
+  });
+
+  it('tracks correct and incorrect predictions when checking guesses on trace component', () => {
+    const editor = new Editor();
+    editor.placeAt('trace', { x: 300, y: 500 });
+    const traceComp = [...editor.doc.components.values()].find((c) => c.kind === 'trace')!;
+    editor.spawnTraceCircuit(traceComp);
+    const tr = traceComp.trace!;
+
+    expect(tr.correctCount).toBe(0);
+    expect(tr.incorrectCount).toBe(0);
+
+    // Force predictions to match actual values
+    tr.predicted = tr.actual.slice();
+    editor.checkTraceGuess(traceComp);
+
+    expect(tr.correctCount).toBe(1);
+    expect(tr.incorrectCount).toBe(0);
+    expect(tr.lastResult).toBe('correct');
+    expect(tr.state).toBe('revealed');
+
+    // Toggling a switch returns to guess mode
+    editor.toggleTraceSwitch(traceComp, 0);
+    expect(tr.state).toBe('guess');
+
+    // Set prediction to intentionally opposite of actual
+    tr.predicted = tr.actual.map((v) => !v);
+    editor.checkTraceGuess(traceComp);
+
+    expect(tr.correctCount).toBe(1);
+    expect(tr.incorrectCount).toBe(1);
+    expect(tr.lastResult).toBe('incorrect');
+    expect(tr.state).toBe('revealed');
+  });
+
+  it('prevents deletion of locked trace circuit components and wires', () => {
+    const editor = new Editor();
+    editor.placeAt('trace', { x: 300, y: 500 });
+    const traceComp = [...editor.doc.components.values()].find((c) => c.kind === 'trace')!;
+    editor.spawnTraceCircuit(traceComp);
+    const lockedCompId = traceComp.trace!.circuitIds!.find((id) => editor.doc.components.has(id))!;
+
+    expect(editor.doc.components.has(lockedCompId)).toBe(true);
+
+    // Select the locked component and attempt deletion
+    editor.setSelection([lockedCompId]);
+    editor.deleteSelection();
+
+    // Locked component must NOT be deleted
+    expect(editor.doc.components.has(lockedCompId)).toBe(true);
+  });
+
+  it('deletes the attached logic circuit when trace component is deleted', () => {
+    const editor = new Editor();
+    editor.placeAt('trace', { x: 300, y: 500 });
+    const traceComp = [...editor.doc.components.values()].find((c) => c.kind === 'trace')!;
+    editor.spawnTraceCircuit(traceComp);
+    const circuitIds = traceComp.trace!.circuitIds!.slice();
+    expect(circuitIds.length).toBeGreaterThan(0);
+
+    // Verify circuit components and wires exist
+    expect(circuitIds.some((id) => editor.doc.components.has(id))).toBe(true);
+    expect(circuitIds.some((id) => editor.doc.wires.has(id))).toBe(true);
+
+    // Select the trace component and delete it
+    editor.setSelection([traceComp.id]);
+    editor.deleteSelection();
+
+    // Trace component must be deleted
+    expect(editor.doc.components.has(traceComp.id)).toBe(false);
+
+    // All attached circuit components and wires must be deleted
+    for (const id of circuitIds) {
+      expect(editor.doc.components.has(id)).toBe(false);
+      expect(editor.doc.wires.has(id)).toBe(false);
+    }
+  });
+
+  it('deletes trace component and attached circuit when box-selected together', () => {
+    const editor = new Editor();
+    editor.placeAt('trace', { x: 300, y: 500 });
+    const traceComp = [...editor.doc.components.values()].find((c) => c.kind === 'trace')!;
+    editor.spawnTraceCircuit(traceComp);
+    const circuitIds = traceComp.trace!.circuitIds!.slice();
+
+    // Select both traceComp and some locked circuit elements
+    editor.setSelection([traceComp.id, circuitIds[0], circuitIds[1]]);
+    editor.deleteSelection();
+
+    // Everything in traceComp and attached circuit should be deleted
+    expect(editor.doc.components.has(traceComp.id)).toBe(false);
+    for (const id of circuitIds) {
+      expect(editor.doc.components.has(id)).toBe(false);
+      expect(editor.doc.wires.has(id)).toBe(false);
+    }
+  });
+
+  it('records components when pupil converts discovery table to solution and supports hint toggling', () => {
+    const editor = new Editor();
+    const swA = makeComponent('switch', 0, 0, 'sw_a');
+    const swB = makeComponent('switch', 0, 80, 'sw_b');
+    const andGate = makeComponent('and', 100, 40, 'and_1');
+    const notGate = makeComponent('buffer', 200, 40, 'not_1');
+    notGate.negate = true;
+    const bulb = makeComponent('bulb', 300, 40, 'bulb_1');
+    const tbl = makeComponent('table', 100, 200, 'table_1');
+    tbl.table = {
+      mode: 'discovery',
+      inputs: 2,
+      outputs: 1,
+      names: ['A', 'B', 'Y'],
+      rows: ['1', '0', '0', '0'],
+    };
+
+    editor.doc.components.set(swA.id, swA);
+    editor.doc.components.set(swB.id, swB);
+    editor.doc.components.set(andGate.id, andGate);
+    editor.doc.components.set(notGate.id, notGate);
+    editor.doc.components.set(bulb.id, bulb);
+    editor.doc.components.set(tbl.id, tbl);
+
+    // Wire switches to AND gate
+    editor.doc.wires.set('w1', { id: 'w1', from: swA.id, to: andGate.id, input: 0 });
+    editor.doc.wires.set('w2', { id: 'w2', from: swB.id, to: andGate.id, input: 1 });
+    // Wire AND gate to NOT gate
+    editor.doc.wires.set('w3', { id: 'w3', from: andGate.id, to: notGate.id, input: 0 });
+    // Wire NOT gate to bulb
+    editor.doc.wires.set('w4', { id: 'w4', from: notGate.id, to: bulb.id, input: 0 });
+
+    // Wire switches to table inputs
+    editor.doc.wires.set('wt0', { id: 'wt0', from: swA.id, to: tbl.id, input: 0 });
+    editor.doc.wires.set('wt1', { id: 'wt1', from: swB.id, to: tbl.id, input: 1 });
+    // Wire bulb to table output
+    editor.doc.wires.set('wt_out', { id: 'wt_out', from: bulb.id, to: tbl.id, input: TABLE_OUT });
+
+    // Record components directly
+    const comps = editor.recordTableComponents(editor.doc, tbl);
+    expect(comps).toContain('AND');
+    expect(comps).toContain('NOT');
+    expect(comps.length).toBe(2);
+
+    // Convert table to solution
+    (editor as any).convertTable(tbl);
+    expect(tbl.table?.mode).toBe('solution');
+    expect(tbl.table?.components).toBeDefined();
+    expect(tbl.table?.components).toContain('AND');
+    expect(tbl.table?.components).toContain('NOT');
+
+    // Hint toggle test
+    expect(tbl.table?.showHint).toBeFalsy();
+    editor.toggleTableHint(tbl);
+    expect(tbl.table?.showHint).toBe(true);
+    editor.toggleTableHint(tbl);
+    expect(tbl.table?.showHint).toBe(false);
   });
 });

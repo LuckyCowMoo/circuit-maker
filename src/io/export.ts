@@ -1,4 +1,4 @@
-import { boxesOuterFirst, liveChannels, netRoots, pinMasks } from '../model/doc';
+import { boxesOuterFirst, isTableOrTraceWire, liveChannels, netRoots, pinMasks } from '../model/doc';
 import {
   cableStripe,
   CABLE_PITCH,
@@ -113,6 +113,8 @@ export function buildSvg(
     );
   }
   for (const { w, curve } of curves) {
+    const isProbe = isTableOrTraceWire(doc, w);
+    const opacityAttr = isProbe ? ' opacity="0.5"' : '';
     if (w.cable) {
       const src = doc.components.get(w.from);
       const dst = doc.components.get(w.to);
@@ -127,7 +129,7 @@ export function buildSvg(
         const connected = pc.live.has(i ? `${w.id}#${i}` : w.id);
         const on = connected && signal(w.from, i);
         const stroke = on ? cols.on : connected ? cols.off : idle;
-        out.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${CABLE_PITCH + 0.8}" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="2"/>`);
+        out.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${CABLE_PITCH + 0.8}" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="2"${opacityAttr}/>`);
       }
       continue;
     }
@@ -136,10 +138,10 @@ export function buildSvg(
     const d = curveSvgPath(curve);
     const connected = pc.live.has(w.id);
     if (connected && signal(w.from, w.lane ?? 0)) {
-      out.push(`<path d="${d}" fill="none" stroke="${cols.glow}" stroke-width="9"/>`);
-      out.push(`<path d="${d}" fill="none" stroke="${cols.on}" stroke-width="3"/>`);
+      out.push(`<path d="${d}" fill="none" stroke="${cols.glow}" stroke-width="9"${opacityAttr}/>`);
+      out.push(`<path d="${d}" fill="none" stroke="${cols.on}" stroke-width="3"${opacityAttr}/>`);
     } else {
-      out.push(`<path d="${d}" fill="none" stroke="${connected ? cols.off : idle}" stroke-width="${STROKE_W}"/>`);
+      out.push(`<path d="${d}" fill="none" stroke="${connected ? cols.off : idle}" stroke-width="${STROKE_W}"${opacityAttr}/>`);
     }
   }
   for (const c of comps) {

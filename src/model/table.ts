@@ -27,6 +27,8 @@ export const TABLE_PIN_GUTTER = 16;
 /** Wide enough for the convert label, with space inside the rounded ends. */
 export const TABLE_BTN_W = 138;
 export const TABLE_BTN_H = 22;
+export const TABLE_HINT_ROW = 28;
+export const TABLE_HINT_H = 20;
 
 export interface TablePin {
   pin: number;
@@ -47,6 +49,7 @@ export interface TableLayout {
   visible: number;
   pins: TablePin[];
   button: Rect;
+  hintButton?: Rect;
   /** Left edge of the gap between the two halves. */
   gapX: number;
   /** Width of the gap between the two halves. */
@@ -57,6 +60,24 @@ export interface TableLayout {
   gridTop: number;
   /** Vertical centre of the column names. */
   labelY: number;
+}
+
+export function formatComponentsSummary(components?: string[]): string {
+  if (!components || components.length === 0) return 'None';
+  const counts = new Map<string, number>();
+  for (const c of components) {
+    counts.set(c, (counts.get(c) ?? 0) + 1);
+  }
+  const ORDER = ['AND', 'OR', 'NOT', 'XOR', 'NAND', 'NOR', 'XNOR', 'BUFFER'];
+  const keys = Array.from(counts.keys()).sort((a, b) => {
+    const ia = ORDER.indexOf(a);
+    const ib = ORDER.indexOf(b);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.localeCompare(b);
+  });
+  return keys.map((k) => `${counts.get(k)}× ${k}`).join(', ');
 }
 
 export function freshTable(): TableData {
@@ -71,6 +92,8 @@ export function cloneTable(t: TableData): TableData {
     rows: t.rows.slice(),
     names: t.names.slice(),
     marks: t.marks?.map((m) => m),
+    components: t.components?.slice(),
+    showHint: t.showHint,
   };
 }
 
@@ -335,7 +358,9 @@ export function layoutTable(t: TableData): TableLayout {
   const rows = rowCount(t.inputs);
   const visible = rows;
   const gridTop = TABLE_BTN_ROW + TABLE_LABEL;
-  const h = gridTop + visible * TABLE_ROW_H;
+  const gridH = visible * TABLE_ROW_H;
+  const hintH = t.mode === 'solution' ? TABLE_HINT_ROW : 0;
+  const h = gridTop + gridH + hintH;
   const pins: TablePin[] = [];
   let x = left;
   if (spareIn) {
@@ -381,6 +406,15 @@ export function layoutTable(t: TableData): TableLayout {
       w: w - TABLE_PAD * 2,
       h: TABLE_BTN_H,
     },
+    hintButton:
+      t.mode === 'solution'
+        ? {
+            x: TABLE_PAD,
+            y: gridTop + gridH + (TABLE_HINT_ROW - TABLE_HINT_H) / 2,
+            w: w - TABLE_PAD * 2,
+            h: TABLE_HINT_H,
+          }
+        : undefined,
   };
 }
 
@@ -414,6 +448,12 @@ export function normalizeTable(raw: unknown): TableData {
       marks.push(typeof mark === 'string' ? mark.slice(0, t.outputs) : null);
     }
     if (marks.some((m) => m)) t.marks = marks;
+  }
+  if (Array.isArray(o.components)) {
+    t.components = o.components.filter((x): x is string => typeof x === 'string');
+  }
+  if (typeof o.showHint === 'boolean') {
+    t.showHint = o.showHint;
   }
   if (t.mode === 'solution') {
     // A solution always shows a full answer. Missing cells become 0 so the grid is readable.

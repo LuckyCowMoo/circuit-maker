@@ -69,6 +69,8 @@ describe('solution puzzles', () => {
       expect(table.mode).toBe('solution');
       expect(tableComplete(table)).toBe(true);
       expect(table.rows).toEqual(spec.rows);
+      expect(table.components).toBeDefined();
+      expect(table.components?.length).toBeGreaterThan(0);
       const doc = puzzleDoc(spec);
       const spawned = [...doc.components.values()].find((c) => c.kind === 'table');
       const note = [...doc.components.values()].find((c) => c.kind === 'note');

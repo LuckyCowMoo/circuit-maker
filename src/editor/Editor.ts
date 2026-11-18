@@ -28,6 +28,7 @@ import {
   inflate,
   IO_MAX,
   IO_MIN,
+  localPoint,
   MAX_INPUTS,
   pinDistance,
   pinPos,
@@ -66,6 +67,7 @@ import {
   columnTitles,
   dropInput,
   dropOutput,
+  formatComponentsSummary,
   gradeRow,
   layoutTable,
   maxScroll,
@@ -85,6 +87,7 @@ import {
   TABLE_SLIDE_MS,
   TABLE_STEP_MS,
 } from '../model/table';
+import { layoutTrace, generateTraceCircuit, deleteTraceCircuit } from '../model/trace';
 import { buildRowPreview, type RowPreviewModel } from '../model/tablePreview';
 import { getTheme, type Theme } from '../model/themes';
 import { isModifierOnly } from '../model/keys';
@@ -284,6 +287,7 @@ export const KIND_LABEL: Record<PlaceKind, string> = {
   'ribbon-port': 'Ribbon port',
   table: 'Truth table',
   puzzles: 'Puzzles',
+  trace: 'Trace game',
 };
 
 const storage = {
@@ -1524,6 +1528,83 @@ export class Editor {
     return hit;
   }
 
+  private hitTableHintButton(w: Point): Component | null {
+    let hit: Component | null = null;
+    for (const c of this.doc.components.values()) {
+      if (c.kind !== 'table' || !c.table || c.table.mode !== 'solution') continue;
+      const hb = layoutTable(c.table).hintButton;
+      if (hb && pointInRect(w, { x: c.x + hb.x, y: c.y + hb.y, w: hb.w, h: hb.h })) hit = c;
+    }
+    return hit;
+  }
+
+  toggleTableHint(c: Component): void {
+    const t = c.table;
+    if (!t || t.mode !== 'solution') return;
+    t.showHint = !t.showHint;
+    this.needsRender = true;
+    if (t.showHint) {
+      const summary = formatComponentsSummary(t.components);
+      this.toast(`Hint: ${summary}`);
+    }
+    this.scheduleAutosave();
+  }
+
+  recordTableComponents(doc: Doc, tableComp: Component): string[] {
+    const t = tableComp.table;
+    if (!t) return [];
+
+    const queue: string[] = [];
+    for (let i = 0; i < t.outputs; i++) {
+      const pin = TABLE_OUT + i;
+      const wire = wireAt(doc, tableComp.id, pin);
+      if (!wire) continue;
+      const src = doc.components.get(wire.from);
+      if (!src) continue;
+      if (src.kind === 'bulb') {
+        for (const w of doc.wires.values()) {
+          if (w.to === src.id && !w.cable) {
+            queue.push(w.from);
+          }
+        }
+      } else {
+        queue.push(src.id);
+      }
+    }
+
+    const visited = new Set<string>();
+    const recordedGates: string[] = [];
+
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+
+      const comp = doc.components.get(id);
+      if (!comp) continue;
+
+      if (isGate(comp.kind)) {
+        let name: string;
+        if (comp.kind === 'buffer') {
+          name = comp.negate ? 'NOT' : 'BUFFER';
+        } else {
+          name = (comp.negate ? 'N' : '') + comp.kind.toUpperCase();
+        }
+        recordedGates.push(name);
+      }
+
+      if (isInput(comp.kind)) continue;
+
+      for (const w of doc.wires.values()) {
+        if (w.to === comp.id && !w.cable) {
+          queue.push(w.from);
+        }
+      }
+    }
+
+    return recordedGates;
+  }
+
   private tableUnder(w: Point): Component | null {
     let hit: Component | null = null;
     for (const c of this.doc.components.values()) {
@@ -1715,6 +1796,7 @@ export class Editor {
     }
     this.checkpoint();
     t.names = columnTitles(this.doc, c);
+    t.components = this.recordTableComponents(this.doc, c);
     for (const w of [...this.doc.wires.values()]) if (w.to === c.id) this.doc.wires.delete(w.id);
     t.mode = 'solution';
     clearMarks(t);
@@ -1811,8 +1893,35 @@ export class Editor {
       h: btn.h,
     };
     const spot = this.freeSpot(start, new Set());
-    btn.x = snap(spot.x);
-    btn.y = snap(spot.y);
+    const candRect: Rect = {
+      x: snap(spot.x),
+      y: snap(spot.y),
+      w: btn.w,
+      h: btn.h,
+    };
+
+    const rectDist = (a: Rect, b: Rect) => {
+      const dx = a.x + a.w < b.x ? b.x - (a.x + a.w) : b.x + b.w < a.x ? a.x - (b.x + b.w) : 0;
+      const dy = a.y + a.h < b.y ? b.y - (a.y + a.h) : b.y + b.h < a.y ? a.y - (b.y + b.h) : 0;
+      return Math.hypot(dx, dy);
+    };
+
+    const candCenterDist = Math.hypot(candRect.x - start.x, candRect.y - start.y);
+    const candEdgeDist = rectDist(candRect, tb);
+
+    // If there is already a green button closer to the truth table than the position it would spawn otherwise, don't spawn it.
+    for (const other of this.doc.components.values()) {
+      if (other.kind !== 'puzzles') continue;
+      const ob = componentBounds(other);
+      const otherCenterDist = Math.hypot(ob.x - start.x, ob.y - start.y);
+      const otherEdgeDist = rectDist(ob, tb);
+      if (otherCenterDist <= candCenterDist + 1 || otherEdgeDist <= candEdgeDist + 1) {
+        return;
+      }
+    }
+
+    btn.x = candRect.x;
+    btn.y = candRect.y;
     this.doc.components.set(btn.id, btn);
     this.topologyDirty = true;
     this.needsRender = true;
@@ -1821,11 +1930,12 @@ export class Editor {
     this.scheduleNetDoc();
   }
 
-  /** Sends confetti out of every side of a table that just matched its circuit. */
+  /** Sends confetti out of every side of a table or trace component that just matched its circuit. */
   private celebrate(c: Component): void {
     const t = c.table;
-    if (!t) return;
-    const lay = layoutTable(t);
+    const tr = c.trace;
+    if (!t && !tr) return;
+    const lay = t ? layoutTable(t) : layoutTrace(tr!);
     const colors = [this.theme.on, this.theme.marker, this.theme.selection, this.theme.bulb, this.theme.box];
     const now = performance.now();
     const edges = [
@@ -1927,12 +2037,114 @@ export class Editor {
     for (const src of run.inputs) if (src.kind === 'timer') this.sim.hold(src.id, null);
   }
 
+  isLocked(id: string): boolean {
+    const c = this.doc.components.get(id);
+    if (c?.locked) return true;
+    const w = this.doc.wires.get(id);
+    if (w?.locked) return true;
+    return false;
+  }
+
+  isTraceWireHidden(w: Wire): boolean {
+    if (!w.locked) return false;
+    for (const c of this.doc.components.values()) {
+      if (c.kind === 'trace' && c.trace?.state === 'guess') {
+        const ids = c.trace.circuitIds;
+        if (ids && ids.includes(w.id)) {
+          if (w.to === c.id && w.input < c.trace.inputs) return false;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  isTraceBulbHidden(c: Component): boolean {
+    if (!c.locked || c.kind !== 'bulb') return false;
+    for (const other of this.doc.components.values()) {
+      if (other.kind === 'trace' && other.trace?.state === 'guess') {
+        const ids = other.trace.circuitIds;
+        if (ids && ids.includes(c.id)) return true;
+      }
+    }
+    return false;
+  }
+
+  hitTrace(w: Point): { action: 'spawn' | 'guess' | 'switch'; component: Component; switchIndex?: number } | null {
+    for (const c of this.doc.components.values()) {
+      if (c.kind !== 'trace' || !c.trace) continue;
+      const lay = layoutTrace(c.trace);
+      const local = localPoint(c, w);
+      if (pointInRect(local, lay.btnSpawn)) {
+        return { action: 'spawn', component: c };
+      }
+      if (pointInRect(local, lay.btnGuess)) {
+        return { action: 'guess', component: c };
+      }
+      for (let j = 0; j < lay.switchBoxes.length; j++) {
+        if (pointInRect(local, lay.switchBoxes[j])) {
+          return { action: 'switch', component: c, switchIndex: j };
+        }
+      }
+    }
+    return null;
+  }
+
+  spawnTraceCircuit(c: Component): void {
+    this.checkpoint();
+    generateTraceCircuit(this.doc, c);
+    this.changed(true);
+  }
+
+  toggleTraceSwitch(c: Component, index: number): void {
+    const t = c.trace;
+    if (!t) return;
+    this.checkpoint();
+    t.predicted[index] = !t.predicted[index];
+    if (t.state === 'revealed') {
+      t.state = 'guess';
+      t.lastResult = undefined;
+    }
+    this.changed(true);
+  }
+
+  checkTraceGuess(c: Component): void {
+    const t = c.trace;
+    if (!t) return;
+    this.checkpoint();
+    const allMatch =
+      t.predicted.length === t.actual.length &&
+      t.predicted.every((p, i) => p === t.actual[i]);
+
+    if (allMatch) {
+      t.correctCount++;
+      t.lastResult = 'correct';
+      this.toast('Correct! All outputs match.');
+      this.celebrate(c);
+    } else {
+      t.incorrectCount++;
+      t.lastResult = 'incorrect';
+      this.toast('Incorrect. Some outputs did not match.');
+    }
+    t.state = 'revealed';
+    this.changed(true);
+  }
+
   deleteSelection(): void {
     if (this.tableTest) {
       this.toast('A truth table test is running.');
       return;
     }
     if (!this.selection.size) return;
+    const hasLocked = [...this.selection].some((id) => this.isLocked(id));
+    if (hasLocked) {
+      const filtered = new Set([...this.selection].filter((id) => !this.isLocked(id)));
+      if (!filtered.size) {
+        this.toast('Trace puzzle circuit is locked and cannot be deleted.');
+        return;
+      }
+      this.selection = filtered;
+    }
     this.checkpoint();
     const wireOnly = [...this.selection].every((id) => this.doc.wires.has(id));
     if (wireOnly) {
@@ -1943,6 +2155,11 @@ export class Editor {
     }
     const ids = expandWithContents(this.doc, this.selection);
     for (const id of ids) {
+      if (this.isLocked(id)) continue;
+      const comp = this.doc.components.get(id);
+      if (comp?.kind === 'trace') {
+        deleteTraceCircuit(this.doc, comp);
+      }
       this.doc.components.delete(id);
       this.doc.boxes.delete(id);
       this.doc.wires.delete(id);
@@ -2851,10 +3068,30 @@ export class Editor {
       return;
     }
     if (e.button !== 0) return;
+    const traceHit = this.hitTrace(w);
+    if (traceHit) {
+      if (traceHit.action === 'spawn') {
+        this.spawnTraceCircuit(traceHit.component);
+      } else if (traceHit.action === 'guess') {
+        if (traceHit.component.trace?.state === 'revealed') {
+          this.spawnTraceCircuit(traceHit.component);
+        } else {
+          this.checkTraceGuess(traceHit.component);
+        }
+      } else if (traceHit.action === 'switch' && traceHit.switchIndex !== undefined) {
+        this.toggleTraceSwitch(traceHit.component, traceHit.switchIndex);
+      }
+      return;
+    }
     const tableButton = this.hitTableButton(w);
     if (tableButton) {
       if (tableButton.table?.mode === 'discovery') this.beginConvertHold(tableButton);
       else this.onTableButton(tableButton);
+      return;
+    }
+    const tableHintButton = this.hitTableHintButton(w);
+    if (tableHintButton) {
+      this.toggleTableHint(tableHintButton);
       return;
     }
     if (this.tableTest) {
@@ -2899,6 +3136,10 @@ export class Editor {
       }
     }
     const pin = this.hitPin(w, null);
+    if (pin && this.doc.components.get(pin.comp)?.locked) {
+      this.toast('Trace circuit pins are locked.');
+      return;
+    }
     const touch = e.pointerType === 'touch';
     if (pin) {
       if (touch) {
@@ -2911,6 +3152,10 @@ export class Editor {
       return;
     }
     const comp = this.hitComponent(w);
+    if (comp?.locked) {
+      this.toast('The trace logic circuit cannot be edited.');
+      return;
+    }
     if (comp && e.detail < 2 && this.knobAt(comp, w)) {
       this.startOperate(comp, s);
       return;
@@ -2936,6 +3181,10 @@ export class Editor {
     }
     const wire = this.hitWire(w);
     if (wire) {
+      if (wire.locked) {
+        this.toast('Trace circuit wires are locked.');
+        return;
+      }
       if (e.shiftKey) {
         const next = new Set(this.selection);
         if (next.has(wire.id)) next.delete(wire.id);
@@ -3461,7 +3710,7 @@ export class Editor {
     const corner = this.hitSizeHandle(s);
     const selecting = this.tool === 'select' && !this.spaceHeld;
     if (this.placing) cursor = 'copy';
-    else if (this.hitTableButton(w)) cursor = 'pointer';
+    else if (this.hitTableButton(w) || this.hitTableHintButton(w) || this.hitTrace(w)) cursor = 'pointer';
     else if (this.hitArrow(s)) cursor = 'pointer';
     else if (corner !== null) cursor = corner === 0 || corner === 2 ? 'nwse-resize' : 'nesw-resize';
     else if (pin) cursor = 'crosshair';
